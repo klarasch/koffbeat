@@ -1,7 +1,7 @@
 // Renders a single-line percussion rhythm staff with VexFlow 5 and exposes a small
 // runtime API for cursor sweeps and per-note grading marks. See AGENTS/spec for the contract.
 
-import { BarlineType, Beam, Dot, Formatter, Fraction, Renderer, Stave, StaveNote, StaveTie, Stem, Voice } from "vexflow";
+import { BarlineType, Beam, Dot, Formatter, Fraction, type RenderContext, Renderer, Stave, StaveNote, StaveTie, Stem, Voice } from "vexflow";
 import type { Grade, Level, NoteValue, RhythmEvent } from "../types";
 
 export interface StaffView {
@@ -33,14 +33,25 @@ const GRADE_COLORS: Record<Grade, string> = {
 };
 
 // Layout constants, in CSS px.
-const MIN_BAR_WIDTH = 150;
+// MIN_BAR_WIDTH is tuned so a 360-430px phone viewport (minus CLEF_TIME_WIDTH for the first
+// bar) fits exactly 2 bars per system, while a desktop-width container fits a whole 4-bar
+// level on one system.
+const MIN_BAR_WIDTH = 130;
 const CLEF_TIME_WIDTH = 70;
-const TOP_MARGIN = 45;
-const SYSTEM_GAP = 90;
-const BOTTOM_MARGIN = 20;
-const CURSOR_TOP_OFFSET = 40;
-const CURSOR_HEIGHT = 60;
+const TOP_MARGIN = 40;
+// A 1-line percussion stave needs far less vertical room between systems than a 5-line stave.
+const SYSTEM_GAP = 64;
+const BOTTOM_MARGIN = 24;
+/** Index of the one visible line on the 5-line stave. */
+const STAFF_LINE = 2;
+/** The staff line sits 40px below the stave's y (2 spaces of headroom + 2 hidden lines). */
+const CURSOR_TOP_OFFSET = -10;
+const CURSOR_HEIGHT = 50;
 const FALLBACK_WIDTH = 360;
+/** Barlines extend this many staff-spaces above/below the single line, percussion-notation style. */
+const BARLINE_SPACE_MULTIPLIER = 1;
+/** Gap between the thin and thick strokes of a final barline. */
+const FINAL_BARLINE_GAP = 4;
 
 // The percussion notehead sits on the single stave line regardless of "pitch"; "b/4" is just
 // a conventional key that VexFlow accepts for any clef.
@@ -99,6 +110,32 @@ function distributeBars(total: number, systems: number): number[] {
   return counts;
 }
 
+/**
+ * Draws a barline by hand instead of relying on VexFlow's Stave begin/end bar rendering: on a
+ * 1-line stave VexFlow collapses barline height to ~0 (it spans "top line to bottom line",
+ * which are the same line). We draw a stroke centred on the line and extending one staff-space
+ * above and below, matching standard percussion notation; a "final" barline adds a second,
+ * thicker stroke just before it.
+ */
+function drawBarline(ctx: RenderContext, x: number, lineY: number, staffSpace: number, kind: "single" | "final"): void {
+  const extend = staffSpace * BARLINE_SPACE_MULTIPLIER;
+  const top = lineY - extend;
+  const bottom = lineY + extend;
+
+  const stroke = (strokeX: number, width: number) => {
+    ctx.save();
+    ctx.setLineWidth(width);
+    ctx.beginPath();
+    ctx.moveTo(strokeX, top);
+    ctx.lineTo(strokeX, bottom);
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  if (kind === "final") stroke(x - FINAL_BARLINE_GAP, 3);
+  stroke(x, 1);
+}
+
 function paintSvgTree(root: SVGElement, color: string | null): void {
   const apply = (el: SVGElement) => {
     if (color) {
@@ -122,11 +159,22 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   let cursorEl: HTMLDivElement | null = null;
   let eventMeta: EventMeta[] = [];
   let bars: BarMeta[] = [];
+  // Set to <1 when the natural layout is taller than the available space (see build()): the
+  // SVG is scaled down via its viewBox rather than overflowing, and cursor coordinates (kept
+  // in unscaled/natural px) must be scaled the same way to stay aligned with it.
+  let renderScale = 1;
 
+  // A beat exactly on a shared boundary (the last bar's endBeat equals the next bar's
+  // startBeat) belongs to the *next* bar — its first onset — except at the very end of the
+  // piece, where the final bar's own endBeat must still resolve to itself.
   function findBar(beat: number): BarMeta | undefined {
     if (bars.length === 0) return undefined;
-    for (const bar of bars) {
-      if (beat >= bar.startBeat && beat <= bar.endBeat) return bar;
+    for (let i = 0; i < bars.length; i++) {
+      const bar = bars[i];
+      if (!bar) continue;
+      const isLast = i === bars.length - 1;
+      const inBar = isLast ? beat >= bar.startBeat && beat <= bar.endBeat : beat >= bar.startBeat && beat < bar.endBeat;
+      if (inBar) return bar;
     }
     return beat < (bars[0]?.startBeat ?? 0) ? bars[0] : bars[bars.length - 1];
   }
@@ -193,13 +241,19 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
         let staveWidth = perBarWidth + (isFirstBarOfSystem && isFirstSystem ? CLEF_TIME_WIDTH : 0);
         if (isLastBarOfSystem) staveWidth = Math.max(MIN_BAR_WIDTH, width - xCursor);
 
-        const stave = new Stave(xCursor, staveY, staveWidth, { numLines: 1 });
+        // A 5-line stave with only the middle line visible: clef, time signature and "b/4" notes
+        // all centre on the middle line, which is how VexFlow expects single-line percussion.
+        const stave = new Stave(xCursor, staveY, staveWidth, { spaceAboveStaffLn: 2 });
+        stave.setConfigForLines([{ visible: false }, { visible: false }, { visible: true }, { visible: false }, { visible: false }]);
         if (isFirstBarOverall) {
           stave.addClef("percussion");
           stave.addTimeSignature(`${level.meter.beats}/${level.meter.beatUnit}`);
         }
-        stave.setBegBarType(isFirstBarOfSystem ? BarlineType.NONE : BarlineType.SINGLE);
-        stave.setEndBarType(isLastBarOverall ? BarlineType.END : BarlineType.SINGLE);
+        // VexFlow's own begin/end barlines collapse to ~0 height on a 1-line stave, so both are
+        // suppressed here and every bar's trailing edge gets a hand-drawn barline instead (see
+        // drawBarline below) — a single line between bars, a final double line at the very end.
+        stave.setBegBarType(BarlineType.NONE);
+        stave.setEndBarType(BarlineType.NONE);
         stave.setContext(ctx).draw();
         xCursor += staveWidth;
 
@@ -216,7 +270,6 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
             clef: "percussion",
             stemDirection: Stem.UP,
           });
-          note.setKeyLine(0, 0);
           if (ev.dots) Dot.buildAndAttach([note]);
           notes.push(note);
         }
@@ -233,6 +286,10 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
 
         voice.draw(ctx, stave);
         beams.forEach((beam) => beam.setContext(ctx).draw());
+
+        // A barline at this bar's trailing edge (never a leading one — see the NONE begin type
+        // above): single between bars, final/double at the very end of the piece.
+        drawBarline(ctx, xCursor, stave.getYForLine(STAFF_LINE), stave.getSpacingBetweenLines(), isLastBarOverall ? "final" : "single");
 
         const barAnchors: Anchor[] = [{ beat: barStartBeat, x: stave.getNoteStartX() }];
         let beatAcc = barStartBeat;
@@ -280,6 +337,25 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     eventMeta = newEventMeta;
     bars = newBars;
 
+    // The staff region must never overlap the tap area below it. staffArea (this container's
+    // flex parent) is shrink-eligible (min-height: 0) and reports its real, content-independent
+    // box height; when the natural layout is taller than that, scale the whole SVG down via its
+    // viewBox instead of letting it overflow into the tap zones.
+    const availableHeight = Math.max(0, (container.parentElement?.clientHeight ?? 0) - 8);
+    renderScale = availableHeight > 0 && totalHeight > availableHeight ? Math.max(0.4, availableHeight / totalHeight) : 1;
+
+    const svgEl = container.querySelector("svg");
+    if (svgEl) {
+      svgEl.setAttribute("viewBox", `0 0 ${width} ${totalHeight}`);
+      svgEl.setAttribute("preserveAspectRatio", "xMidYMid meet");
+      if (renderScale < 1) {
+        svgEl.setAttribute("width", `${Math.round(width * renderScale)}`);
+        svgEl.setAttribute("height", `${Math.round(totalHeight * renderScale)}`);
+        svgEl.style.display = "block";
+        svgEl.style.margin = "0 auto";
+      }
+    }
+
     const cursor = document.createElement("div");
     cursor.style.position = "absolute";
     cursor.style.top = "0";
@@ -315,10 +391,10 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
         cursorEl.style.display = "none";
         return;
       }
-      const x = interpolateX(bar, beat);
+      const x = interpolateX(bar, beat) * renderScale;
       cursorEl.style.left = `${x}px`;
-      cursorEl.style.top = `${bar.top}px`;
-      cursorEl.style.height = `${bar.height}px`;
+      cursorEl.style.top = `${bar.top * renderScale}px`;
+      cursorEl.style.height = `${bar.height * renderScale}px`;
       cursorEl.style.display = "block";
     },
     mark(eventIndex: number, grade: Grade): void {

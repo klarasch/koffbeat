@@ -193,6 +193,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
     }
     staff.setCursor(null);
 
+    // The last in-run grade flash (e.g. "PERFECT") must not linger once results are shown.
+    gradeFlash.classList.remove("show");
+
+    // The results panel replaces the tap area (which is no longer needed) rather than
+    // overlaying the whole screen, so the staff with its final grade marks stays fully visible.
+    tapArea.hidden = true;
+
     resultsOverlay.innerHTML = "";
     resultsOverlay.appendChild(
       buildResultsPanel(result, level.bpm, {

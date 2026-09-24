@@ -9,11 +9,28 @@ export interface ResultsCallbacks {
   onHome: () => void;
 }
 
-/** "you sped up 4%" / "you slowed down 4%" / "you stayed steady", from a signed drift percent. */
+/**
+ * How the tempo *changed during the run* (first bar vs last bar of the player's own pulse) —
+ * distinct from how it compared to the count-in target. "steady throughout" below |drift| = 2%,
+ * since the drift estimate is noisy at low magnitudes.
+ */
 export function driftWords(driftPercent: number): string {
   const rounded = Math.round(Math.abs(driftPercent));
-  if (rounded < 1) return "you stayed steady";
-  return driftPercent > 0 ? `you sped up ${rounded}%` : `you slowed down ${rounded}%`;
+  if (rounded < 2) return "steady throughout";
+  return driftPercent > 0 ? `you sped up ${rounded}% from start to end` : `you slowed down ${rounded}% from start to end`;
+}
+
+/** How the player's average tempo compared to the count-in's target tempo. */
+export function tempoVsTargetWords(playedBpm: number, targetBpm: number): string {
+  if (targetBpm <= 0) return "";
+  const percent = ((playedBpm - targetBpm) / targetBpm) * 100;
+  const rounded = Math.round(Math.abs(percent));
+  if (rounded < 1) return "right on the count-in tempo";
+  return percent > 0 ? `${rounded}% faster than the count-in` : `${rounded}% slower than the count-in`;
+}
+
+function capitalize(text: string): string {
+  return text.slice(0, 1).toUpperCase() + text.slice(1);
 }
 
 function hitCount(result: RunResult): number {
@@ -42,7 +59,7 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, callback
   const detail = document.createElement("p");
   detail.className = "results-detail";
   const playedBpm = Math.round(result.playedBpm);
-  detail.textContent = `Played ${playedBpm} bpm vs ${targetBpm} bpm target — ${driftWords(result.driftPercent)}.`;
+  detail.textContent = `Played ${playedBpm} bpm — ${tempoVsTargetWords(result.playedBpm, targetBpm)}. ${capitalize(driftWords(result.driftPercent))}.`;
   panel.appendChild(detail);
 
   panel.appendChild(buildButtons(callbacks));
