@@ -1,5 +1,5 @@
 import type { AudioEngine } from "../audio/engine";
-import type { Hit } from "../types";
+import type { Hit, Release } from "../types";
 
 /**
  * Attaches pointer + keyboard input handling to `target`.
@@ -7,8 +7,17 @@ import type { Hit } from "../types";
  *
  * Zone mapping: left half of target's bounding box = zone 0, right half = zone 1
  * (pointer input); F / D / Space / ArrowLeft = zone 0, J / K / ArrowRight = zone 1 (keyboard).
+ * A release (pointerup/pointercancel, or keyup of a mapped key) reports the zone its press was
+ * in — pointer releases are tracked per pointerId since the finger may have moved off target by
+ * then; keyboard releases use the key's own zone mapping.
  */
-export function attachInput(target: HTMLElement, engine: AudioEngine, onHit: (hit: Hit) => void, getOffsetSec: () => number): () => void {
+export function attachInput(
+  target: HTMLElement,
+  engine: AudioEngine,
+  onHit: (hit: Hit) => void,
+  getOffsetSec: () => number,
+  onRelease: (release: Release) => void = () => {},
+): () => void {
   const previousTouchAction = target.style.touchAction;
   const previousUserSelect = target.style.userSelect;
   const previousWebkitUserSelect = target.style.getPropertyValue("-webkit-user-select");
@@ -24,6 +33,8 @@ export function attachInput(target: HTMLElement, engine: AudioEngine, onHit: (hi
   const pressedKeys = new Set<string>();
   const zone0Keys = new Set(["f", "d", " ", "arrowleft"]);
   const zone1Keys = new Set(["j", "k", "arrowright"]);
+  /** Zone each currently-down pointer pressed in, so its release reports the same zone. */
+  const pointerZones = new Map<number, 0 | 1>();
 
   /**
    * Maps an event's high-resolution timestamp onto the audio clock. getOutputTimestamp pairs a
@@ -75,10 +86,23 @@ export function attachInput(target: HTMLElement, engine: AudioEngine, onHit: (hi
     onHit({ time, zone });
   }
 
+  function registerRelease(zone: 0 | 1, eventTimeStamp: number): void {
+    const time = eventTimeToAudioTime(eventTimeStamp);
+    onRelease({ time, zone });
+  }
+
   function handlePointerDown(event: PointerEvent): void {
     event.preventDefault();
     const zone = zoneForClientX(event.clientX);
+    pointerZones.set(event.pointerId, zone);
     registerHit(zone, event.timeStamp, event.clientX);
+  }
+
+  function handlePointerUp(event: PointerEvent): void {
+    const zone = pointerZones.get(event.pointerId);
+    pointerZones.delete(event.pointerId);
+    if (zone === undefined) return;
+    registerRelease(zone, event.timeStamp);
   }
 
   function handleKeyDown(event: KeyboardEvent): void {
@@ -106,15 +130,28 @@ export function attachInput(target: HTMLElement, engine: AudioEngine, onHit: (hi
   }
 
   function handleKeyUp(event: KeyboardEvent): void {
-    pressedKeys.delete(event.key.toLowerCase());
+    const key = event.key.toLowerCase();
+    pressedKeys.delete(key);
+    let zone: 0 | 1 | null = null;
+    if (zone0Keys.has(key)) {
+      zone = 0;
+    } else if (zone1Keys.has(key)) {
+      zone = 1;
+    }
+    if (zone === null) return;
+    registerRelease(zone, event.timeStamp);
   }
 
   target.addEventListener("pointerdown", handlePointerDown);
+  target.addEventListener("pointerup", handlePointerUp);
+  target.addEventListener("pointercancel", handlePointerUp);
   window.addEventListener("keydown", handleKeyDown);
   window.addEventListener("keyup", handleKeyUp);
 
   return function detach(): void {
     target.removeEventListener("pointerdown", handlePointerDown);
+    target.removeEventListener("pointerup", handlePointerUp);
+    target.removeEventListener("pointercancel", handlePointerUp);
     window.removeEventListener("keydown", handleKeyDown);
     window.removeEventListener("keyup", handleKeyUp);
     target.style.touchAction = previousTouchAction;
@@ -122,5 +159,6 @@ export function attachInput(target: HTMLElement, engine: AudioEngine, onHit: (hi
     target.style.setProperty("-webkit-user-select", previousWebkitUserSelect);
     target.style.setProperty("-webkit-touch-callout", previousWebkitTouchCallout);
     pressedKeys.clear();
+    pointerZones.clear();
   };
 }

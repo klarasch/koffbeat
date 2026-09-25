@@ -291,6 +291,8 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
           if (Math.abs(hit.time - nearest) <= OUTLIER_THRESHOLD_SEC) usableTaps.push(hit.time);
         },
         () => 0,
+        // Calibration only measures attack (tap) latency; releases aren't part of this test.
+        () => {},
       );
 
       engine.startMetronome(startTime, SECONDS_PER_BEAT, BEATS_PER_BAR, MAX_BARS);

@@ -35,10 +35,28 @@ export interface Onset {
   eventIndex: number;
   /** Position from the start of bar 1, in quarter notes. */
   beat: number;
+  /** Sounding length, in quarter notes. A tied chain counts as one note with the summed length. */
+  quarters: number;
+}
+
+/** A silent span between notes, one per written rest symbol (consecutive rests are not merged). */
+export interface RestSpan {
+  /** Index into the flattened event list of the rest symbol. */
+  eventIndex: number;
+  /** Position from the start of bar 1, in quarter notes. */
+  beat: number;
+  /** Length, in quarter notes. */
+  quarters: number;
 }
 
 /** A player tap, already latency-corrected, in AudioContext seconds. */
 export interface Hit {
+  time: number;
+  zone: 0 | 1;
+}
+
+/** A player release (finger up / key up), already latency-corrected, in AudioContext seconds. */
+export interface Release {
   time: number;
   zone: 0 | 1;
 }
@@ -53,14 +71,26 @@ export interface OnsetJudgement {
   strictErrorMs: number | null;
   /** Error vs the player's own (slowly drifting) pulse, in ms. */
   relativeErrorMs: number | null;
+  /** Onset (attack-timing) grade. */
   grade: Grade;
+  /** Matched release time (explicit release, or the next press as a fallback), or null when never released. */
+  releaseTime: number | null;
+  /** Error vs the predicted note end, in ms (positive = held too long). */
+  releaseErrorMs: number | null;
+  /** Hold/release grade, or null when there's nothing to grade it against. */
+  releaseGrade: Grade | null;
 }
 
 export interface RunResult {
   judgements: OnsetJudgement[];
   /** Hits that matched no onset. */
   extraHits: Hit[];
-  /** 0–100: are the note proportions right, judged against the player's own pulse. */
+  /** Per-rest grading: was the rest actually silent. */
+  restJudgements: { eventIndex: number; grade: Grade; reason: string | null }[];
+  /**
+   * 0–100: 70% onset (attack) timing score + 30% hold/rest correctness score, judged against
+   * the player's own pulse. See judge.ts's computeAccuracy for the exact blend.
+   */
   accuracy: number;
   /** 0–100: how steady the player's pulse stayed relative to the count-in tempo. */
   steadiness: number;

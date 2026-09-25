@@ -4,13 +4,25 @@
 import { BarlineType, Beam, Dot, Formatter, Fraction, type RenderContext, Renderer, Stave, StaveNote, StaveTie, Stem, Voice } from "vexflow";
 import type { Grade, Level, NoteValue, RhythmEvent } from "../types";
 
+/**
+ * Karaoke-style note state: "upcoming" is the default ink (nothing has happened yet), "next" is
+ * the note/rest the player should play next (a gentle highlight that only moves when the player
+ * advances, never with the clock), "active" is while a finger/key is down on it, and a Grade is
+ * its final graded colour.
+ */
+export type NoteState = "upcoming" | "next" | "active" | Grade;
+
 export interface StaffView {
   /** x in container CSS px of the notehead centre, and which system (line) it is on. */
   onsetX(eventIndex: number): { x: number; line: number };
-  /** Position a thin vertical playhead at `beat` (quarters from the start of bar 1), or hide it when null. */
+  /** The event index nearest `(clientX, clientY)` in page coordinates, or null if too far from any note. */
+  eventAt(clientX: number, clientY: number): number | null;
+  /** Position a thin vertical playhead at `beat` (quarters from the start of bar 1), or hide it when null. Unused by the karaoke-style play screen; kept for future use. */
   setCursor(beat: number | null): void;
   /** Colour the notehead/stem of a single event to reflect a grade. */
   mark(eventIndex: number, grade: Grade): void;
+  /** Sets a single event's karaoke-style display state (upcoming/next/active/graded). */
+  setState(eventIndex: number, state: NoteState): void;
   /** Remove all grading colours, restoring the default ink. */
   clearMarks(): void;
   destroy(): void;
@@ -31,6 +43,12 @@ const GRADE_COLORS: Record<Grade, string> = {
   ok: "#e6c35c",
   miss: "#e0707a",
 };
+
+/** "active" (finger down) uses the same accent colour as a "perfect" grade, with a stronger glow. */
+const ACTIVE_COLOR = "#7fe0c4";
+const NEXT_GLOW_COLOR = "rgba(232, 228, 218, 0.55)";
+/** Radius, in unscaled container px, within which a tap counts as hitting a given event (see eventAt). */
+const HIT_TEST_RADIUS = 26;
 
 // Layout constants, in CSS px.
 // MIN_BAR_WIDTH is tuned so a 360-430px phone viewport (minus CLEF_TIME_WIDTH for the first
@@ -157,6 +175,8 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   let destroyed = false;
   let resizeObserver: ResizeObserver | null = null;
   let cursorEl: HTMLDivElement | null = null;
+  let nextMarkerEl: HTMLDivElement | null = null;
+  let nextMarkerIndex: number | null = null;
   let eventMeta: EventMeta[] = [];
   let bars: BarMeta[] = [];
   // Set to <1 when the natural layout is taller than the available space (see build()): the
@@ -198,6 +218,8 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   function build(): void {
     if (destroyed) return;
     container.innerHTML = "";
+    nextMarkerEl = null;
+    nextMarkerIndex = null;
     if (getComputedStyle(container).position === "static") {
       container.style.position = "relative";
     }
@@ -381,11 +403,60 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   resizeObserver = new ResizeObserver(() => build());
   resizeObserver.observe(container);
 
+  function ensureNextMarker(): HTMLDivElement {
+    if (nextMarkerEl) return nextMarkerEl;
+    const marker = document.createElement("div");
+    marker.style.position = "absolute";
+    marker.style.width = "6px";
+    marker.style.height = "6px";
+    marker.style.borderRadius = "50%";
+    marker.style.background = ink;
+    marker.style.pointerEvents = "none";
+    marker.style.transform = "translate(-50%, 0)";
+    container.appendChild(marker);
+    nextMarkerEl = marker;
+    return marker;
+  }
+
+  function positionNextMarker(eventIndex: number): void {
+    const meta = eventMeta[eventIndex];
+    if (!meta) return;
+    const marker = ensureNextMarker();
+    const staveY = TOP_MARGIN + meta.line * SYSTEM_GAP;
+    marker.style.left = `${meta.x * renderScale}px`;
+    marker.style.top = `${(staveY + 22) * renderScale}px`;
+    marker.style.display = "block";
+    nextMarkerIndex = eventIndex;
+  }
+
+  function hideNextMarkerIfOwnedBy(eventIndex: number): void {
+    if (nextMarkerIndex === eventIndex && nextMarkerEl) {
+      nextMarkerEl.style.display = "none";
+      nextMarkerIndex = null;
+    }
+  }
+
   return {
     onsetX(eventIndex: number): { x: number; line: number } {
       const meta = eventMeta[eventIndex];
       if (!meta) throw new RangeError(`onsetX: no event at index ${eventIndex}`);
       return { x: meta.x, line: meta.line };
+    },
+    eventAt(clientX: number, clientY: number): number | null {
+      const rect = container.getBoundingClientRect();
+      const localX = (clientX - rect.left) / renderScale;
+      const localY = (clientY - rect.top) / renderScale;
+      let bestIndex: number | null = null;
+      let bestDist = Number.POSITIVE_INFINITY;
+      eventMeta.forEach((meta, i) => {
+        const staveY = TOP_MARGIN + meta.line * SYSTEM_GAP;
+        const dist = Math.hypot(meta.x - localX, staveY - localY);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIndex = i;
+        }
+      });
+      return bestDist <= HIT_TEST_RADIUS ? bestIndex : null;
     },
     setCursor(beat: number | null): void {
       if (!cursorEl) return;
@@ -410,11 +481,44 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       const el = meta.note.getSVGElement();
       if (el) paintSvgTree(el, GRADE_COLORS[grade]);
     },
+    setState(eventIndex: number, state: NoteState): void {
+      const meta = eventMeta[eventIndex];
+      if (!meta) return;
+      const el = meta.note.getSVGElement();
+      if (!el) return;
+
+      if (state !== "next") hideNextMarkerIfOwnedBy(eventIndex);
+
+      switch (state) {
+        case "upcoming":
+          paintSvgTree(el, null);
+          el.style.filter = "";
+          break;
+        case "next":
+          paintSvgTree(el, ink);
+          el.style.filter = `drop-shadow(0 0 4px ${NEXT_GLOW_COLOR})`;
+          positionNextMarker(eventIndex);
+          break;
+        case "active":
+          paintSvgTree(el, ACTIVE_COLOR);
+          el.style.filter = `drop-shadow(0 0 6px ${ACTIVE_COLOR})`;
+          break;
+        default:
+          paintSvgTree(el, GRADE_COLORS[state]);
+          el.style.filter = "";
+          break;
+      }
+    },
     clearMarks(): void {
       for (const meta of eventMeta) {
         const el = meta.note.getSVGElement();
-        if (el) paintSvgTree(el, null);
+        if (el) {
+          paintSvgTree(el, null);
+          el.style.filter = "";
+        }
       }
+      if (nextMarkerEl) nextMarkerEl.style.display = "none";
+      nextMarkerIndex = null;
     },
     destroy(): void {
       destroyed = true;

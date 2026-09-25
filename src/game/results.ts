@@ -1,7 +1,7 @@
 // Builds the results overlay shown after a run: two headline scores, tempo detail, and the
 // Retry / Next level / Home actions. Pure DOM builder — timing and judging happen in play.ts.
 
-import type { RunResult } from "../types";
+import type { Grade, Mode, OnsetJudgement, RunResult } from "../types";
 
 export interface ResultsCallbacks {
   onRetry: () => void;
@@ -29,15 +29,73 @@ export function tempoVsTargetWords(playedBpm: number, targetBpm: number): string
   return percent > 0 ? `${rounded}% faster than the count-in` : `${rounded}% slower than the count-in`;
 }
 
+/** How far from "on the click" a mean signed error has to be to call it out by direction. */
+const TIMING_NOTEWORTHY_MEAN_MS = 8;
+
+/**
+ * In practice mode a metronome is running throughout, so "tempo steadiness" and "drift" (which
+ * describe how the player's *own* pulse wandered) aren't meaningful — the click itself is the
+ * reference. This instead describes the player's timing relative to that click: mean signed
+ * error (ahead/behind) and its spread (population standard deviation), both in ms.
+ */
+export function timingVsClickWords(judgements: OnsetJudgement[]): string {
+  const errors = judgements.filter((j): j is OnsetJudgement & { strictErrorMs: number } => j.strictErrorMs !== null).map((j) => j.strictErrorMs);
+  if (errors.length === 0) return "No taps detected.";
+
+  const mean = errors.reduce((sum, e) => sum + e, 0) / errors.length;
+  const variance = errors.reduce((sum, e) => sum + (e - mean) ** 2, 0) / errors.length;
+  const spreadMs = Math.round(Math.sqrt(variance));
+  const meanMs = Math.round(Math.abs(mean));
+
+  if (meanMs < TIMING_NOTEWORTHY_MEAN_MS) return `Right on the click, ±${spreadMs} ms`;
+  return `You play ${meanMs} ms ${mean > 0 ? "behind" : "ahead of"} the click, ±${spreadMs} ms`;
+}
+
 function capitalize(text: string): string {
   return text.slice(0, 1).toUpperCase() + text.slice(1);
+}
+
+/** How far from "on time" (or "predicted end", for a release) a ms error has to be to mention it. */
+const NOTEWORTHY_ERROR_MS = 15;
+
+/**
+ * Plain-language detail for a note's tooltip, e.g. "Tapped 180 ms late · held 300 ms short".
+ * Hold is only ever mentioned for a sustained note (releaseGrade is null for a quarter note or
+ * shorter — those are "played" the instant they're tapped, so there's nothing to say about it).
+ */
+export function describeNoteJudgement(j: OnsetJudgement): string {
+  if (j.hitTime === null) return "Not tapped";
+
+  const parts: string[] = [];
+  const onsetErr = j.relativeErrorMs ?? 0;
+  parts.push(Math.abs(onsetErr) < NOTEWORTHY_ERROR_MS ? "tapped on time" : `tapped ${Math.round(Math.abs(onsetErr))} ms ${onsetErr > 0 ? "late" : "early"}`);
+
+  if (j.releaseGrade !== null && j.releaseErrorMs !== null && j.releaseGrade !== "perfect") {
+    const releaseErr = j.releaseErrorMs;
+    parts.push(releaseErr < 0 ? `held ${Math.round(Math.abs(releaseErr))} ms short` : `held ${Math.round(Math.abs(releaseErr))} ms long`);
+  }
+
+  return capitalize(parts.join(" · "));
+}
+
+/** Plain-language detail for a rest's tooltip, e.g. "Rest: you tapped during it". */
+export function describeRestJudgement(r: { grade: Grade; reason: string | null }): string {
+  if (r.reason) return `Rest: ${r.reason}`;
+  return r.grade === "miss" ? "Rest: not clean" : "Rest: held clean";
 }
 
 function hitCount(result: RunResult): number {
   return result.judgements.filter((j) => j.hitTime !== null).length;
 }
 
-export function buildResultsPanel(result: RunResult, targetBpm: number, callbacks: ResultsCallbacks): HTMLElement {
+/**
+ * `mode` decides what the second score card and the detail line describe: in "practice" a
+ * metronome runs throughout, so the player's *own* pulse (tempo steadiness, drift) isn't the
+ * interesting number — how they land relative to that click is. In "countIn" (and any other
+ * mode without a running metronome) the player's own pulse is all there is to judge, so
+ * steadiness and drift are kept.
+ */
+export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mode, callbacks: ResultsCallbacks): HTMLElement {
   const panel = document.createElement("div");
   panel.className = "results-panel";
 
@@ -53,13 +111,20 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, callback
   const scores = document.createElement("div");
   scores.className = "results-scores";
   scores.appendChild(scoreCard("Rhythm accuracy", result.accuracy));
-  scores.appendChild(scoreCard("Tempo steadiness", result.steadiness));
+  if (mode === "practice") {
+    scores.appendChild(textCard("Timing vs click", timingVsClickWords(result.judgements)));
+  } else {
+    scores.appendChild(scoreCard("Tempo steadiness", result.steadiness));
+  }
   panel.appendChild(scores);
 
   const detail = document.createElement("p");
   detail.className = "results-detail";
   const playedBpm = Math.round(result.playedBpm);
-  detail.textContent = `Played ${playedBpm} bpm — ${tempoVsTargetWords(result.playedBpm, targetBpm)}. ${capitalize(driftWords(result.driftPercent))}.`;
+  detail.textContent =
+    mode === "practice"
+      ? `Played ${playedBpm} bpm — ${tempoVsTargetWords(result.playedBpm, targetBpm)}.`
+      : `Played ${playedBpm} bpm — ${tempoVsTargetWords(result.playedBpm, targetBpm)}. ${capitalize(driftWords(result.driftPercent))}.`;
   panel.appendChild(detail);
 
   panel.appendChild(buildButtons(callbacks));
@@ -75,6 +140,19 @@ function scoreCard(label: string, value: number): HTMLElement {
   const valueEl = document.createElement("p");
   valueEl.className = "score-card-value";
   valueEl.textContent = String(Math.round(value));
+  card.append(labelEl, valueEl);
+  return card;
+}
+
+function textCard(label: string, text: string): HTMLElement {
+  const card = document.createElement("div");
+  card.className = "score-card";
+  const labelEl = document.createElement("p");
+  labelEl.className = "score-card-label";
+  labelEl.textContent = label;
+  const valueEl = document.createElement("p");
+  valueEl.className = "score-card-text";
+  valueEl.textContent = text;
   card.append(labelEl, valueEl);
   return card;
 }
