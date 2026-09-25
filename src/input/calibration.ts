@@ -13,11 +13,11 @@ export interface CalibrationResult {
 
 const LOCAL_STORAGE_KEY = "resonance.latencyOffset";
 /** Taps whose error to the nearest click exceeds this are discarded as mis-taps, not latency. */
-const OUTLIER_THRESHOLD_SEC = 0.25;
+const OUTLIER_THRESHOLD_SEC = 0.3;
 /** Minimum number of usable (non-outlier, post-warmup) taps required to trust the result. */
 const MIN_USABLE_TAPS = 6;
 /** Maximum IQR, in ms, for the result to be considered reliable. */
-const MAX_SPREAD_MS = 60;
+const MAX_SPREAD_MS = 80;
 /** Number of leading taps dropped as "finding the beat" warmup. */
 const WARMUP_TAPS_DROPPED = 2;
 

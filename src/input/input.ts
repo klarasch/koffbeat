@@ -25,11 +25,20 @@ export function attachInput(target: HTMLElement, engine: AudioEngine, onHit: (hi
   const zone0Keys = new Set(["f", "d", " ", "arrowleft"]);
   const zone1Keys = new Set(["j", "k", "arrowright"]);
 
+  /**
+   * Maps an event's high-resolution timestamp onto the audio clock. getOutputTimestamp pairs a
+   * performance.now() instant with the context time audible at the speaker, so the result is
+   * smooth (ctx.currentTime advances in hardware-buffer chunks, 20–40 ms on iOS) and already
+   * compensates output latency. Falls back to currentTime where it's unsupported.
+   */
   function eventTimeToAudioTime(eventTimeStamp: number): number {
-    const ageSec = (performance.now() - eventTimeStamp) / 1000;
-    // Guard against unreliable/negative/huge timeStamp values (some browsers/environments).
-    const clampedAgeSec = Number.isFinite(ageSec) ? Math.min(Math.max(ageSec, 0), 0.1) : 0;
-    return engine.now() - clampedAgeSec - getOffsetSec();
+    const nowPerf = performance.now();
+    const eventPerf = Number.isFinite(eventTimeStamp) && eventTimeStamp <= nowPerf && nowPerf - eventTimeStamp < 100 ? eventTimeStamp : nowPerf;
+    const stamp = typeof engine.ctx.getOutputTimestamp === "function" ? engine.ctx.getOutputTimestamp() : null;
+    if (stamp?.contextTime !== undefined && stamp.performanceTime !== undefined && stamp.performanceTime > 0) {
+      return stamp.contextTime + (eventPerf - stamp.performanceTime) / 1000 - getOffsetSec();
+    }
+    return engine.now() - (nowPerf - eventPerf) / 1000 - getOffsetSec();
   }
 
   function zoneForClientX(clientX: number): 0 | 1 {
