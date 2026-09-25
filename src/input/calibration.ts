@@ -136,8 +136,12 @@ export function saveOffset(sec: number): void {
 }
 
 const CALIBRATION_BPM = 90;
-const CALIBRATION_CLICK_COUNT = 16;
 const SECONDS_PER_BEAT = 60 / CALIBRATION_BPM;
+const BEATS_PER_BAR = 4;
+/** One listening bar, then up to ~29 s of tapping before giving up. */
+const MAX_BARS = 12;
+/** The round ends as soon as this many recent taps are consistent (computeOffset drops 2 as warmup). */
+const TAPS_NEEDED = 10;
 
 /**
  * Renders a minimal calibration UI into `container`, runs the tap-along test, and resolves
@@ -238,45 +242,98 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
       resolve(lastOffsetSec);
     });
 
+    const progress = document.createElement("div");
+    progress.style.display = "flex";
+    progress.style.justifyContent = "center";
+    progress.style.gap = "8px";
+    progress.style.margin = "0 0 16px";
+    const progressDots: HTMLElement[] = [];
+    for (let i = 0; i < TAPS_NEEDED; i++) {
+      const dot = document.createElement("span");
+      dot.style.cssText = "width:10px;height:10px;border-radius:50%;background:#2a303c;transition:background 120ms;";
+      progress.appendChild(dot);
+      progressDots.push(dot);
+    }
+    progress.style.visibility = "hidden";
+    container.insertBefore(progress, tapPad);
+
+    /**
+     * One bar of counted clicks, then clicks continue until the latest TAPS_NEEDED taps are
+     * consistent — so it doesn't matter when the player starts tapping.
+     */
     async function startRound(): Promise<void> {
       running = true;
       startRow.style.display = "none";
       resultBox.style.display = "none";
-      statusLine.textContent = "Get ready...";
+      statusLine.textContent = "Listen…";
 
       await engine.unlock();
 
+      const startTime = engine.now() + 0.6;
       const clickTimes: number[] = [];
-      const tapTimes: number[] = [];
+      for (let i = 0; i < MAX_BARS * BEATS_PER_BAR; i++) clickTimes.push(startTime + i * SECONDS_PER_BEAT);
+      const tappingFrom = startTime + (BEATS_PER_BAR - 0.5) * SECONDS_PER_BEAT;
+      const endTime = startTime + MAX_BARS * BEATS_PER_BAR * SECONDS_PER_BEAT;
 
+      /** Taps that land near a click after the listening bar. */
+      const usableTaps: number[] = [];
       tapPad.style.display = "flex";
-      detach = attachInput(tapPad, engine, (hit) => tapTimes.push(hit.time), () => 0);
+      progress.style.visibility = "visible";
+      progressDots.forEach((dot) => {
+        dot.style.background = "#2a303c";
+      });
+      detach = attachInput(
+        tapPad,
+        engine,
+        (hit) => {
+          if (hit.time < tappingFrom) return;
+          const nearest = clickTimes.reduce((best, c) => (Math.abs(c - hit.time) < Math.abs(best - hit.time) ? c : best), Number.POSITIVE_INFINITY);
+          if (Math.abs(hit.time - nearest) <= OUTLIER_THRESHOLD_SEC) usableTaps.push(hit.time);
+        },
+        () => 0,
+      );
 
-      const startTime = engine.now() + 0.8;
-      for (let i = 0; i < CALIBRATION_CLICK_COUNT; i++) {
-        const clickTime = startTime + i * SECONDS_PER_BEAT;
-        clickTimes.push(clickTime);
-        engine.scheduleClick(clickTime, i % 4 === 0);
-      }
+      engine.startMetronome(startTime, SECONDS_PER_BEAT, BEATS_PER_BAR, MAX_BARS);
 
-      statusLine.textContent = "Tap along with the clicks...";
+      let result: CalibrationResult = { offsetSec: 0, spreadMs: 0, ok: false };
+      await new Promise<void>((done) => {
+        const timer = setInterval(() => {
+          const t = engine.now();
+          const beat = Math.floor((t - startTime) / SECONDS_PER_BEAT);
+          if (beat < BEATS_PER_BAR) {
+            statusLine.textContent = beat < 0 ? "Listen…" : `Listen…  ${BEATS_PER_BAR - beat}`;
+          } else if (usableTaps.length < TAPS_NEEDED) {
+            statusLine.textContent = usableTaps.length === 0 ? "Tap along whenever you’re ready" : "Keep tapping on the beat";
+          } else {
+            statusLine.textContent = "Keep it steady…";
+          }
+          const recent = usableTaps.slice(-TAPS_NEEDED);
+          progressDots.forEach((dot, i) => {
+            dot.style.background = i < recent.length ? "#7fe0c4" : "#2a303c";
+          });
+          if (recent.length >= TAPS_NEEDED) result = computeOffset(recent, clickTimes);
+          if (result.ok || t >= endTime) {
+            clearInterval(timer);
+            done();
+          }
+        }, 50);
+      });
 
-      const totalDurationSec = startTime - engine.now() + CALIBRATION_CLICK_COUNT * SECONDS_PER_BEAT + 0.3;
-      await wait(totalDurationSec);
-
-      detach();
+      engine.stopAll();
+      if (detach) detach();
       detach = null;
       tapPad.style.display = "none";
+      progress.style.visibility = "hidden";
       running = false;
 
-      const result = computeOffset(tapTimes, clickTimes);
       lastOffsetSec = result.ok ? result.offsetSec : loadOffset();
-
       const offsetMs = Math.round(result.offsetSec * 1000);
       statusLine.textContent = "";
       resultText.textContent = result.ok
         ? `Your device latency: ${Math.abs(offsetMs)} ms ${offsetMs >= 0 ? "(taps landed late)" : "(taps landed early)"}`
-        : `Not enough consistent taps (${tapTimes.length} taps, spread ${Math.round(result.spreadMs)} ms). Try again, or skip for now.`;
+        : usableTaps.length < TAPS_NEEDED
+          ? `Only ${usableTaps.length} taps landed near the clicks. Try again, or skip for now.`
+          : `Taps weren’t steady enough yet (spread ${Math.round(result.spreadMs)} ms). Try again, or skip for now.`;
       resultBox.style.display = "block";
       saveButton.style.display = result.ok ? "inline-block" : "none";
     }
@@ -304,8 +361,4 @@ function createButton(label: string): HTMLButtonElement {
   button.style.fontSize = "16px";
   button.style.cursor = "pointer";
   return button;
-}
-
-function wait(seconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, seconds) * 1000));
 }
