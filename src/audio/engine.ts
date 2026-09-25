@@ -66,6 +66,10 @@ export function createAudioEngine(): AudioEngine {
   }
 
   async function unlock(): Promise<void> {
+    // iOS mutes Web Audio when the ringer switch is on silent, unless the page declares itself
+    // a playback session (Safari 17+). Rhythm training is useless without the clicks.
+    const audioSession = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+    if (audioSession) audioSession.type = "playback";
     if (ctx.state === "suspended") {
       await ctx.resume();
     }
