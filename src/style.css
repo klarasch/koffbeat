@@ -250,12 +250,19 @@ body,
   flex: 1 1 55%;
   min-height: 0;
   display: flex;
-  align-items: center;
+  align-items: stretch;
   padding: 4px 8px;
 }
 
+/* A fixed-size viewport onto a page-length staff (see staff.ts): notation is never scaled down
+   to fit, it's scrolled line by line instead. overflow-y is toggled between the two states —
+   locked during play (position is driven only by revealEvent) and free on the results screen —
+   by renderStaff's setScrollable, as an inline style. */
 .staff-container {
   width: 100%;
+  height: 100%;
+  overflow-y: hidden;
+  overscroll-behavior-y: contain;
 }
 
 .note-tooltip {

@@ -15,7 +15,7 @@ export type NoteState = "upcoming" | "next" | "active" | Grade;
 export interface StaffView {
   /** x in container CSS px of the notehead centre, and which system (line) it is on. */
   onsetX(eventIndex: number): { x: number; line: number };
-  /** The event index nearest `(clientX, clientY)` in page coordinates, or null if too far from any note. */
+  /** The event index nearest `(clientX, clientY)` in page coordinates, or null if too far from any note. Accounts for scroll offset. */
   eventAt(clientX: number, clientY: number): number | null;
   /** Position a thin vertical playhead at `beat` (quarters from the start of bar 1), or hide it when null. Unused by the karaoke-style play screen; kept for future use. */
   setCursor(beat: number | null): void;
@@ -23,6 +23,19 @@ export interface StaffView {
   mark(eventIndex: number, grade: Grade): void;
   /** Sets a single event's karaoke-style display state (upcoming/next/active/graded). */
   setState(eventIndex: number, state: NoteState): void;
+  /**
+   * Smoothly scrolls the staff viewport so the system containing `eventIndex` becomes the top
+   * visible line (showing that line and everything below it, to read ahead). Call this wherever
+   * the karaoke "next"/"active" position advances. A no-op when the event is already on a
+   * visible-enough line, since the browser's smooth scroll is itself cheap to re-target.
+   */
+  revealEvent(eventIndex: number): void;
+  /**
+   * Toggles whether the viewport can be scrolled by touch/wheel. During play the position is
+   * driven only by `revealEvent` (never by the player dragging); on the results screen the
+   * player should be free to scroll and review every system.
+   */
+  setScrollable(scrollable: boolean): void;
   /** Remove all grading colours, restoring the default ink. */
   clearMarks(): void;
   destroy(): void;
@@ -47,14 +60,12 @@ const GRADE_COLORS: Record<Grade, string> = {
 /** "active" (finger down) uses the same accent colour as a "perfect" grade, with a stronger glow. */
 const ACTIVE_COLOR = "#7fe0c4";
 const NEXT_GLOW_COLOR = "rgba(232, 228, 218, 0.55)";
-/** Radius, in unscaled container px, within which a tap counts as hitting a given event (see eventAt). */
+/** Radius, in container px, within which a tap counts as hitting a given event (see eventAt). */
 const HIT_TEST_RADIUS = 26;
 
 // Layout constants, in CSS px.
-// MIN_BAR_WIDTH is tuned so a 360-430px phone viewport (minus CLEF_TIME_WIDTH for the first
-// bar) fits exactly 2 bars per system, while a desktop-width container fits a whole 4-bar
-// level on one system.
-const MIN_BAR_WIDTH = 130;
+/** Extra trailing space reserved after each bar's minimum note width, for the barline and breathing room. */
+const BAR_PADDING = 22;
 const CLEF_TIME_WIDTH = 70;
 const TOP_MARGIN = 40;
 // A 1-line percussion stave needs far less vertical room between systems than a 5-line stave.
@@ -70,6 +81,8 @@ const FALLBACK_WIDTH = 360;
 const BARLINE_SPACE_MULTIPLIER = 1;
 /** Gap between the thin and thick strokes of a final barline. */
 const FINAL_BARLINE_GAP = 4;
+/** Scroll a little above a revealed system's top, so it doesn't sit flush against the viewport edge. */
+const REVEAL_LEAD = 10;
 
 // The percussion notehead sits on the single stave line regardless of "pitch"; "b/4" is just
 // a conventional key that VexFlow accepts for any clef.
@@ -115,17 +128,90 @@ interface BarMeta {
   anchors: Anchor[];
 }
 
-/** Evenly distribute `total` bars across `systems` systems (as equal as possible, front-loaded). */
-function distributeBars(total: number, systems: number): number[] {
-  const counts: number[] = [];
-  let remaining = total;
-  for (let s = 0; s < systems; s++) {
-    const remainingSystems = systems - s;
-    const count = Math.ceil(remaining / remainingSystems);
-    counts.push(count);
-    remaining -= count;
+/** Builds a fresh, unformatted note per event (dots attached), ready to be voiced and formatted. */
+function buildBarNotes(barEvents: RhythmEvent[]): StaveNote[] {
+  return barEvents.map((ev) => {
+    const note = new StaveNote({
+      keys: [PERCUSSION_KEY],
+      duration: ev.value,
+      dots: ev.dots,
+      type: ev.rest ? "r" : undefined,
+      clef: "percussion",
+      stemDirection: Stem.UP,
+    });
+    if (ev.dots) Dot.buildAndAttach([note]);
+    return note;
+  });
+}
+
+/**
+ * Beams must be generated *before* the notes are formatted: `Beam.generateBeams` suppresses each
+ * beamed note's individual flag, which is what the formatter (and preCalculateMinTotalWidth)
+ * uses to decide how much room the note needs — skip this and every note in a beamed run is
+ * measured (and spaced) as if it still carried its own flag, wildly overestimating bar width.
+ */
+function beamNotes(notes: StaveNote[], level: Level): Beam[] {
+  return Beam.generateBeams(notes, {
+    groups: [new Fraction(1, level.meter.beatUnit)],
+    beamRests: false,
+    stemDirection: Stem.UP,
+  });
+}
+
+function voiceFor(notes: StaveNote[], level: Level): Voice {
+  const voice = new Voice({ numBeats: level.meter.beats, beatValue: level.meter.beatUnit }).setMode(Voice.Mode.STRICT);
+  voice.addTickables(notes);
+  return voice;
+}
+
+/**
+ * The minimum width VexFlow needs to typeset a bar's notes without crowding — a bar of
+ * sixteenths reports a much larger minimum than a bar of whole notes, which is what lets
+ * {@link packSystems} give each bar only the room its own content needs.
+ */
+function measureBarContentWidth(barEvents: RhythmEvent[], level: Level): number {
+  const notes = buildBarNotes(barEvents);
+  beamNotes(notes, level);
+  const voice = voiceFor(notes, level);
+  const formatter = new Formatter();
+  formatter.joinVoices([voice]);
+  return formatter.preCalculateMinTotalWidth([voice]);
+}
+
+interface System {
+  /** Indices into `level.bars`. */
+  barIndices: number[];
+  /** The width (in px) this system's bars are justified to fill. */
+  targetWidth: number;
+}
+
+/**
+ * Greedily packs bars into systems by their content-aware minimum widths (never splitting a bar
+ * across systems), then decides each system's justification target: the container width for a
+ * normal system, or — for the rare bar whose own minimum width exceeds the container on a phone
+ * — that bar's own width, so it gets its own unstretched, unshrunk system instead of overflowing
+ * or crowding a neighbour.
+ */
+/** Printed sight-reading sheets rarely exceed 4 bars a line; wider lines are harder to track. */
+const MAX_BARS_PER_SYSTEM = 4;
+
+function packSystems(barMinWidths: number[], availableWidth: number): System[] {
+  const systems: System[] = [];
+  let current: number[] = [];
+  let currentSum = 0;
+
+  for (let i = 0; i < barMinWidths.length; i++) {
+    const w = barMinWidths[i] ?? 0;
+    if (current.length > 0 && (currentSum + w > availableWidth || current.length >= MAX_BARS_PER_SYSTEM)) {
+      systems.push({ barIndices: current, targetWidth: Math.max(availableWidth, currentSum) });
+      current = [];
+      currentSum = 0;
+    }
+    current.push(i);
+    currentSum += w;
   }
-  return counts;
+  if (current.length > 0) systems.push({ barIndices: current, targetWidth: Math.max(availableWidth, currentSum) });
+  return systems;
 }
 
 /**
@@ -179,10 +265,14 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   let nextMarkerIndex: number | null = null;
   let eventMeta: EventMeta[] = [];
   let bars: BarMeta[] = [];
-  // Set to <1 when the natural layout is taller than the available space (see build()): the
-  // SVG is scaled down via its viewBox rather than overflowing, and cursor coordinates (kept
-  // in unscaled/natural px) must be scaled the same way to stay aligned with it.
-  let renderScale = 1;
+  let scrollable = false;
+
+  function applyScrollStyle(): void {
+    container.style.overflowY = scrollable ? "auto" : "hidden";
+    container.style.overflowX = "auto";
+    container.style.touchAction = scrollable ? "pan-y" : "none";
+    container.style.setProperty("-webkit-overflow-scrolling", scrollable ? "touch" : "auto");
+  }
 
   // A beat exactly on a shared boundary (the last bar's endBeat equals the next bar's
   // startBeat) belongs to the *next* bar — its first onset — except at the very end of the
@@ -223,16 +313,20 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     if (getComputedStyle(container).position === "static") {
       container.style.position = "relative";
     }
+    applyScrollStyle();
 
     const measuredWidth = container.clientWidth || container.getBoundingClientRect().width || FALLBACK_WIDTH;
-    const width = Math.max(measuredWidth, MIN_BAR_WIDTH + CLEF_TIME_WIDTH);
+    const availableWidth = Math.max(measuredWidth, CLEF_TIME_WIDTH + 60);
     const totalBars = level.bars.length;
 
-    const barsPerLine = Math.max(1, Math.floor((width - CLEF_TIME_WIDTH) / MIN_BAR_WIDTH));
-    const systemsCount = Math.max(1, Math.ceil(totalBars / barsPerLine));
-    const systemBarCounts = distributeBars(totalBars, systemsCount);
-
-    const totalHeight = TOP_MARGIN + systemsCount * SYSTEM_GAP + BOTTOM_MARGIN;
+    // Content-aware widths: each bar gets exactly the room its own notes need (plus padding, and
+    // the clef/time signature for the very first bar), never an equal share of the line — so a
+    // bar of sixteenths can't crowd into overlapping noteheads while a whole-note bar starves
+    // its neighbours of the space they need.
+    const barMinWidths = level.bars.map((barEvents, i) => measureBarContentWidth(barEvents, level) + BAR_PADDING + (i === 0 ? CLEF_TIME_WIDTH : 0));
+    const systems = packSystems(barMinWidths, availableWidth);
+    const width = Math.max(availableWidth, ...systems.map((s) => s.targetWidth));
+    const totalHeight = TOP_MARGIN + systems.length * SYSTEM_GAP + BOTTOM_MARGIN;
 
     const renderer = new Renderer(container as HTMLDivElement, Renderer.Backends.SVG);
     renderer.resize(width, totalHeight);
@@ -247,21 +341,22 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     let globalBeat = 0;
     let globalBarIndex = 0;
 
-    for (let s = 0; s < systemBarCounts.length; s++) {
-      const barsInSystem = systemBarCounts[s] ?? 0;
-      const isFirstSystem = s === 0;
-      const perBarWidth = Math.max(MIN_BAR_WIDTH, Math.floor((width - (isFirstSystem ? CLEF_TIME_WIDTH : 0)) / Math.max(1, barsInSystem)));
+    for (let s = 0; s < systems.length; s++) {
+      const system = systems[s];
+      if (!system) continue;
+      const barIndices = system.barIndices;
+      const sum = barIndices.reduce((acc, i) => acc + (barMinWidths[i] ?? 0), 0);
+      const stretch = sum > 0 ? system.targetWidth / sum : 1;
       const staveY = TOP_MARGIN + s * SYSTEM_GAP;
       let xCursor = 0;
 
-      for (let b = 0; b < barsInSystem; b++) {
-        const isFirstBarOfSystem = b === 0;
-        const isLastBarOfSystem = b === barsInSystem - 1;
+      for (let bi = 0; bi < barIndices.length; bi++) {
+        const isLastBarOfSystem = bi === barIndices.length - 1;
         const isFirstBarOverall = globalBarIndex === 0;
         const isLastBarOverall = globalBarIndex === totalBars - 1;
 
-        let staveWidth = perBarWidth + (isFirstBarOfSystem && isFirstSystem ? CLEF_TIME_WIDTH : 0);
-        if (isLastBarOfSystem) staveWidth = Math.max(MIN_BAR_WIDTH, width - xCursor);
+        const rawWidth = (barMinWidths[globalBarIndex] ?? 0) * stretch;
+        const staveWidth = isLastBarOfSystem ? Math.max(1, Math.round(system.targetWidth - xCursor)) : Math.max(1, Math.round(rawWidth));
 
         // A 5-line stave with only the middle line visible: clef, time signature and "b/4" notes
         // all centre on the middle line, which is how VexFlow expects single-line percussion.
@@ -281,30 +376,10 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
 
         const barEvents = level.bars[globalBarIndex] ?? [];
         const barStartBeat = globalBeat;
-        const notes: StaveNote[] = [];
-
-        for (const ev of barEvents) {
-          const note = new StaveNote({
-            keys: [PERCUSSION_KEY],
-            duration: ev.value,
-            dots: ev.dots,
-            type: ev.rest ? "r" : undefined,
-            clef: "percussion",
-            stemDirection: Stem.UP,
-          });
-          if (ev.dots) Dot.buildAndAttach([note]);
-          notes.push(note);
-        }
-
-        const voice = new Voice({ numBeats: level.meter.beats, beatValue: level.meter.beatUnit }).setMode(Voice.Mode.STRICT);
-        voice.addTickables(notes);
+        const notes = buildBarNotes(barEvents);
+        const beams = beamNotes(notes, level);
+        const voice = voiceFor(notes, level);
         new Formatter().joinVoices([voice]).formatToStave([voice], stave);
-
-        const beams = Beam.generateBeams(notes, {
-          groups: [new Fraction(1, level.meter.beatUnit)],
-          beamRests: false,
-          stemDirection: Stem.UP,
-        });
 
         voice.draw(ctx, stave);
         beams.forEach((beam) => beam.setContext(ctx).draw());
@@ -341,15 +416,24 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     }
 
     // Ties, including across barlines: walk the flattened events again to know which pairs tie.
+    // A tie whose two notes land on different systems is drawn as two half-ties, engraved-music
+    // style — StaveTie renders a partial tie out to its own stave's edge when the other side is
+    // omitted, so passing a null firstNote/lastNote does exactly the right thing here.
     let flatIndex = 0;
     for (const bar of level.bars) {
       for (const ev of bar) {
         if (ev.tie) {
           const firstNote = noteByEvent[flatIndex];
           const lastNote = noteByEvent[flatIndex + 1];
-          if (firstNote && lastNote) {
-            const tie = new StaveTie({ firstNote, lastNote });
-            tie.setContext(ctx).draw();
+          const firstMeta = newEventMeta[flatIndex];
+          const lastMeta = newEventMeta[flatIndex + 1];
+          if (firstNote && lastNote && firstMeta && lastMeta) {
+            if (firstMeta.line === lastMeta.line) {
+              new StaveTie({ firstNote, lastNote }).setContext(ctx).draw();
+            } else {
+              new StaveTie({ firstNote, lastNote: null }).setContext(ctx).draw();
+              new StaveTie({ firstNote: null, lastNote }).setContext(ctx).draw();
+            }
           }
         }
         flatIndex++;
@@ -366,23 +450,9 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     eventMeta = newEventMeta;
     bars = newBars;
 
-    // The staff region must never overlap the tap area below it. staffArea (this container's
-    // flex parent) is shrink-eligible (min-height: 0) and reports its real, content-independent
-    // box height; when the natural layout is taller than that, scale the whole SVG down via its
-    // viewBox instead of letting it overflow into the tap zones.
-    const availableHeight = Math.max(0, (container.parentElement?.clientHeight ?? 0) - 8);
-    renderScale = availableHeight > 0 && totalHeight > availableHeight ? Math.max(0.4, availableHeight / totalHeight) : 1;
-
     const svgEl = container.querySelector("svg");
     if (svgEl) {
-      svgEl.setAttribute("viewBox", `0 0 ${width} ${totalHeight}`);
-      svgEl.setAttribute("preserveAspectRatio", "xMidYMid meet");
-      if (renderScale < 1) {
-        svgEl.setAttribute("width", `${Math.round(width * renderScale)}`);
-        svgEl.setAttribute("height", `${Math.round(totalHeight * renderScale)}`);
-        svgEl.style.display = "block";
-        svgEl.style.margin = "0 auto";
-      }
+      svgEl.style.display = "block";
     }
 
     const cursor = document.createElement("div");
@@ -423,8 +493,8 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     if (!meta) return;
     const marker = ensureNextMarker();
     const staveY = TOP_MARGIN + meta.line * SYSTEM_GAP;
-    marker.style.left = `${meta.x * renderScale}px`;
-    marker.style.top = `${(staveY + 22) * renderScale}px`;
+    marker.style.left = `${meta.x}px`;
+    marker.style.top = `${staveY + 22}px`;
     marker.style.display = "block";
     nextMarkerIndex = eventIndex;
   }
@@ -443,9 +513,13 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       return { x: meta.x, line: meta.line };
     },
     eventAt(clientX: number, clientY: number): number | null {
+      // container is itself the scrolling element (see applyScrollStyle): its bounding rect is
+      // the fixed on-screen viewport, so a screen point has to be shifted by the current scroll
+      // offset to land back in the same (unscrolled) content coordinate space that eventMeta and
+      // onsetX use.
       const rect = container.getBoundingClientRect();
-      const localX = (clientX - rect.left) / renderScale;
-      const localY = (clientY - rect.top) / renderScale;
+      const localX = clientX - rect.left + container.scrollLeft;
+      const localY = clientY - rect.top + container.scrollTop;
       let bestIndex: number | null = null;
       let bestDist = Number.POSITIVE_INFINITY;
       eventMeta.forEach((meta, i) => {
@@ -469,10 +543,10 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
         cursorEl.style.display = "none";
         return;
       }
-      const x = interpolateX(bar, beat) * renderScale;
+      const x = interpolateX(bar, beat);
       cursorEl.style.left = `${x}px`;
-      cursorEl.style.top = `${bar.top * renderScale}px`;
-      cursorEl.style.height = `${bar.height * renderScale}px`;
+      cursorEl.style.top = `${bar.top}px`;
+      cursorEl.style.height = `${bar.height}px`;
       cursorEl.style.display = "block";
     },
     mark(eventIndex: number, grade: Grade): void {
@@ -508,6 +582,24 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
           el.style.filter = "";
           break;
       }
+    },
+    revealEvent(eventIndex: number): void {
+      const meta = eventMeta[eventIndex];
+      if (!meta) return;
+      const target = Math.max(0, TOP_MARGIN + meta.line * SYSTEM_GAP - REVEAL_LEAD);
+      if (typeof container.scrollTo === "function") {
+        try {
+          container.scrollTo({ top: target, behavior: "smooth" });
+          return;
+        } catch {
+          // fall through to a plain assignment below
+        }
+      }
+      container.scrollTop = target;
+    },
+    setScrollable(value: boolean): void {
+      scrollable = value;
+      applyScrollStyle();
     },
     clearMarks(): void {
       for (const meta of eventMeta) {

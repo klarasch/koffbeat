@@ -174,7 +174,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
   let nextPointer = 0;
   if (timeline.length > 0) {
     const first = timeline[0];
-    if (first) setTimelineState(first, "next");
+    // Before the run starts, the staff is shown from its first system (revealEvent(0) is a
+    // no-op here since scrollTop already starts at 0, but this keeps the "position drives the
+    // view" invariant explicit rather than relying on the initial scroll position).
+    if (first) {
+      setTimelineState(first, "next");
+      staff.revealEvent(primaryEventIndex(first));
+    }
   }
 
   const lastOnset = onsets[onsets.length - 1];
@@ -198,10 +204,18 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
     }
   }
 
+  /** The event index that best represents a timeline item's on-screen position (a tie chain's first note). */
+  function primaryEventIndex(item: TimelineItem): number {
+    return item.kind === "note" ? (item.eventIndices[0] ?? item.onsetIndex) : item.eventIndex;
+  }
+
   function setNext(index: number): void {
     nextPointer = index;
     const item = timeline[nextPointer];
-    if (item) setTimelineState(item, "next");
+    if (item) {
+      setTimelineState(item, "next");
+      staff.revealEvent(primaryEventIndex(item));
+    }
   }
 
   /** After a note (at `timelineIndex`) gets its final release grade, advance the "next" pointer past it. */
@@ -248,7 +262,10 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
       if (timelineIndex > nextPointer) markSkippedAsMiss(nextPointer, timelineIndex);
       nextPointer = timelineIndex;
       const item = timeline[timelineIndex];
-      if (item) setTimelineState(item, "active");
+      if (item) {
+        setTimelineState(item, "active");
+        staff.revealEvent(primaryEventIndex(item));
+      }
     }
     showGradeFlash(judged.grade);
   }
@@ -347,6 +364,9 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
     logDebugTable(result);
 
     staff.clearMarks();
+    // The player reviews the whole staff after a run — let them scroll it freely, rather than
+    // only the current line as during play.
+    staff.setScrollable(true);
     for (const judgement of result.judgements) {
       const combined = combineGrades(judgement.grade, judgement.releaseGrade);
       for (const eventIndex of tieChainIndices(tieFlags, judgement.onset.eventIndex)) staff.setState(eventIndex, combined);
