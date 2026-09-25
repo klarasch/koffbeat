@@ -47,16 +47,38 @@ export function attachInput(target: HTMLElement, engine: AudioEngine, onHit: (hi
     return clientX < midpoint ? 0 : 1;
   }
 
-  function registerHit(zone: 0 | 1, eventTimeStamp: number): void {
+  // Tap feedback is visual, not a sound: phone audio output lags 100–250 ms, so a tap sound
+  // arrives late and players learn to line it up with the (also late) click instead of the pulse.
+  if (getComputedStyle(target).position === "static") target.style.position = "relative";
+  target.style.overflow = "hidden";
+
+  function ripple(clientX: number | null, zone: 0 | 1): void {
+    const rect = target.getBoundingClientRect();
+    const x = clientX === null ? rect.width * (zone === 0 ? 0.25 : 0.75) : clientX - rect.left;
+    const size = Math.min(rect.width, rect.height) * 0.6;
+    const el = document.createElement("span");
+    el.style.cssText = `position:absolute;left:${x - size / 2}px;top:${rect.height / 2 - size / 2}px;width:${size}px;height:${size}px;border-radius:50%;pointer-events:none;background:radial-gradient(circle, rgba(127,224,196,0.55) 0%, rgba(127,224,196,0) 70%);`;
+    target.appendChild(el);
+    const animation = el.animate(
+      [
+        { transform: "scale(0.35)", opacity: 1 },
+        { transform: "scale(1.2)", opacity: 0 },
+      ],
+      { duration: 380, easing: "cubic-bezier(0.2, 0.7, 0.3, 1)" },
+    );
+    animation.onfinish = () => el.remove();
+  }
+
+  function registerHit(zone: 0 | 1, eventTimeStamp: number, clientX: number | null): void {
     const time = eventTimeToAudioTime(eventTimeStamp);
-    engine.playHit(zone);
+    ripple(clientX, zone);
     onHit({ time, zone });
   }
 
   function handlePointerDown(event: PointerEvent): void {
     event.preventDefault();
     const zone = zoneForClientX(event.clientX);
-    registerHit(zone, event.timeStamp);
+    registerHit(zone, event.timeStamp, event.clientX);
   }
 
   function handleKeyDown(event: KeyboardEvent): void {
@@ -80,7 +102,7 @@ export function attachInput(target: HTMLElement, engine: AudioEngine, onHit: (hi
     if (key === " " || key === "arrowleft" || key === "arrowright") {
       event.preventDefault();
     }
-    registerHit(zone, event.timeStamp);
+    registerHit(zone, event.timeStamp, null);
   }
 
   function handleKeyUp(event: KeyboardEvent): void {
