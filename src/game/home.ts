@@ -2,12 +2,14 @@
 
 import type { AudioEngine } from "../audio/engine";
 import { runCalibration } from "../input/calibration";
+import { TIER_NAMES } from "../rhythm/generate";
 import type { Level, Mode } from "../types";
 
 export interface HomeOptions {
   levels: Level[];
   engine: AudioEngine;
   onPlay: (levelIndex: number, mode: Mode) => void;
+  onRandom: (tier: number, bars: 4 | 8 | 16, mode: Mode) => void;
 }
 
 const HINT_SEEN_KEY = "resonance.seenSilentModeHint";
@@ -112,6 +114,8 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   });
   root.appendChild(list);
 
+  root.appendChild(buildRandomSection(() => mode, opts));
+
   const footer = document.createElement("div");
   footer.className = "home-footer";
   const calibrateLink = document.createElement("button");
@@ -141,4 +145,79 @@ function createModeOption(label: string, active: boolean): HTMLButtonElement {
   button.className = active ? "mode-option active" : "mode-option";
   button.textContent = label;
   return button;
+}
+
+const RANDOM_PREFS_KEY = "resonance.randomPrefs";
+const BAR_OPTIONS = [4, 8, 16] as const;
+
+function loadRandomPrefs(): { tier: number; bars: 4 | 8 | 16 } {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(RANDOM_PREFS_KEY) ?? "null");
+    if (parsed && typeof parsed === "object" && "tier" in parsed && "bars" in parsed) {
+      const tier = Number(parsed.tier);
+      const bars = BAR_OPTIONS.find((b) => b === Number(parsed.bars));
+      if (tier >= 1 && tier <= TIER_NAMES.length && bars) return { tier, bars };
+    }
+  } catch {
+    // Storage unavailable or corrupt — fall back to defaults.
+  }
+  return { tier: 1, bars: 4 };
+}
+
+function saveRandomPrefs(prefs: { tier: number; bars: 4 | 8 | 16 }): void {
+  try {
+    localStorage.setItem(RANDOM_PREFS_KEY, JSON.stringify(prefs));
+  } catch {
+    // Not persisted; harmless.
+  }
+}
+
+/** "Random exercise": pick a tier (what's being practised) and a length, get a fresh sight-reading exercise. */
+function buildRandomSection(getMode: () => Mode, opts: HomeOptions): HTMLElement {
+  const prefs = loadRandomPrefs();
+  const section = document.createElement("div");
+  section.className = "random-section";
+
+  const label = document.createElement("p");
+  label.className = "section-label";
+  label.textContent = "Random exercise";
+  section.appendChild(label);
+
+  const tierSelect = document.createElement("select");
+  tierSelect.className = "tier-select";
+  TIER_NAMES.forEach((name, i) => {
+    const option = document.createElement("option");
+    option.value = String(i + 1);
+    option.textContent = `${i + 1} · ${name}`;
+    tierSelect.appendChild(option);
+  });
+  tierSelect.value = String(prefs.tier);
+  section.appendChild(tierSelect);
+
+  const barsSwitch = document.createElement("div");
+  barsSwitch.className = "mode-switch";
+  let bars = prefs.bars;
+  const barButtons = BAR_OPTIONS.map((b) => {
+    const button = createModeOption(`${b} bars`, b === bars);
+    button.addEventListener("click", () => {
+      bars = b;
+      barButtons.forEach((other, i) => other.classList.toggle("active", BAR_OPTIONS[i] === b));
+    });
+    return button;
+  });
+  barsSwitch.append(...barButtons);
+  section.appendChild(barsSwitch);
+
+  const start = document.createElement("button");
+  start.type = "button";
+  start.className = "primary-button";
+  start.textContent = "New exercise";
+  start.addEventListener("click", () => {
+    const tier = Number(tierSelect.value);
+    saveRandomPrefs({ tier, bars });
+    opts.onRandom(tier, bars, getMode());
+  });
+  section.appendChild(start);
+
+  return section;
 }

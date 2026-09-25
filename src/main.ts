@@ -6,8 +6,9 @@ import { createAudioEngine } from "./audio/engine";
 import { runCalibration } from "./input/calibration";
 import { renderHome } from "./game/home";
 import { startPlay } from "./game/play";
+import { generateLevel } from "./rhythm/generate";
 import { LEVELS } from "./rhythm/levels";
-import type { Mode } from "./types";
+import type { Level, Mode } from "./types";
 
 const app = document.getElementById("app");
 if (!app) throw new Error("missing #app root");
@@ -41,16 +42,36 @@ function hasSavedOffset(): boolean {
   }
 }
 
+/** A level to play plus how to get the one after it ("Next level"). */
+interface LevelPick {
+  level: Level;
+  next: () => LevelPick | null;
+}
+
+function fixedPick(index: number): LevelPick | null {
+  const level = LEVELS[index];
+  return level ? { level, next: () => fixedPick((index + 1) % LEVELS.length) } : null;
+}
+
+function randomPick(tier: number, bars: 4 | 8 | 16): LevelPick {
+  return { level: generateLevel({ tier, bars }), next: () => randomPick(tier, bars) };
+}
+
 function showHome(): void {
-  renderHome(app as HTMLElement, { levels: LEVELS, engine, onPlay: beginLevel });
+  renderHome(app as HTMLElement, {
+    levels: LEVELS,
+    engine,
+    onPlay: (index, mode) => beginLevel(fixedPick(index), mode),
+    onRandom: (tier, bars, mode) => beginLevel(randomPick(tier, bars), mode),
+  });
 }
 
-function beginLevel(levelIndex: number, mode: Mode): void {
+function beginLevel(pick: LevelPick | null, mode: Mode): void {
   // engine.unlock() must run synchronously inside the click gesture that reaches this function.
-  void doBeginLevel(levelIndex, mode);
+  if (pick) void doBeginLevel(pick, mode);
 }
 
-async function doBeginLevel(levelIndex: number, mode: Mode): Promise<void> {
+async function doBeginLevel(pick: LevelPick, mode: Mode): Promise<void> {
   await engine.unlock();
 
   if (!hasSavedOffset()) {
@@ -62,13 +83,10 @@ async function doBeginLevel(levelIndex: number, mode: Mode): Promise<void> {
     await runCalibration(engine, calContainer);
   }
 
-  const level = LEVELS[levelIndex];
-  if (!level) return;
-
-  startPlay(app as HTMLElement, engine, level, mode, {
+  startPlay(app as HTMLElement, engine, pick.level, mode, {
     onHome: showHome,
-    onRetry: () => beginLevel(levelIndex, mode),
-    onNext: () => beginLevel((levelIndex + 1) % LEVELS.length, mode),
+    onRetry: () => beginLevel(pick, mode),
+    onNext: () => beginLevel(pick.next(), mode),
   });
 }
 
