@@ -153,7 +153,7 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
     heading.style.margin = "0 0 8px";
 
     const explanation = document.createElement("p");
-    explanation.textContent = "Tap along with the clicks, in time, using the button below (or F / J on a keyboard).";
+    explanation.textContent = "Tap along with the clicks on the pad (or F / J on a keyboard). This measures your device’s audio delay so your taps are judged fairly.";
     explanation.style.margin = "0 0 20px";
     explanation.style.opacity = "0.85";
 
@@ -162,6 +162,25 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
     statusLine.style.margin = "0 0 20px";
 
     const startButton = createButton("Start");
+    const skipButton = createButton("Skip for now");
+    skipButton.style.marginLeft = "12px";
+    skipButton.style.opacity = "0.7";
+
+    // Taps go to their own pad. Reusing the Start button as the tap target meant every tap also
+    // "clicked" Start, restarting the round on top of the one still playing.
+    const tapPad = document.createElement("div");
+    tapPad.textContent = "Tap here";
+    tapPad.style.display = "none";
+    tapPad.style.alignItems = "center";
+    tapPad.style.justifyContent = "center";
+    tapPad.style.height = "40vh";
+    tapPad.style.margin = "0 0 20px";
+    tapPad.style.borderRadius = "16px";
+    tapPad.style.background = "#161a22";
+    tapPad.style.border = "1px solid #2a303c";
+    tapPad.style.fontSize = "18px";
+    tapPad.style.letterSpacing = "0.08em";
+
     const resultBox = document.createElement("div");
     resultBox.style.display = "none";
 
@@ -169,41 +188,59 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
     const retryButton = createButton("Retry");
     const saveButton = createButton("Save");
     saveButton.style.marginLeft = "12px";
+    const skipAfterButton = createButton("Skip");
+    skipAfterButton.style.marginLeft = "12px";
+    skipAfterButton.style.opacity = "0.7";
 
     resultBox.appendChild(resultText);
     resultBox.appendChild(retryButton);
     resultBox.appendChild(saveButton);
+    resultBox.appendChild(skipAfterButton);
+
+    const startRow = document.createElement("div");
+    startRow.appendChild(startButton);
+    startRow.appendChild(skipButton);
 
     container.appendChild(heading);
     container.appendChild(explanation);
     container.appendChild(statusLine);
-    container.appendChild(startButton);
+    container.appendChild(tapPad);
+    container.appendChild(startRow);
     container.appendChild(resultBox);
 
     let lastOffsetSec = 0;
     let detach: (() => void) | null = null;
+    let running = false;
 
     startButton.addEventListener("click", () => {
+      if (running) return;
       void startRound();
     });
 
+    const skip = (): void => {
+      if (running) return;
+      // Saving marks calibration as done, so it isn't forced again; the home screen link reruns it.
+      const offset = loadOffset();
+      saveOffset(offset);
+      resolve(offset);
+    };
+    skipButton.addEventListener("click", skip);
+    skipAfterButton.addEventListener("click", skip);
+
     retryButton.addEventListener("click", () => {
       resultBox.style.display = "none";
-      startButton.style.display = "inline-block";
+      startRow.style.display = "block";
       statusLine.textContent = "";
     });
 
     saveButton.addEventListener("click", () => {
       saveOffset(lastOffsetSec);
-      if (detach) {
-        detach();
-        detach = null;
-      }
       resolve(lastOffsetSec);
     });
 
     async function startRound(): Promise<void> {
-      startButton.style.display = "none";
+      running = true;
+      startRow.style.display = "none";
       resultBox.style.display = "none";
       statusLine.textContent = "Get ready...";
 
@@ -212,39 +249,25 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
       const clickTimes: number[] = [];
       const tapTimes: number[] = [];
 
-      if (detach) {
-        detach();
-        detach = null;
-      }
-      detach = attachInput(
-        startButton,
-        engine,
-        (hit) => {
-          tapTimes.push(hit.time);
-        },
-        () => 0,
-      );
+      tapPad.style.display = "flex";
+      detach = attachInput(tapPad, engine, (hit) => tapTimes.push(hit.time), () => 0);
 
-      const startTime = engine.now() + 0.5;
+      const startTime = engine.now() + 0.8;
       for (let i = 0; i < CALIBRATION_CLICK_COUNT; i++) {
         const clickTime = startTime + i * SECONDS_PER_BEAT;
         clickTimes.push(clickTime);
         engine.scheduleClick(clickTime, i % 4 === 0);
       }
 
-      statusLine.textContent = "Tap along...";
-      startButton.style.display = "inline-block";
-      startButton.textContent = "Tap here";
+      statusLine.textContent = "Tap along with the clicks...";
 
       const totalDurationSec = startTime - engine.now() + CALIBRATION_CLICK_COUNT * SECONDS_PER_BEAT + 0.3;
       await wait(totalDurationSec);
 
-      if (detach) {
-        detach();
-        detach = null;
-      }
-      startButton.style.display = "none";
-      startButton.textContent = "Start";
+      detach();
+      detach = null;
+      tapPad.style.display = "none";
+      running = false;
 
       const result = computeOffset(tapTimes, clickTimes);
       lastOffsetSec = result.ok ? result.offsetSec : loadOffset();
@@ -253,9 +276,9 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
       statusLine.textContent = "";
       resultText.textContent = result.ok
         ? `Your device latency: ${Math.abs(offsetMs)} ms ${offsetMs >= 0 ? "(taps landed late)" : "(taps landed early)"}`
-        : `Not enough consistent taps (spread ${Math.round(result.spreadMs)} ms). Try tapping steadily on the beat.`;
+        : `Not enough consistent taps (${tapTimes.length} taps, spread ${Math.round(result.spreadMs)} ms). Try again, or skip for now.`;
       resultBox.style.display = "block";
-      saveButton.disabled = !result.ok;
+      saveButton.style.display = result.ok ? "inline-block" : "none";
     }
   });
 }
