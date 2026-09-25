@@ -14,6 +14,21 @@ if (!app) throw new Error("missing #app root");
 
 const engine = createAudioEngine();
 
+// iOS Safari ignores user-scalable=no and doesn't always honour touch-action, so block its
+// pinch gestures and treat a second touch within 300 ms as a tap, not a zoom. Tap targets
+// still get their pointerdown; only the browser's default zoom is cancelled.
+document.addEventListener("gesturestart", (e) => e.preventDefault());
+let lastTouchEnd = 0;
+document.addEventListener(
+  "touchend",
+  (e) => {
+    const now = e.timeStamp;
+    if (now - lastTouchEnd < 300) e.preventDefault();
+    lastTouchEnd = now;
+  },
+  { passive: false },
+);
+
 // Mirrors input/calibration.ts's own storage key: used only to detect "no saved offset yet",
 // not to read/write the value itself (that stays calibration.ts's job via loadOffset/saveOffset).
 const OFFSET_STORAGE_KEY = "resonance.latencyOffset";

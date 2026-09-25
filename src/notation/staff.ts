@@ -334,6 +334,13 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       }
     }
 
+    // VexFlow hard-codes stroke/fill="black" on some groups (stems, flags), overriding the
+    // context's ink colour — invisible on the dark background.
+    for (const el of container.querySelectorAll("svg [stroke='black'], svg [fill='black']")) {
+      if (el.getAttribute("stroke") === "black") el.setAttribute("stroke", ink);
+      if (el.getAttribute("fill") === "black") el.setAttribute("fill", ink);
+    }
+
     eventMeta = newEventMeta;
     bars = newBars;
 

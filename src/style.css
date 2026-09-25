@@ -50,6 +50,8 @@ button {
 }
 
 /* No text selection / double-tap zoom anywhere in the app — this is a game, not a document. */
+html,
+body,
 #app {
   -webkit-user-select: none;
   user-select: none;
