@@ -24,7 +24,7 @@ export function leaveHome(): void {
   homeCleanup = null;
 }
 
-const FIGURE_CYCLE_MS = 9000;
+const FIGURE_CYCLE_MS = 15000;
 
 /** The plate floats behind the hero, gently ringing and drifting through figures. */
 function startHomeScene(scene: Scene, slot: HTMLElement): void {

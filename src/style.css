@@ -8,6 +8,8 @@
   --ink-faint: #a49dab;
   --line: #2a1e34;
   --hairline: #e4dfd6;
+  /* Controls sit on the desert: a flat, light, slightly see-through fill. */
+  --control: rgba(250, 245, 236, 0.62);
   --accent: #6b3fa0;
   --grade-perfect: #6b3fa0;
   --grade-good: #a466c8;
@@ -83,7 +85,7 @@ body,
 .calibration-screen button {
   border-radius: 0;
   border: 1px solid var(--line);
-  background: var(--bg);
+  background: var(--control);
   color: var(--ink);
   font-size: 14px;
   cursor: pointer;
