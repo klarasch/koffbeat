@@ -42,6 +42,10 @@ export interface StaffView {
    * length of the whole tied chain starting at `eventIndex`.
    */
   setHold(eventIndex: number, quarters: number, progress: number | null, state?: "filling" | "ready" | "over"): void;
+  /** Softly highlights one bar (0-based), or none with null: where the music is right now. */
+  setBarHighlight(barIndex: number | null): void;
+  /** The index of the first event in a bar (0-based), for scrolling it into view. */
+  firstEventOfBar(barIndex: number): number;
   /** Remove all grading colours, restoring the default ink. */
   clearMarks(): void;
   destroy(): void;
@@ -69,6 +73,8 @@ const UPCOMING_ALPHA = 0.5;
 /** "active" (finger down) uses the same accent colour as a "perfect" grade, with a stronger glow. */
 /** Shadow each floating note casts on the floor below it, by state (opacity). */
 const SHADOW_OPACITY: Record<NoteState, number> = { upcoming: 0.35, next: 0.9, active: 1, done: 0.55, perfect: 0.55, good: 0.55, ok: 0.55, miss: 0.55 };
+/** Notes can cast a soft shadow below them; off while the scene is a groundless void. */
+const NOTE_SHADOWS = false;
 /** How far below the staff line the note shadows fall, in px. */
 const SHADOW_DROP = 30;
 /** Radius, in container px, within which a tap counts as hitting a given event (see eventAt). */
@@ -277,6 +283,8 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   let nextMarkerEl: HTMLDivElement | null = null;
   let nextMarkerIndex: number | null = null;
   let holdEl: HTMLDivElement | null = null;
+  let barBandEl: HTMLDivElement | null = null;
+  let highlightedBar: number | null = null;
   /** Floor shadow ellipse per note event (rests cast none). */
   let shadows: (SVGEllipseElement | undefined)[] = [];
   /** Every non-default note state, re-applied after a rebuild (resize) so marks survive it. */
@@ -332,6 +340,7 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     nextMarkerIndex = null;
     holdEl = null;
     holdFillEl = null;
+    barBandEl = null;
     if (getComputedStyle(container).position === "static") {
       container.style.position = "relative";
     }
@@ -489,7 +498,7 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       for (const bar of level.bars) {
         for (const ev of bar) {
           const meta = eventMeta[flat];
-          if (meta && !ev.rest) {
+          if (meta && !ev.rest && NOTE_SHADOWS) {
             const e = document.createElementNS(ns, "ellipse");
             e.setAttribute("cx", String(meta.x));
             e.setAttribute("cy", String(TOP_MARGIN + meta.line * SYSTEM_GAP + 40 + SHADOW_DROP));
@@ -534,6 +543,7 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     const scrollTop = container.scrollTop;
     build();
     for (const [eventIndex, state] of states) view.setState(eventIndex, state);
+    view.setBarHighlight(highlightedBar);
     container.scrollTop = scrollTop;
   });
   resizeObserver.observe(container);
@@ -598,7 +608,40 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     return interpolateX(bar, endBeat) - 8;
   }
 
+  // First event index of each bar, from the level itself (stable across rebuilds).
+  const barFirstEvent: number[] = [];
+  {
+    let flat = 0;
+    for (const bar of level.bars) {
+      barFirstEvent.push(flat);
+      flat += bar.length;
+    }
+  }
+
   const view: StaffView = {
+    setBarHighlight(barIndex: number | null): void {
+      highlightedBar = barIndex;
+      const bar = barIndex === null ? undefined : bars[barIndex];
+      if (!bar) {
+        if (barBandEl) barBandEl.style.display = "none";
+        return;
+      }
+      if (!barBandEl) {
+        barBandEl = document.createElement("div");
+        barBandEl.className = "staff-bar-band";
+        container.insertBefore(barBandEl, container.firstChild);
+      }
+      const first = bar.anchors[0]?.x ?? 0;
+      const last = bar.anchors[bar.anchors.length - 1]?.x ?? first;
+      barBandEl.style.display = "block";
+      barBandEl.style.left = `${first - 10}px`;
+      barBandEl.style.width = `${Math.max(20, last - first + 16)}px`;
+      barBandEl.style.top = `${TOP_MARGIN + bar.line * SYSTEM_GAP + 2}px`;
+      barBandEl.style.height = "58px";
+    },
+    firstEventOfBar(barIndex: number): number {
+      return barFirstEvent[Math.max(0, Math.min(barFirstEvent.length - 1, barIndex))] ?? 0;
+    },
     setHold(eventIndex: number, quarters: number, progress: number | null, state: "filling" | "ready" | "over" = "filling"): void {
       if (progress === null) {
         if (holdEl) holdEl.style.display = "none";

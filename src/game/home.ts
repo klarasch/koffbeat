@@ -13,6 +13,8 @@ export interface HomeOptions {
   onRandom: (tier: number, bars: 4 | 8 | 16, mode: Mode) => void;
   scene: Scene;
   sounds: { label: string; isOn: () => boolean; set: (on: boolean) => void }[];
+  /** Practice tempo override (null = each level's own tempo). */
+  tempo: { get: () => number | null; set: (bpm: number | null) => void };
 }
 
 /** Cleanup for the home screen's scene choreography (figure cycling, plate tracking). */
@@ -103,11 +105,13 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   for (const sound of opts.sounds) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "sound-toggle";
+    button.className = "text-toggle";
     const paint = () => {
       const on = sound.isOn();
-      button.textContent = `${sound.label} ${on ? "on" : "off"}`;
-      button.classList.toggle("off", !on);
+      button.innerHTML = `<span class="text-toggle-label"></span><span class="text-toggle-state"></span>`;
+      (button.firstChild as HTMLElement).textContent = sound.label;
+      (button.lastChild as HTMLElement).textContent = on ? "on" : "off";
+      button.classList.toggle("on", on);
       button.setAttribute("aria-pressed", String(on));
     };
     paint();
@@ -120,7 +124,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   top.append(titleBlock, toggles);
   root.appendChild(top);
 
-  // ---- Middle: the sand bed ----
+  // ---- Middle: the sand ----
   const plateSlot = document.createElement("div");
   plateSlot.className = "home-plate-slot";
   root.appendChild(plateSlot);
@@ -137,61 +141,69 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     markHintSeen();
   }
 
+  // Settings line: mode and tempo, as words.
   let mode: Mode = "practice";
-  const modeSwitch = document.createElement("div");
-  modeSwitch.className = "mode-switch";
-  const practiceButton = createModeOption("Practice", true);
-  const countInButton = createModeOption("Count-in", false);
-  modeSwitch.append(practiceButton, countInButton);
-  const modeHint = document.createElement("p");
-  modeHint.className = "mode-hint";
-  modeHint.textContent = "Clicks continue throughout.";
-  practiceButton.addEventListener("click", () => {
-    mode = "practice";
-    practiceButton.classList.add("active");
-    countInButton.classList.remove("active");
-    modeHint.textContent = "Clicks continue throughout.";
-  });
-  countInButton.addEventListener("click", () => {
-    mode = "countIn";
-    countInButton.classList.add("active");
-    practiceButton.classList.remove("active");
-    modeHint.textContent = "One bar of clicks, then keep the pulse yourself.";
+  const settings = document.createElement("div");
+  settings.className = "settings-line";
+
+  const modeGroup = optionGroup("Mode", [
+    { key: "practice", label: "Practice", title: "Clicks continue throughout" },
+    { key: "countIn", label: "Count-in", title: "One bar of clicks, then keep the pulse yourself" },
+  ], "practice", (key) => {
+    mode = key as Mode;
   });
 
-  // Level picker: the fixed levels plus "Random", as one row of plain tiles.
+  const tempoGroup = document.createElement("div");
+  tempoGroup.className = "option-group tempo-group";
+  const tempoLabel = document.createElement("span");
+  tempoLabel.className = "option-label";
+  tempoLabel.textContent = "Tempo";
+  const slower = textButton("−", "Slower");
+  const tempoValue = document.createElement("button");
+  tempoValue.type = "button";
+  tempoValue.className = "tempo-value";
+  const faster = textButton("+", "Faster");
+  tempoGroup.append(tempoLabel, slower, tempoValue, faster);
+  settings.append(modeGroup, tempoGroup);
+
+  // Level picker: the fixed levels plus "Random", as a line of words.
   const prefs = loadRandomPrefs();
   let picked: number | "random" = loadPicked(opts.levels.length);
   const picker = document.createElement("div");
   picker.className = "level-picker";
   picker.setAttribute("role", "listbox");
-  const tiles: HTMLButtonElement[] = [];
-  const addTile = (key: number | "random", num: string, name: string, meta: string) => {
-    const tile = document.createElement("button");
-    tile.type = "button";
-    tile.className = "level-tile";
-    tile.setAttribute("role", "option");
-    tile.innerHTML = `<span class="level-tile-num"></span><span class="level-tile-name"></span><span class="level-tile-meta"></span>`;
-    (tile.children[0] as HTMLElement).textContent = num;
-    (tile.children[1] as HTMLElement).textContent = name;
-    (tile.children[2] as HTMLElement).textContent = meta;
-    tile.addEventListener("click", () => {
+  picker.setAttribute("aria-label", "Level");
+  const items: HTMLButtonElement[] = [];
+  const addItem = (key: number | "random", num: string, name: string) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "picker-item";
+    item.setAttribute("role", "option");
+    item.innerHTML = `<span class="picker-num"></span><span class="picker-name"></span>`;
+    (item.children[0] as HTMLElement).textContent = num;
+    (item.children[1] as HTMLElement).textContent = name;
+    item.dataset.key = String(key);
+    item.addEventListener("click", () => {
       picked = key;
       savePicked(key);
-      paintPicker();
+      paint();
     });
-    tile.dataset.key = String(key);
-    tiles.push(tile);
-    picker.appendChild(tile);
+    items.push(item);
+    picker.appendChild(item);
   };
-  opts.levels.forEach((level, i) => addTile(i, String(i + 1).padStart(2, "0"), level.title, `${level.bpm} bpm`));
-  addTile("random", "··", "Random exercise", "new each time");
+  opts.levels.forEach((level, i) => addItem(i, String(i + 1).padStart(2, "0"), level.title));
+  addItem("random", "∞", "Random");
 
-  const randomRow = document.createElement("div");
-  randomRow.className = "random-row";
+  // Random exercise options, shown only when Random is picked.
+  const randomLine = document.createElement("div");
+  randomLine.className = "settings-line random-line";
+  const tierGroup = document.createElement("label");
+  tierGroup.className = "option-group";
+  const tierLabel = document.createElement("span");
+  tierLabel.className = "option-label";
+  tierLabel.textContent = "Difficulty";
   const tierSelect = document.createElement("select");
-  tierSelect.className = "tier-select";
-  tierSelect.setAttribute("aria-label", "Difficulty");
+  tierSelect.className = "text-select";
   TIER_NAMES.forEach((name, i) => {
     const option = document.createElement("option");
     option.value = String(i + 1);
@@ -199,39 +211,57 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     tierSelect.appendChild(option);
   });
   tierSelect.value = String(prefs.tier);
-  const barsSwitch = document.createElement("div");
-  barsSwitch.className = "mode-switch bars-switch";
+  tierGroup.append(tierLabel, tierSelect);
   let bars = prefs.bars;
-  const barButtons = BAR_OPTIONS.map((b) => {
-    const button = createModeOption(`${b}`, b === bars);
-    button.setAttribute("aria-label", `${b} bars`);
-    button.addEventListener("click", () => {
-      bars = b;
-      barButtons.forEach((other, i) => other.classList.toggle("active", BAR_OPTIONS[i] === b));
-    });
-    return button;
-  });
-  barsSwitch.append(...barButtons);
-  randomRow.append(tierSelect, barsSwitch);
+  const barsGroup = optionGroup(
+    "Length",
+    BAR_OPTIONS.map((b) => ({ key: String(b), label: `${b} bars`, title: `${b} bars` })),
+    String(bars),
+    (key) => {
+      bars = Number(key) as 4 | 8 | 16;
+    },
+  );
+  randomLine.append(tierGroup, barsGroup);
 
   const play = document.createElement("button");
   play.type = "button";
-  play.className = "play-button";
-  play.innerHTML = `<span class="play-button-label">Play</span><span class="play-button-what"></span>`;
+  play.className = "play-cta";
+  play.innerHTML = `<span class="play-cta-word">Play</span><span class="play-cta-arrow" aria-hidden="true">→</span><span class="play-cta-what"></span>`;
   const playWhat = play.lastChild as HTMLElement;
 
-  function paintPicker(): void {
-    for (const tile of tiles) tile.classList.toggle("active", tile.dataset.key === String(picked));
-    tile0Scroll();
-    randomRow.hidden = picked !== "random";
-    playWhat.textContent = picked === "random" ? "Random exercise" : (opts.levels[picked]?.title ?? "");
-  }
-  function tile0Scroll(): void {
-    const active = tiles.find((t) => t.classList.contains("active"));
-    active?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  function levelBpm(): number {
+    return picked === "random" ? 80 : (opts.levels[picked]?.bpm ?? 80);
   }
 
-  play.addEventListener("click", () => {
+  function paint(): void {
+    for (const item of items) {
+      const active = item.dataset.key === String(picked);
+      item.classList.toggle("active", active);
+      item.setAttribute("aria-selected", String(active));
+    }
+    randomLine.hidden = picked !== "random";
+    playWhat.textContent = picked === "random" ? "Random exercise" : (opts.levels[picked]?.title ?? "");
+    const override = opts.tempo.get();
+    tempoValue.textContent = `${override ?? levelBpm()} bpm`;
+    tempoValue.classList.toggle("custom", override !== null);
+    tempoValue.title = override === null ? "The level's own tempo" : "Custom tempo, click to reset";
+    items.find((i) => i.classList.contains("active"))?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  const stepTempo = (delta: number) => {
+    const current = opts.tempo.get() ?? levelBpm();
+    const next = Math.max(40, Math.min(160, Math.round((current + delta) / 5) * 5));
+    opts.tempo.set(next === levelBpm() ? null : next);
+    paint();
+  };
+  slower.addEventListener("click", () => stepTempo(-5));
+  faster.addEventListener("click", () => stepTempo(5));
+  tempoValue.addEventListener("click", () => {
+    opts.tempo.set(null);
+    paint();
+  });
+
+  const start = () => {
     if (picked === "random") {
       const tier = Number(tierSelect.value);
       saveRandomPrefs({ tier, bars });
@@ -239,7 +269,15 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     } else {
       opts.onPlay(picked, mode);
     }
-  });
+  };
+  play.addEventListener("click", start);
+  const onKey = (event: KeyboardEvent) => {
+    if (event.key === "Enter" && !(event.target instanceof HTMLSelectElement)) {
+      event.preventDefault();
+      start();
+    }
+  };
+  window.addEventListener("keydown", onKey);
 
   const calibrateLink = document.createElement("button");
   calibrateLink.type = "button";
@@ -259,23 +297,64 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     })();
   });
 
-  const modeRow = document.createElement("div");
-  modeRow.className = "mode-row";
-  modeRow.append(modeSwitch, modeHint);
-  dock.append(modeRow, picker, randomRow, play, calibrateLink);
+  const footer = document.createElement("div");
+  footer.className = "home-footer";
+  // Play sits at the end of the reading path, bottom right; the quiet link takes the left.
+  footer.append(calibrateLink, play);
+  dock.append(settings, picker, randomLine, footer);
   root.appendChild(dock);
 
   container.appendChild(root);
-  paintPicker();
+  paint();
   startHomeScene(opts.scene, plateSlot);
+  const sceneCleanup = homeCleanup;
+  homeCleanup = () => {
+    sceneCleanup?.();
+    window.removeEventListener("keydown", onKey);
+  };
   opts.engine.setAmbience(0.6, 2);
 }
 
-function createModeOption(label: string, active: boolean): HTMLButtonElement {
+/** A labelled group of words where exactly one is selected. */
+function optionGroup(label: string, options: { key: string; label: string; title: string }[], initial: string, onPick: (key: string) => void): HTMLElement {
+  const group = document.createElement("div");
+  group.className = "option-group";
+  group.setAttribute("role", "radiogroup");
+  group.setAttribute("aria-label", label);
+  const labelEl = document.createElement("span");
+  labelEl.className = "option-label";
+  labelEl.textContent = label;
+  group.appendChild(labelEl);
+  const buttons = options.map((option) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "opt";
+    button.textContent = option.label;
+    button.title = option.title;
+    button.setAttribute("role", "radio");
+    button.addEventListener("click", () => {
+      for (const b of buttons) {
+        const on = b === button;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-checked", String(on));
+      }
+      onPick(option.key);
+    });
+    const on = option.key === initial;
+    button.classList.toggle("active", on);
+    button.setAttribute("aria-checked", String(on));
+    group.appendChild(button);
+    return button;
+  });
+  return group;
+}
+
+function textButton(text: string, label: string): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = active ? "mode-option active" : "mode-option";
-  button.textContent = label;
+  button.className = "opt tempo-step";
+  button.textContent = text;
+  button.setAttribute("aria-label", label);
   return button;
 }
 

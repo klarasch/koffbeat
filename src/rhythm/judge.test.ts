@@ -98,6 +98,34 @@ describe("judgeRun", () => {
     expect(result.judgements.filter((j) => j.grade === "miss")).toHaveLength(0);
   });
 
+  describe("grid mode (practice, metronome running)", () => {
+    it("does not forgive drifting: a player 6% slow ends up missing the later notes", () => {
+      const pulse = judgeRun(onsets, rests, startTime, bpm, hitsAtTempo(onsets, 1.06), [], {});
+      const grid = judgeRun(onsets, rests, startTime, bpm, hitsAtTempo(onsets, 1.06), [], { grid: true });
+      expect(pulse.judgements.every((j) => j.grade !== "miss")).toBe(true);
+      const last = grid.judgements[grid.judgements.length - 1];
+      expect(last?.grade).toBe("miss");
+      expect(grid.accuracy).toBeLessThan(pulse.accuracy);
+    });
+
+    it("tolerates a small constant offset (leftover calibration error)", () => {
+      const hits = onsets.map((o) => ({ time: startTime + o.beat * secPerQuarter + 0.035, zone: 0 as const }));
+      const result = judgeRun(onsets, rests, startTime, bpm, hits, [], { grid: true });
+      expect(result.judgements.every((j) => j.grade === "perfect")).toBe(true);
+    });
+
+    it("lets a player who drifted jump back on: notes back on the click grade clean again", () => {
+      const judge = createLiveJudge(onsets, startTime, bpm, { grid: true });
+      const grades = onsets.map((o, i) => {
+        // Notes 4-7 drift late by 40 ms per note; from note 8 on the player is back on the click.
+        const drift = i >= 4 && i < 8 ? (i - 3) * 0.04 : 0;
+        return judge.judgeHit({ time: startTime + o.beat * secPerQuarter + drift, zone: 0 }).grade;
+      });
+      expect(grades[7] === "miss" || grades[7] === "ok").toBe(true);
+      expect(grades.slice(9).every((g) => g === "perfect")).toBe(true);
+    });
+  });
+
   it("validates every shipped level", () => {
     for (const lvl of LEVELS) {
       const lvlOnsets = levelOnsets(lvl);

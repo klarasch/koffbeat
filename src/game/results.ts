@@ -131,6 +131,20 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
   return panel;
 }
 
+/** Shown instead of scores when a run ended early: lost the beat, or stopped with Esc. */
+export function buildEndedEarlyPanel(title: string, detail: string, callbacks: ResultsCallbacks): HTMLElement {
+  const panel = document.createElement("div");
+  panel.className = "results-panel ended-early";
+  const heading = document.createElement("p");
+  heading.className = "ended-title";
+  heading.textContent = title;
+  const text = document.createElement("p");
+  text.className = "results-detail";
+  text.textContent = detail ? `${detail} Try it again, or slow the tempo down on the home screen.` : "";
+  panel.append(heading, text, buildButtons(callbacks));
+  return panel;
+}
+
 function scoreCard(label: string, value: number): HTMLElement {
   const card = document.createElement("div");
   card.className = "score-card";
@@ -160,25 +174,19 @@ function textCard(label: string, text: string): HTMLElement {
 function buildButtons(callbacks: ResultsCallbacks): HTMLElement {
   const row = document.createElement("div");
   row.className = "results-buttons";
-
-  const retry = document.createElement("button");
-  retry.type = "button";
-  retry.className = "results-button";
-  retry.textContent = "Retry";
-  retry.addEventListener("click", callbacks.onRetry);
-
-  const next = document.createElement("button");
-  next.type = "button";
-  next.className = "results-button primary";
-  next.textContent = "Next level";
-  next.addEventListener("click", callbacks.onNext);
-
-  const home = document.createElement("button");
-  home.type = "button";
-  home.className = "results-button";
-  home.textContent = "Home";
-  home.addEventListener("click", callbacks.onHome);
-
-  row.append(retry, next, home);
+  const make = (label: string, key: string, onClick: () => void, primary = false) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = primary ? "results-button primary" : "results-button";
+    const text = document.createElement("span");
+    text.textContent = label;
+    const kbd = document.createElement("kbd");
+    kbd.className = "kbd";
+    kbd.textContent = key;
+    button.append(text, kbd);
+    button.addEventListener("click", onClick);
+    return button;
+  };
+  row.append(make("Retry", "R", callbacks.onRetry), make("Next level", "↵", callbacks.onNext, true), make("Home", "Esc", callbacks.onHome));
   return row;
 }

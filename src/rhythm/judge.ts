@@ -32,6 +32,13 @@ const PULSE_SMOOTHING = 0.2;
  * partial correction keeps following a drifting player while averaging the jitter out.
  */
 const PHASE_CORRECTION = 0.5;
+/**
+ * Grid mode (practice, with the metronome running): the tempo is the click's and never follows
+ * the player. Only a small constant offset is learned (for leftover latency-calibration error),
+ * slowly and within ±GRID_OFFSET_MAX_SEC, so drifting off the click always shows.
+ */
+const GRID_OFFSET_RATE = 0.1;
+const GRID_OFFSET_MAX_SEC = 0.06;
 /** Online pulse tracking: estimate is clamped to nominal tempo ± this fraction. */
 const PULSE_CLAMP_FRACTION = 0.15;
 
@@ -124,8 +131,13 @@ class PulseEstimator {
   /** False until the first matched hit: that one sets the phase outright (it carries any
    * leftover latency-calibration error, which shouldn't leak into the following notes). */
   private hasHit = false;
+  private readonly startTime: number;
+  private readonly grid: boolean;
+  private gridOffset = 0;
 
-  constructor(startTime: number, nominal: number) {
+  constructor(startTime: number, nominal: number, grid = false) {
+    this.startTime = startTime;
+    this.grid = grid;
     this.anchorTime = startTime;
     this.secPerQuarter = nominal;
     this.min = nominal * (1 - PULSE_CLAMP_FRACTION);
@@ -133,6 +145,7 @@ class PulseEstimator {
   }
 
   predict(beat: number): number {
+    if (this.grid) return this.startTime + beat * this.secPerQuarter + this.gridOffset;
     return this.anchorTime + (beat - this.anchorBeat) * this.secPerQuarter;
   }
 
@@ -141,6 +154,12 @@ class PulseEstimator {
   }
 
   update(beat: number, time: number): void {
+    if (this.grid) {
+      const error = time - (this.startTime + beat * this.secPerQuarter);
+      const next = this.gridOffset + GRID_OFFSET_RATE * (error - this.gridOffset);
+      this.gridOffset = Math.max(-GRID_OFFSET_MAX_SEC, Math.min(GRID_OFFSET_MAX_SEC, next));
+      return;
+    }
     const predicted = this.predict(beat);
     const corrected = this.hasHit ? predicted + PHASE_CORRECTION * (time - predicted) : time;
     this.hasHit = true;
@@ -242,9 +261,15 @@ function gradeRelease(releaseTime: number, predictedEnd: number, durationMs: num
  * estimate is updated after every match so a slowly-drifting player is still judged against
  * their own tempo. Holds are tracked per zone: at most one onset is "held" per zone at a time.
  */
-export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number): LiveJudge {
+export interface JudgeOptions {
+  /** Judge against the fixed metronome grid instead of the player's own pulse (practice mode). */
+  grid?: boolean;
+}
+
+export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number, options: JudgeOptions = {}): LiveJudge {
   const nominal = nominalSecPerQuarter(bpm);
-  const estimator = new PulseEstimator(startTime, nominal);
+  const grid = options.grid === true;
+  const estimator = new PulseEstimator(startTime, nominal, grid);
   const matchedOnsets = new Set<number>();
   const heldByZone = new Map<0 | 1, number>();
   const onsetGradeByIndex = new Map<number, Grade>();
@@ -279,7 +304,7 @@ export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number)
 
       // The very first note has no pulse of the player's own to be judged against yet, only the
       // count-in (plus any calibration error), so it gets the widest windows.
-      const isFirst = matchedOnsets.size === 1;
+      const isFirst = matchedOnsets.size === 1 && !grid;
       const gapMs = isFirst ? Number.POSITIVE_INFINITY : gapQuartersBefore(onsets, match.index) * estimator.currentSecPerQuarter() * 1000;
       const grade = gradeFor(Math.abs(match.errorMs), gapMs);
       onsetGradeByIndex.set(match.index, grade);
@@ -314,8 +339,9 @@ function matchHitsToOnsets(
   hits: Hit[],
   startTime: number,
   bpm: number,
+  grid: boolean,
 ): { onsetToHit: Map<number, number>; extraHitIndices: number[] } {
-  const estimator = new PulseEstimator(startTime, nominalSecPerQuarter(bpm));
+  const estimator = new PulseEstimator(startTime, nominalSecPerQuarter(bpm), grid);
   const matchedOnsets = new Set<number>();
   const onsetToHit = new Map<number, number>();
   const extraHitIndices: number[] = [];
@@ -404,9 +430,13 @@ function predictTimeAt(matchedPoints: MatchedPoint[], beat: number, excludeOnset
   return fit ? fit.a + fit.b * beat : startTime + beat * nominal;
 }
 
-function localRelativeErrorMs(matchedPoints: MatchedPoint[], onsetIndex: number, beat: number, hitTime: number, startTime: number, nominal: number): number {
-  const predicted = predictTimeAt(matchedPoints, beat, onsetIndex, startTime, nominal);
-  return (hitTime - predicted) * 1000;
+/** The median hit-vs-click offset, clamped to the live judge's limit. */
+function clampedMedianOffset(points: MatchedPoint[], startTime: number, nominal: number): number {
+  if (points.length === 0) return 0;
+  const offsets = points.map((p) => p.time - (startTime + p.beat * nominal)).sort((a, b) => a - b);
+  const mid = Math.floor(offsets.length / 2);
+  const median = offsets.length % 2 ? (offsets[mid] ?? 0) : ((offsets[mid - 1] ?? 0) + (offsets[mid] ?? 0)) / 2;
+  return Math.max(-GRID_OFFSET_MAX_SEC, Math.min(GRID_OFFSET_MAX_SEC, median));
 }
 
 const GRADE_SCORE: Record<Grade, number> = { perfect: 1, good: 0.9, ok: 0.65, miss: 0 };
@@ -560,8 +590,7 @@ function judgeRests(
   onsets: Onset[],
   releaseTimes: Map<number, number>,
   hits: Hit[],
-  matchedPoints: MatchedPoint[],
-  startTime: number,
+  predict: (beat: number) => number,
   nominal: number,
 ): { eventIndex: number; grade: Grade; reason: string | null }[] {
   return restSpansList.map((rest) => {
@@ -572,14 +601,14 @@ function judgeRests(
       if (o.eventIndex < rest.eventIndex && (prevOnsetIndex === -1 || o.eventIndex > (onsets[prevOnsetIndex]?.eventIndex ?? -1))) prevOnsetIndex = i;
     });
 
-    const restStart = predictTimeAt(matchedPoints, rest.beat, null, startTime, nominal);
-    const restEnd = predictTimeAt(matchedPoints, rest.beat + rest.quarters, null, startTime, nominal);
+    const restStart = predict(rest.beat);
+    const restEnd = predict(rest.beat + rest.quarters);
 
     // The next onset after the rest, whose own early-tap allowance overlaps the rest's tail.
     const nextOnset = onsets.find((o) => o.beat >= rest.beat + rest.quarters);
     const nextOnsetIndex = nextOnset ? onsets.indexOf(nextOnset) : -1;
     const nextWindowMs = nextOnsetIndex === -1 ? 0 : matchWindowMs(onsets, nextOnsetIndex, nominal);
-    const excludeAfter = nextOnset ? predictTimeAt(matchedPoints, nextOnset.beat, null, startTime, nominal) - nextWindowMs / 1000 : Number.POSITIVE_INFINITY;
+    const excludeAfter = nextOnset ? predict(nextOnset.beat) - nextWindowMs / 1000 : Number.POSITIVE_INFINITY;
 
     const pressedDuringRest = hits.some((h) => h.time >= restStart && h.time < Math.min(restEnd, excludeAfter));
     if (pressedDuringRest) return { eventIndex: rest.eventIndex, grade: "miss" as Grade, reason: "you tapped during it" };
@@ -598,9 +627,10 @@ function judgeRests(
  * same online pulse tracking as the live judge), grades each match by its error relative to a
  * locally-fitted pulse, resolves each note's release, and grades rests.
  */
-export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: number, bpm: number, hits: Hit[], releases: Release[]): RunResult {
+export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: number, bpm: number, hits: Hit[], releases: Release[], options: JudgeOptions = {}): RunResult {
   const nominal = nominalSecPerQuarter(bpm);
-  const { onsetToHit, extraHitIndices } = matchHitsToOnsets(onsets, hits, startTime, bpm);
+  const grid = options.grid === true;
+  const { onsetToHit, extraHitIndices } = matchHitsToOnsets(onsets, hits, startTime, bpm, grid);
 
   const matchedPoints: MatchedPoint[] = [];
   for (const [onsetIndex, hitIndex] of onsetToHit) {
@@ -609,6 +639,12 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
     if (!onset || !hit) continue;
     matchedPoints.push({ onsetIndex, beat: onset.beat, time: hit.time });
   }
+
+  // In grid mode every time is judged against the click, shifted only by the player's median
+  // offset (clamped, as in the live judge); otherwise against the locally fitted own pulse.
+  const gridOffset = grid ? clampedMedianOffset(matchedPoints, startTime, nominal) : 0;
+  const predict = (beat: number, excludeOnsetIndex: number | null = null): number =>
+    grid ? startTime + beat * nominal + gridOffset : predictTimeAt(matchedPoints, beat, excludeOnsetIndex, startTime, nominal);
 
   const releaseTimes = computeReleaseTimes(onsets, onsetToHit, hits, releases);
 
@@ -630,7 +666,7 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
 
     const nominalTime = startTime + onset.beat * nominal;
     const strictErrorMs = (hit.time - nominalTime) * 1000;
-    const relativeErrorMs = localRelativeErrorMs(matchedPoints, index, onset.beat, hit.time, startTime, nominal);
+    const relativeErrorMs = (hit.time - predict(onset.beat, index)) * 1000;
     const grade = gradeFor(Math.abs(relativeErrorMs), gapQuartersBefore(onsets, index) * nominal * 1000);
 
     const releaseTime = releaseTimes.get(index) ?? null;
@@ -639,7 +675,7 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
     // Only sustained notes (longer than a quarter) are hold-graded: a quarter or shorter is
     // "played" the instant it's tapped, and a normal short tap on it is simply correct.
     if (releaseTime !== null && onset.quarters > SUSTAINED_MIN_QUARTERS) {
-      const predictedEnd = predictTimeAt(matchedPoints, onset.beat + onset.quarters, null, startTime, nominal);
+      const predictedEnd = predict(onset.beat + onset.quarters);
       const durationMs = onset.quarters * nominal * 1000;
       const result = gradeRelease(releaseTime, predictedEnd, durationMs);
       releaseErrorMs = result.errorMs;
@@ -649,7 +685,7 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
     return { onset, hitTime: hit.time, strictErrorMs, relativeErrorMs, grade, releaseTime, releaseErrorMs, releaseGrade };
   });
 
-  const restJudgements = judgeRests(restSpansList, onsets, releaseTimes, hits, matchedPoints, startTime, nominal);
+  const restJudgements = judgeRests(restSpansList, onsets, releaseTimes, hits, (beat) => predict(beat), nominal);
 
   const extraHits = extraHitIndices.map((i) => hits[i]).filter((h): h is Hit => h !== undefined);
   const onsetScore = computeOnsetScore(judgements);

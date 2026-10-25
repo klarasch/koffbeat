@@ -45,7 +45,7 @@ engine.setAmbience = (level: number, rampSec?: number) => {
 engine.chime = (quality: number) => {
   if (ambienceOn()) rawChime(quality);
 };
-// The electric-piano tap sound has its own switch: on phone speakers it trails the finger by
+// The plate tap sound has its own switch: on phone speakers it trails the finger by
 // ~0.2 s, which some players find distracting.
 const TAP_SOUND_KEY = "resonance.tapSound";
 function tapSoundOn(): boolean {
@@ -116,13 +116,36 @@ interface LevelPick {
   next: () => LevelPick | null;
 }
 
+// Practice tempo: null plays each level at its own tempo; a number overrides it.
+const TEMPO_KEY = "resonance.tempo";
+function loadTempo(): number | null {
+  try {
+    const n = Number(localStorage.getItem(TEMPO_KEY));
+    return Number.isFinite(n) && n >= 40 && n <= 200 ? n : null;
+  } catch {
+    return null;
+  }
+}
+function saveTempo(bpm: number | null): void {
+  try {
+    if (bpm === null) localStorage.removeItem(TEMPO_KEY);
+    else localStorage.setItem(TEMPO_KEY, String(bpm));
+  } catch {
+    // Not persisted; still applies for this visit.
+  }
+}
+let tempo = loadTempo();
+function withTempo(level: Level): Level {
+  return tempo === null ? level : { ...level, bpm: tempo };
+}
+
 function fixedPick(index: number): LevelPick | null {
   const level = LEVELS[index];
-  return level ? { level, next: () => fixedPick((index + 1) % LEVELS.length) } : null;
+  return level ? { level: withTempo(level), next: () => fixedPick((index + 1) % LEVELS.length) } : null;
 }
 
 function randomPick(tier: number, bars: 4 | 8 | 16): LevelPick {
-  return { level: generateLevel({ tier, bars }), next: () => randomPick(tier, bars) };
+  return { level: withTempo(generateLevel({ tier, bars })), next: () => randomPick(tier, bars) };
 }
 
 function showHome(): void {
@@ -130,6 +153,13 @@ function showHome(): void {
     levels: LEVELS,
     engine,
     scene,
+    tempo: {
+      get: () => tempo,
+      set: (bpm: number | null) => {
+        tempo = bpm;
+        saveTempo(bpm);
+      },
+    },
     sounds: [
       { label: "Ambience", isOn: ambienceOn, set: setAmbienceOn },
       { label: "Tap sound", isOn: tapSoundOn, set: setTapSoundOn },

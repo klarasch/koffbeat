@@ -4,13 +4,11 @@
 // tempo the sand lifts off the figure in thin flowing veils that curl and drift back down.
 //
 // Everything runs on the GPU:
-// - Void: a soft white gradient with no horizon; the ground is invisible except for the light
-//   and shadow that fall on it (ripples, the hold ring, the dust shadow).
+// - Void: a soft white gradient with no horizon and no ground; only thin ripple lines and the
+//   hold ring are drawn on the plane the sand rests on.
 // - Motes: a few thousand neutral specks drifting slowly at many depths.
 // - Pigment: a GPGPU particle system (position and velocity textures). Motion uses smooth noise
 //   fields only, never per-frame random kicks, so grains glide instead of flickering.
-// - Dust shadow: airborne pigment is splatted into a small top-down texture that the ground
-//   samples, blurred, as one soft shared shadow.
 
 import * as THREE from "three";
 import { GPUComputationRenderer, type Variable } from "three/examples/jsm/misc/GPUComputationRenderer.js";
@@ -79,8 +77,6 @@ const GRADE_RGB: Record<StrikeKind, [number, number, number]> = {
 const STRIKE_ENERGY: Record<StrikeKind, number> = { perfect: 0.85, good: 0.7, ok: 0.55, miss: 0.6, neutral: 0.45 };
 
 const MAX_RIPPLES = 8;
-/** World half-size of the top-down dust shadow texture, centred on the bed. */
-const SHADOW_EXTENT = 1.8;
 
 /** Light and air, in display (sRGB) values: shader output is written without colour management. */
 const COLORS_GLSL = /* glsl */ `
@@ -282,34 +278,6 @@ void main() {
 }
 `;
 
-/** Airborne pigment splatted top-down into the shadow texture. */
-const SHADOW_SPLAT_VERT = /* glsl */ `
-uniform sampler2D uPositions;
-uniform sampler2D uVelocities;
-attribute vec2 aRef;
-varying float vWeight;
-${COLORS_GLSL}
-void main() {
-  vec4 data = texture2D(uPositions, aRef);
-  float floorY = texture2D(uVelocities, aRef).w;
-  float lift = max(0.0, data.y - floorY);
-  // The shadow falls away from the sun, further the higher the grain floats.
-  vec2 p = data.xz - SUN_DIR.xz / max(SUN_DIR.y, 0.2) * lift;
-  gl_Position = vec4(p.x / ${SHADOW_EXTENT.toFixed(2)}, -p.y / ${SHADOW_EXTENT.toFixed(2)}, 0.0, 1.0);
-  gl_PointSize = 4.0 + lift * 10.0;
-  vWeight = smoothstep(0.02, 0.15, lift) * (1.0 - smoothstep(0.3, 0.6, lift)) * 0.005;
-}
-`;
-
-const SHADOW_SPLAT_FRAG = /* glsl */ `
-varying float vWeight;
-void main() {
-  vec2 d = gl_PointCoord * 2.0 - 1.0;
-  float a = smoothstep(1.0, 0.0, dot(d, d));
-  gl_FragColor = vec4(vec3(vWeight * a), 1.0);
-}
-`;
-
 const SKY_VERT = /* glsl */ `
 varying vec3 vDir;
 void main() {
@@ -332,22 +300,10 @@ void main() {
 `;
 
 const GROUND_VERT = /* glsl */ `
-${SURFACE_GLSL}
 varying vec3 vWorld;
-varying vec3 vNormal2;
 void main() {
-  vec3 p = position;
-  vNormal2 = vec3(0.0, 1.0, 0.0);
-  if (length(p.xz) < 4.0) {
-    float e = 0.03;
-    float h0 = surface(p.xz);
-    float hx = surface(p.xz + vec2(e, 0.0)) - h0;
-    float hz = surface(p.xz + vec2(0.0, e)) - h0;
-    p.y = h0;
-    vNormal2 = normalize(vec3(-hx, e, -hz));
-  }
-  vWorld = p;
-  gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
+  vWorld = position;
+  gl_Position = projectionMatrix * viewMatrix * vec4(position, 1.0);
 }
 `;
 
@@ -355,49 +311,25 @@ const GROUND_FRAG = /* glsl */ `
 uniform vec3 uHold;
 uniform vec3 uRippleColor[${MAX_RIPPLES}];
 uniform float uDim;
-uniform float uReveal;
-uniform sampler2D uDustShadow;
 varying vec3 vWorld;
-varying vec3 vNormal2;
 ${COLORS_GLSL}
 ${SURFACE_GLSL}
 
 void main() {
   vec2 p = vWorld.xz;
   float r = length(p);
-  vec3 toCam = cameraPosition - vWorld;
-  float dist = length(toCam);
-  // The floor is the void itself; only what happens on it shows.
-  vec3 view = normalize(toCam);
-  vec3 col = VOID_LOW * 1.006;
+  vec3 view = normalize(cameraPosition - vWorld);
+  // There is no ground: the plane shows the void behind it, matching the sky exactly.
+  vec3 col = mix(VOID_LOW, VOID_TOP, smoothstep(-0.25, 0.45, -view.y));
 
-  // Waves catch the light: faint shading where the liquid surface tilts.
-  vec3 n = normalize(vNormal2);
-  float shade = dot(n, SUN_DIR) - SUN_DIR.y;
-  col *= 1.0 + shade * 0.35;
-
-  // A whisper of contact shade under the bed grounds the sand in the space.
-  col *= 1.0 - 0.035 * exp(-r * r * 1.6);
-  col += vec3(0.02, 0.008, -0.004) * exp(-r * r * 1.1) * uReveal;
-
-  // One soft shadow for all the dust in the air.
-  vec2 suv = vec2(p.x, -p.y) / ${SHADOW_EXTENT.toFixed(2)} * 0.5 + 0.5;
-  if (suv.x > 0.0 && suv.x < 1.0 && suv.y > 0.0 && suv.y < 1.0) {
-    float o = 4.0 / 256.0;
-    float sh = texture2D(uDustShadow, suv).r * 0.36;
-    sh += (texture2D(uDustShadow, suv + vec2(o, 0)).r + texture2D(uDustShadow, suv - vec2(o, 0)).r) * 0.16;
-    sh += (texture2D(uDustShadow, suv + vec2(0, o)).r + texture2D(uDustShadow, suv - vec2(0, o)).r) * 0.16;
-    col *= 1.0 - min(sh, 0.1);
-  }
-
-  // Ripple fronts: a thin line of grade colour travelling out across the white.
+  // Ripple fronts: thin lines of grade colour travelling out through the white.
   for (int i = 0; i < ${MAX_RIPPLES}; i++) {
     vec4 rp = uRipples[i];
     if (rp.w <= 0.0) continue;
     float d = length(p - rp.xy);
     float front = rp.z * uRippleShape[i].y;
     float ring = exp(-pow((d - front) / (uRippleShape[i].x * 0.08), 2.0)) * exp(-rp.z * 1.5) * rp.w;
-    col = mix(col, uRippleColor[i], clamp(ring * 9.0, 0.0, 0.35));
+    col = mix(col, uRippleColor[i], clamp(ring * 9.0, 0.0, 0.3) * (1.0 - smoothstep(1.5, 3.0, d)));
   }
 
   // Hold ring traced around the bed.
@@ -407,14 +339,9 @@ void main() {
     float a01 = fract(ang / 6.2831853 + 1.0);
     float filled = step(a01, clamp(uHold.x, 0.0, 1.0));
     vec3 holdCol = uHold.y > 2.5 ? vec3(0.82, 0.23, 0.23) : uHold.y > 1.5 ? vec3(0.17, 0.12, 0.2) : vec3(0.42, 0.25, 0.63);
-    col = mix(col, vec3(0.17, 0.12, 0.2), band * 0.06 * uHold.z);
+    col = mix(col, vec3(0.17, 0.12, 0.2), band * 0.05 * uHold.z);
     col = mix(col, holdCol, band * filled * uHold.z * 0.85);
   }
-
-  // Everything dissolves into the void with distance, so there is never a horizon.
-  float fade = smoothstep(2.5, 9.0, dist);
-  vec3 voidCol = mix(VOID_LOW, VOID_TOP, smoothstep(-0.25, 0.45, -view.y));
-  col = mix(col, voidCol, fade);
   col = mix(col, VOID_TOP, uDim * 0.45);
   gl_FragColor = vec4(col, 1.0);
 }
@@ -519,12 +446,12 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
 
   const reducedMotion = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
   const mobile = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
-  const SIM_W = mobile ? 256 : 512;
-  const SIM_H = 256;
+  const SIM_W = 256;
+  const SIM_H = mobile ? 128 : 256;
   const COUNT = SIM_W * SIM_H;
 
   // Render resolution adapts: up to 1.5x, stepping down when frames run long.
-  const RATIOS = [1.5, 1.25, 1, 0.8].filter((r) => r <= Math.max(1, window.devicePixelRatio || 1));
+  const RATIOS = [1.25, 1, 0.8].filter((r) => r <= Math.max(1, window.devicePixelRatio || 1));
   let ratioStep = 0;
   renderer.setPixelRatio(RATIOS[0] ?? 1);
   renderer.autoClear = true;
@@ -598,8 +525,6 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   sky.renderOrder = -1;
   scene.add(sky);
 
-  // ---- Dust shadow target ----
-  const shadowRT = new THREE.WebGLRenderTarget(256, 256, { type: THREE.HalfFloatType, depthBuffer: false });
   const refs = new Float32Array(COUNT * 2);
   for (let y = 0; y < SIM_H; y++) {
     for (let x = 0; x < SIM_W; x++) {
@@ -612,30 +537,15 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   pigmentGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(COUNT * 3), 3));
   pigmentGeo.setAttribute("aRef", new THREE.BufferAttribute(refs, 2));
   const texU = { uPositions: { value: null as THREE.Texture | null }, uVelocities: { value: null as THREE.Texture | null } };
-  const shadowScene = new THREE.Scene();
-  const splat = new THREE.Points(
-    pigmentGeo,
-    new THREE.ShaderMaterial({
-      vertexShader: SHADOW_SPLAT_VERT,
-      fragmentShader: SHADOW_SPLAT_FRAG,
-      uniforms: texU,
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthTest: false,
-      depthWrite: false,
-    }),
-  );
-  splat.frustumCulled = false;
-  shadowScene.add(splat);
 
   // ---- Ground ----
   const holdU = new THREE.Vector3(0, 1, 0);
   const ground = new THREE.Mesh(
-    polarGround(110, 180, 0.03, 40),
+    polarGround(48, 128, 0.03, 6),
     new THREE.ShaderMaterial({
       vertexShader: GROUND_VERT,
       fragmentShader: GROUND_FRAG,
-      uniforms: { ...shared, uHold: { value: holdU }, uRippleColor: { value: rippleColor }, uDim: dimU, uReveal: revealU, uDustShadow: { value: shadowRT.texture } },
+      uniforms: { ...shared, uHold: { value: holdU }, uRippleColor: { value: rippleColor }, uDim: dimU },
     }),
   );
   ground.frustumCulled = false;
@@ -770,11 +680,21 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   // ---- Frame loop ----
   let last = performance.now();
   const startedAt = last;
+  /** Nothing is being played (home, results): half the frame rate is plenty and saves power. */
+  let skipNext = false;
   function frame(now: number): void {
+    // Home and results run an idle drift (ambient); play never does.
+    const idle = ambient > 0.05 && !hold && energy < 0.05;
+    if (idle && skipNext) {
+      skipNext = false;
+      requestAnimationFrame(frame);
+      return;
+    }
+    skipNext = idle;
     const frameMs = now - last;
     const dt = Math.min(1 / 30, Math.max(1 / 240, frameMs / 1000));
     last = now;
-    adaptQuality(frameMs);
+    if (!idle) adaptQuality(frameMs);
     const time = (now - startedAt) / 1000;
 
     const ease = 1 - Math.exp(-dt * 6);
@@ -832,17 +752,11 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     texU.uVelocities.value = gpu.getCurrentRenderTarget(velVar).texture;
 
     fitCamera();
-    const grainWorld = mobile ? 0.0075 : 0.0052;
+    const grainWorld = mobile ? 0.0085 : 0.0062;
     pigmentUniforms.uSize.value = grainWorld * camera.projectionMatrix.elements[5]! * renderer.domElement.height * 0.5;
     moteUniforms.uSize.value = (mobile ? 0.011 : 0.009) * camera.projectionMatrix.elements[5]! * renderer.domElement.height * 0.5;
     moteUniforms.uStir.value = Math.min(1, energy);
 
-    // Dust shadow first, then the world.
-    renderer.setRenderTarget(shadowRT);
-    renderer.setClearColor(0x000000, 1);
-    renderer.clear();
-    if (lift > 0.01) renderer.render(shadowScene, camera);
-    renderer.setRenderTarget(null);
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
   }

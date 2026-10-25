@@ -35,9 +35,9 @@ export interface AudioEngine {
    * it can sit under the clicks without pulling the player's timing. Not affected by stopAll.
    */
   setAmbience(level: number, rampSec?: number): void;
-  /** A soft electric-piano chord for the end of a run; fuller for higher `quality` (0..1). */
+  /** A soft resonant-plate chord for the end of a run; fuller for higher `quality` (0..1). */
   chime(quality: number): void;
-  /** Starts a sustained electric-piano note now; returns an id for noteOff. */
+  /** Starts a sustained resonant-plate tone now; returns an id for noteOff. */
   noteOn(freq: number, velocity?: number): number;
   /** Releases a note started with noteOn (a short natural fade). */
   noteOff(id: number): void;
@@ -308,70 +308,86 @@ export function createAudioEngine(): AudioEngine {
   function chime(quality: number): void {
     const t = ctx.currentTime + 0.05;
     const q = Math.max(0, Math.min(1, quality));
-    // D major add9, opened upward with quality, played as soft electric-piano notes.
+    // D major add9, opened upward with quality, struck softly on the plate.
     const partials = [293.66, 440, 587.33, 659.25, 880, 1174.66].slice(0, 3 + Math.round(q * 3));
     partials.forEach((freq, i) => {
-      const id = startEpiano(freq, 0.5 / (1 + i * 0.3), t + i * 0.11);
+      const id = startPlate(freq, 0.5 / (1 + i * 0.3), t + i * 0.11);
       setTimeout(() => noteOff(id), 1800 + i * 110);
     });
   }
 
-  // ---- Electric piano for taps: an FM tine (carrier and modulator at the same pitch, the
-  // modulation fading quickly), a short metallic "tine" click and a gentle tremolo. It sustains
-  // while the key or finger is down, so a held note sounds as long as it is held.
-  interface EpianoVoice {
+  // ---- Resonant plate for taps: a soft mallet on a metal plate, the instrument the scene
+  // shows. Its partials are inharmonic (roughly a struck plate's mode ratios), each doubled
+  // with a slight detune so it shimmers. It sustains while the key or finger is down, then
+  // rings out naturally when released.
+  interface PlateVoice {
     out: GainNode;
     oscillators: OscillatorNode[];
   }
-  const voices = new Map<number, EpianoVoice>();
+  const voices = new Map<number, PlateVoice>();
   let nextVoiceId = 1;
-  const epianoBus = ctx.createGain();
-  epianoBus.gain.value = 0.85;
-  const epianoTone = ctx.createBiquadFilter();
-  epianoTone.type = "lowpass";
-  epianoTone.frequency.value = 3200;
-  epianoBus.connect(epianoTone);
-  epianoTone.connect(master);
+  const plateBus = ctx.createGain();
+  plateBus.gain.value = 0.9;
+  const plateTone = ctx.createBiquadFilter();
+  plateTone.type = "lowpass";
+  plateTone.frequency.value = 2600;
+  plateTone.Q.value = 0.4;
+  plateBus.connect(plateTone);
+  plateTone.connect(master);
 
-  function startEpiano(freq: number, velocity: number, when: number): number {
+  /** Partial ratios and relative levels: a fundamental, then the plate's higher modes. */
+  const PLATE_PARTIALS: [number, number][] = [
+    [1, 1],
+    [2.32, 0.42],
+    [4.25, 0.2],
+    [6.63, 0.09],
+  ];
+
+  function startPlate(freq: number, velocity: number, when: number): number {
     const t = Math.max(when, ctx.currentTime);
     const v = Math.max(0.05, Math.min(1, velocity));
     const out = ctx.createGain();
+    // A soft mallet: a quick but rounded attack, then a slow bloom-and-settle while held.
     out.gain.setValueAtTime(0, t);
-    out.gain.linearRampToValueAtTime(0.32 * v, t + 0.005);
-    out.gain.exponentialRampToValueAtTime(0.16 * v, t + 0.6);
-    out.gain.exponentialRampToValueAtTime(0.07 * v, t + 4);
+    out.gain.linearRampToValueAtTime(0.2 * v, t + 0.012);
+    out.gain.exponentialRampToValueAtTime(0.11 * v, t + 0.5);
+    out.gain.exponentialRampToValueAtTime(0.07 * v, t + 5);
+    out.connect(plateBus);
 
-    const carrier = ctx.createOscillator();
-    carrier.frequency.value = freq;
-    const modulator = ctx.createOscillator();
-    modulator.frequency.value = freq;
-    const modDepth = ctx.createGain();
-    modDepth.gain.setValueAtTime(freq * (1.2 + v), t);
-    modDepth.gain.exponentialRampToValueAtTime(freq * 0.2, t + 0.9);
-    modulator.connect(modDepth);
-    modDepth.connect(carrier.frequency);
+    const oscillators: OscillatorNode[] = [];
+    for (const [ratio, level] of PLATE_PARTIALS) {
+      // Higher partials die away faster, as on a real plate.
+      const partial = ctx.createGain();
+      partial.gain.setValueAtTime(level, t);
+      partial.gain.exponentialRampToValueAtTime(Math.max(0.0005, level * 0.15), t + 0.4 + 3 / ratio);
+      partial.connect(out);
+      for (const detune of [-3, 4]) {
+        const osc = ctx.createOscillator();
+        osc.type = "sine";
+        osc.frequency.value = freq * ratio;
+        osc.detune.value = detune * ratio;
+        osc.connect(partial);
+        oscillators.push(osc);
+      }
+    }
+    // The mallet's touch: a brief, soft burst of filtered noise.
+    const noise = ctx.createBufferSource();
+    const noiseBuf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.03), ctx.sampleRate);
+    const data = noiseBuf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+    noise.buffer = noiseBuf;
+    const noiseFilter = ctx.createBiquadFilter();
+    noiseFilter.type = "bandpass";
+    noiseFilter.frequency.value = freq * 3;
+    noiseFilter.Q.value = 1.2;
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.value = 0.05 * v;
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(out);
+    noise.start(t);
 
-    const tine = ctx.createOscillator();
-    tine.frequency.value = freq * 14;
-    const tineGain = ctx.createGain();
-    tineGain.gain.setValueAtTime(0.04 * v, t);
-    tineGain.gain.exponentialRampToValueAtTime(0.0005, t + 0.1);
-    tine.connect(tineGain);
-    tineGain.connect(out);
-
-    const tremolo = ctx.createOscillator();
-    tremolo.frequency.value = 4.2 + Math.random() * 0.8;
-    const tremoloDepth = ctx.createGain();
-    tremoloDepth.gain.value = 0.025 * v;
-    tremolo.connect(tremoloDepth);
-    tremoloDepth.connect(out.gain);
-
-    carrier.connect(out);
-    out.connect(epianoBus);
-    const oscillators = [carrier, modulator, tine, tremolo];
     for (const osc of oscillators) osc.start(t);
-
     const id = nextVoiceId++;
     voices.set(id, { out, oscillators });
     // Safety: no note rings forever if its release never arrives.
@@ -380,7 +396,7 @@ export function createAudioEngine(): AudioEngine {
   }
 
   function noteOn(freq: number, velocity = 0.8): number {
-    return startEpiano(freq, velocity, ctx.currentTime);
+    return startPlate(freq, velocity, ctx.currentTime);
   }
 
   function noteOff(id: number): void {
@@ -391,10 +407,10 @@ export function createAudioEngine(): AudioEngine {
     const g = voice.out.gain;
     g.cancelScheduledValues(t);
     g.setValueAtTime(Math.max(g.value, 0.0001), t);
-    g.exponentialRampToValueAtTime(0.0001, t + 0.35);
+    g.exponentialRampToValueAtTime(0.0001, t + 0.9);
     for (const osc of voice.oscillators) {
       try {
-        osc.stop(t + 0.4);
+        osc.stop(t + 1);
       } catch {
         // Already stopped.
       }

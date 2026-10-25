@@ -11,7 +11,7 @@ import { combineGrades, createLiveJudge, judgeRun, releaseWindowMs, SUSTAINED_MI
 import type { HoldState, Scene } from "../scene/resonance";
 import { levelOnsets, restSpans } from "../rhythm/onsets";
 import type { Grade, Hit, Level, Mode, Release, RunResult } from "../types";
-import { buildResultsPanel, describeNoteJudgement, describeRestJudgement } from "./results";
+import { buildEndedEarlyPanel, buildResultsPanel, describeNoteJudgement, describeRestJudgement } from "./results";
 
 export interface PlayCallbacks {
   onHome: () => void;
@@ -26,33 +26,24 @@ const END_MARGIN_QUARTERS_COUNT_IN = 3;
 /** Lead-in before the count-in's first click, in seconds — gives the scheduler headroom. */
 const LEAD_IN_SEC = 0.3;
 const GRADE_FLASH_MS = 420;
+/** "Too obviously lost": this many notes missed in a row ends the run. */
+const LOST_MISSED_NOTES = 4;
+/** In practice mode the music keeps going without you, so allow longer to jump back on. */
+const LOST_MISSED_NOTES_PRACTICE = 8;
+/** …or this many taps in a row that match no note. */
+const LOST_STRAY_TAPS = 5;
+/** …or this many bars of silence past the note that was due. */
+const LOST_SILENT_BARS = 2;
+
 /** Each 4-bar phrase draws the sand toward a new figure. */
 const BARS_PER_FIGURE = 4;
 const GRADE_VALUE: Record<Grade, number> = { perfect: 1, good: 0.85, ok: 0.55, miss: 0 };
 
-/** D major pentatonic, D4–D5: every tap note sits well over the drone's chords. */
-const TAP_SCALE = [293.66, 329.63, 369.99, 440.0, 493.88, 587.33];
-
 /**
- * A gentle melody for the piece's notes: a seeded random walk on the pentatonic scale, mostly
- * stepwise, so each tap rings a note that leads somewhere instead of the same pitch again.
+ * Tap pitches: the drone's root and fifth, one per hand zone (left D4, right A3). No melody:
+ * the tone marks the attack and the hold, and leaves the rhythm to speak for itself.
  */
-function tapMelody(id: string, count: number): number[] {
-  let seed = figureSeed(id) * 7919 + 17;
-  const rand = () => {
-    seed = (seed * 16807) % 2147483647;
-    return seed / 2147483647;
-  };
-  let degree = 2;
-  const out: number[] = [];
-  for (let i = 0; i < count; i++) {
-    const r = rand();
-    const step = r < 0.35 ? 0 : r < 0.65 ? 1 : r < 0.9 ? -1 : rand() < 0.5 ? 2 : -2;
-    degree = Math.max(0, Math.min(TAP_SCALE.length - 1, degree + step));
-    out.push(TAP_SCALE[degree]!);
-  }
-  return out;
-}
+const ZONE_PITCH: Record<0 | 1, number> = { 0: 293.66, 1: 220.0 };
 
 /** A stable small integer from a level id, so a level always starts on the same figure. */
 function figureSeed(id: string): number {
@@ -115,7 +106,10 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   titleEl.innerHTML = `<span class="play-title-name"></span><span class="play-title-meta"></span>`;
   (titleEl.firstChild as HTMLElement).textContent = level.title;
   (titleEl.lastChild as HTMLElement).textContent = `${level.bpm} bpm · ${mode === "practice" ? "practice" : "count-in"}`;
-  topbar.append(homeButton, titleEl);
+  const escHint = document.createElement("span");
+  escHint.className = "esc-hint";
+  escHint.textContent = "Esc stop · R retry";
+  topbar.append(homeButton, titleEl, escHint);
   screen.appendChild(topbar);
 
   const dotsRow = document.createElement("div");
@@ -127,6 +121,10 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     dots.push(dot);
     dotsRow.appendChild(dot);
   }
+  // Practice mode: which bar the music is in, next to the beat squares.
+  const barCounter = document.createElement("span");
+  barCounter.className = "bar-counter";
+  if (mode === "practice") dotsRow.appendChild(barCounter);
   screen.appendChild(dotsRow);
 
   const staffArea = document.createElement("div");
@@ -229,11 +227,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   }
 
   const offsetSec = loadOffset();
-  const melody = tapMelody(level.id, onsets.length);
   /** The sounding tap note per zone, released with the finger or key. */
   const soundingByZone = new Map<0 | 1, number>();
   engine.setAmbience(0.35, 1.5);
-  const liveJudge = createLiveJudge(onsets, startTime, level.bpm);
+  // Practice mode runs on the metronome's clock: taps are judged against the click (drifting is
+  // never forgiven), and the karaoke marker and bar highlight follow the music, not the player.
+  const clockDriven = mode === "practice";
+  const liveJudge = createLiveJudge(onsets, startTime, level.bpm, { grid: clockDriven });
   const hits: Hit[] = [];
   const releases: Release[] = [];
   let matchedCount = 0;
@@ -247,6 +247,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   /** Screen position of the latest press, for the plate ripple. */
   let lastPress: { x: number | null; y: number | null } = { x: null, y: null };
   let allTappedAt: number | null = null;
+  let missedInARow = 0;
+  let strayInARow = 0;
 
   let nextPointer = 0;
   if (timeline.length > 0) {
@@ -308,7 +310,10 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       const item = timeline[i];
       if (!item) continue;
       if (item.kind === "rest") setTimelineState(item, spoiledRests.has(item.restIndex) ? "miss" : "done");
-      else setTimelineState(item, "miss");
+      else {
+        setTimelineState(item, "miss");
+        missedInARow++;
+      }
     }
   }
 
@@ -342,10 +347,11 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     // already spoiled, so grade and skip it immediately rather than waiting on the next press.
     if (afterItem && afterItem.kind === "rest" && releaseGrade === "miss") {
       spoilRest(afterItem);
-      setNext(afterIndex + 1);
+      if (!clockDriven) setNext(afterIndex + 1);
       return;
     }
-    setNext(afterIndex);
+    // In practice mode the clock moves the marker; otherwise the player's own playing does.
+    if (!clockDriven) setNext(afterIndex);
   }
 
   function finalizeRelease(onsetIndex: number, combinedGrade: Grade | null, releaseGrade: Grade | null): void {
@@ -375,8 +381,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     const judged = liveJudge.judgeHit(hit);
     const previousNote = soundingByZone.get(hit.zone);
     if (previousNote !== undefined) engine.noteOff(previousNote);
-    // A matched tap rings its melody note; a stray tap a soft low one.
-    soundingByZone.set(hit.zone, judged.onsetIndex === null ? engine.noteOn(146.83, 0.35) : engine.noteOn(melody[judged.onsetIndex] ?? 440, 0.8));
+    // A matched tap rings the plate; a stray tap a soft, low one.
+    soundingByZone.set(hit.zone, judged.onsetIndex === null ? engine.noteOn(146.83, 0.3) : engine.noteOn(ZONE_PITCH[hit.zone], 0.8));
     if (judged.onsetIndex === null || judged.grade === null) {
       // An unmatched press while a rest is the current target means the rest wasn't silent.
       const current = timeline[nextPointer];
@@ -384,8 +390,11 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       coherence *= 0.8;
       scene.setCoherence(coherence);
       scene.strike("miss", lastPress.x, lastPress.y);
+      strayInARow++;
+      checkLost();
       return;
     }
+    strayInARow = 0;
 
     matchedCount++;
     coherence = coherence * 0.7 + GRADE_VALUE[judged.grade] * 0.3;
@@ -417,12 +426,21 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     }
     const timelineIndex = timelineIndexForOnset.get(judged.onsetIndex);
     if (timelineIndex !== undefined) {
-      if (timelineIndex > nextPointer) settleSkipped(nextPointer, timelineIndex);
-      nextPointer = timelineIndex;
+      // Notes skipped on the way here count as missed; this note continues or ends the streak.
+      if (!clockDriven && timelineIndex > nextPointer) settleSkipped(nextPointer, timelineIndex);
+      if (judged.grade === "miss") missedInARow++;
+      checkLost();
+      if (ended) return;
+      if (judged.grade !== "miss") {
+        missedInARow = 0;
+        lastGoodHitTime = hit.time;
+      }
+      matchedTimeline.add(timelineIndex);
       const item = timeline[timelineIndex];
-      if (item) {
-        setTimelineState(item, "active");
-        staff.revealEvent(primaryEventIndex(item));
+      if (item) setTimelineState(item, "active");
+      if (!clockDriven) {
+        nextPointer = timelineIndex;
+        if (item) staff.revealEvent(primaryEventIndex(item));
       }
     }
     showGradeFlash(judged.grade);
@@ -446,11 +464,144 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     },
   });
 
-  function updateCountInDots(t: number): void {
+  /** The audio-clock time being heard right now (scheduled time plus the output delay). */
+  function audibleTime(): number {
+    const ctx = engine.ctx;
+    const stamp = typeof ctx.getOutputTimestamp === "function" ? ctx.getOutputTimestamp() : null;
+    if (stamp?.contextTime !== undefined && stamp.performanceTime) return stamp.contextTime + (performance.now() - stamp.performanceTime) / 1000;
+    return ctx.currentTime - (ctx.outputLatency || ctx.baseLatency || 0);
+  }
+
+  const metronomeEnd = startTime + level.bars.length * beatsPerBar * secPerQuarter;
+
+  /**
+   * The count-in fills the beat squares one by one; in practice mode they then keep pulsing
+   * with the metronome, so the pulse can be seen as well as heard. Both follow the audible
+   * click, not the scheduled one, so the picture never runs ahead of the sound.
+   */
+  function updateBeatDots(): void {
+    const t = audibleTime();
+    if (t < startTime) {
+      for (let i = 0; i < dots.length; i++) {
+        dots[i]?.classList.toggle("lit", t >= firstClickTime + i * secPerQuarter);
+        dots[i]?.classList.remove("beat");
+      }
+      return;
+    }
+    const pulsing = mode === "practice" && t < metronomeEnd;
+    const beat = Math.floor((t - startTime) / secPerQuarter);
+    const phase = (t - startTime) / secPerQuarter - beat;
     for (let i = 0; i < dots.length; i++) {
-      const clickTime = firstClickTime + i * secPerQuarter;
-      const dot = dots[i];
-      if (dot) dot.classList.toggle("lit", t >= clickTime);
+      const on = pulsing && beat % beatsPerBar === i;
+      dots[i]?.classList.toggle("lit", on && phase < 0.5);
+      dots[i]?.classList.toggle("beat", on);
+    }
+  }
+
+  let lostReason: string | null = null;
+
+  function barOf(beat: number): number {
+    return Math.floor(beat / beatsPerBar) + 1;
+  }
+
+  /** Ends the run when the player has clearly lost their place. */
+  function checkLost(): void {
+    if (ended) return;
+    const current = timeline[nextPointer];
+    const where = current ? ` in bar ${barOf(current.beat)}` : "";
+    if (missedInARow >= (clockDriven ? LOST_MISSED_NOTES_PRACTICE : LOST_MISSED_NOTES)) lostReason = `${missedInARow} notes in a row were missed${where}.`;
+    else if (strayInARow >= LOST_STRAY_TAPS) lostReason = `${strayInARow} taps in a row didn't match a note${where}.`;
+    if (lostReason) finish("lost");
+  }
+
+  // ---- Practice clock ----
+  /** Timeline items the player has matched (their state comes from the player, not the clock). */
+  const matchedTimeline = new Set<number>();
+  let lastGoodHitTime = startTime;
+  /** Every item before this index has been settled by the clock. */
+  let settledUpTo = 0;
+  let nowIndex = -1;
+  let shownBar = -1;
+
+  /** Beats after its onset at which a note's chance to be played has passed. */
+  function closesAfterBeats(index: number): number {
+    const item = timeline[index];
+    if (!item) return 0;
+    if (item.kind === "rest") return rests[item.restIndex]?.quarters ?? 1;
+    const next = timeline.slice(index + 1).find((t) => t.kind === "note");
+    const gap = next ? next.beat - item.beat : 4;
+    return Math.min(0.4 / secPerQuarter, 0.45 * gap);
+  }
+
+  /**
+   * Practice mode, each frame: the note due now carries the karaoke marker, the current bar is
+   * highlighted and kept in view, and items whose moment has passed are settled: an unplayed
+   * note becomes a miss, a rest passed in silence turns ink.
+   */
+  function updateClock(): void {
+    const heard = audibleTime();
+    const beatNow = (heard - startTime) / secPerQuarter;
+    if (beatNow < 0) return;
+
+    while (settledUpTo < timeline.length) {
+      const item = timeline[settledUpTo];
+      if (!item || beatNow < item.beat + closesAfterBeats(settledUpTo)) break;
+      if (item.kind === "note" && !matchedTimeline.has(settledUpTo)) {
+        setTimelineState(item, "miss");
+        missedInARow++;
+      } else if (item.kind === "rest") {
+        setTimelineState(item, spoiledRests.has(item.restIndex) ? "miss" : "done");
+      }
+      settledUpTo++;
+    }
+    checkLost();
+    if (ended) return;
+    if (missedInARow >= 3 && heard - lastGoodHitTime > LOST_SILENT_BARS * beatsPerBar * secPerQuarter) {
+      lostReason = `The playing stopped in bar ${barOf(beatNow)}.`;
+      finish("lost");
+      return;
+    }
+
+    let current = -1;
+    for (let i = 0; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (item && item.beat <= beatNow + 0.02) current = i;
+      else break;
+    }
+    if (current !== nowIndex && current >= 0) {
+      const previous = timeline[nowIndex];
+      // The marker moves on; a note it leaves unplayed waits (upcoming ink) until it's settled.
+      if (previous && nowIndex >= settledUpTo && !matchedTimeline.has(nowIndex)) setTimelineState(previous, "upcoming");
+      nowIndex = current;
+      nextPointer = current;
+      const item = timeline[current];
+      if (item && !matchedTimeline.has(current) && current >= settledUpTo) setTimelineState(item, "next");
+      scene.setRest(item?.kind === "rest");
+    }
+
+    const bar = Math.min(level.bars.length - 1, Math.floor(beatNow / beatsPerBar));
+    if (bar !== shownBar) {
+      shownBar = bar;
+      staff.setBarHighlight(bar);
+      staff.revealEvent(staff.firstEventOfBar(bar));
+      barCounter.textContent = `bar ${bar + 1} / ${level.bars.length}`;
+    }
+  }
+
+  /** Silence check: nothing played for a couple of bars after a note was due. */
+  function checkSilence(t: number): void {
+    let due: number | null = null;
+    for (let i = nextPointer; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (item?.kind === "note") {
+        const onset = onsets[item.onsetIndex];
+        if (onset) due = liveJudge.predictTime(onset.beat);
+        if (onset && due !== null && t > due + LOST_SILENT_BARS * beatsPerBar * secPerQuarter) {
+          lostReason = matchedCount === 0 ? "Nothing was played after the count-in." : `The playing stopped in bar ${barOf(onset.beat)}.`;
+          finish("lost");
+        }
+        return;
+      }
     }
   }
 
@@ -458,8 +609,11 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     if (ended) return;
     const t = engine.now();
 
-    updateCountInDots(t);
+    updateBeatDots();
     updateHold();
+    if (clockDriven) updateClock();
+    else checkSilence(t);
+    if (ended) return;
 
     if (t >= endTime) {
       finish();
@@ -545,11 +699,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     if (flashTimeout) clearTimeout(flashTimeout);
   }
 
-  function finish(): void {
+  function finish(outcome: "done" | "lost" | "stopped" = "done"): void {
     if (ended) return;
     teardown();
+    for (const dot of dots) dot.classList.remove("lit", "beat");
+    staff.setBarHighlight(null);
 
-    const result = judgeRun(onsets, rests, startTime, level.bpm, hits, releases);
+    const result = judgeRun(onsets, rests, startTime, level.bpm, hits, releases, { grid: clockDriven });
     lastResult = result;
     logDebugTable(result);
 
@@ -574,19 +730,28 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     tapArea.hidden = true;
     screen.classList.add("finished");
 
-    const quality = result.judgements.some((j) => j.hitTime !== null) ? result.accuracy / 100 : 0;
-    scene.reveal(quality);
-    engine.setAmbience(0.8, 3);
-    if (quality > 0) engine.chime(quality);
-
+    const panelCallbacks = {
+      onRetry: () => leave(callbacks.onRetry),
+      onNext: () => leave(callbacks.onNext),
+      onHome: () => leave(callbacks.onHome),
+    };
     resultsOverlay.innerHTML = "";
-    resultsOverlay.appendChild(
-      buildResultsPanel(result, level.bpm, mode, {
-        onRetry: () => leave(callbacks.onRetry),
-        onNext: () => leave(callbacks.onNext),
-        onHome: () => leave(callbacks.onHome),
-      }),
-    );
+    if (outcome === "done") {
+      const quality = result.judgements.some((j) => j.hitTime !== null) ? result.accuracy / 100 : 0;
+      scene.reveal(quality);
+      engine.setAmbience(0.8, 3);
+      if (quality > 0) engine.chime(quality);
+      resultsOverlay.appendChild(buildResultsPanel(result, level.bpm, mode, panelCallbacks));
+    } else {
+      // No reveal: the sand just settles back into the void.
+      scene.setCoherence(0.3);
+      scene.setRest(true);
+      scene.setAmbient(0.12);
+      engine.setAmbience(0.5, 2);
+      const title = outcome === "lost" ? "Lost the beat" : "Stopped";
+      const detail = outcome === "lost" ? (lostReason ?? "") : "You stopped the exercise.";
+      resultsOverlay.appendChild(buildEndedEarlyPanel(title, detail, panelCallbacks));
+    }
     resultsOverlay.hidden = false;
   }
 
@@ -594,10 +759,30 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   function leave(then: () => void): void {
     teardown();
     plateObserver.disconnect();
+    window.removeEventListener("keydown", handleKey);
     then();
   }
 
   homeButton.addEventListener("click", () => leave(callbacks.onHome));
+
+  // Esc stops mid-run, and goes home from the results. R restarts at any time. Enter on the
+  // results moves on to the next level.
+  function handleKey(event: KeyboardEvent): void {
+    if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
+    const key = event.key.toLowerCase();
+    if (key === "escape") {
+      event.preventDefault();
+      if (!ended) finish("stopped");
+      else leave(callbacks.onHome);
+    } else if (key === "r") {
+      event.preventDefault();
+      leave(callbacks.onRetry);
+    } else if (key === "enter" && ended) {
+      event.preventDefault();
+      leave(callbacks.onNext);
+    }
+  }
+  window.addEventListener("keydown", handleKey);
 
   rafId = requestAnimationFrame(tick);
 }
