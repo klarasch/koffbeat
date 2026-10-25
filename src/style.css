@@ -8,10 +8,10 @@
   --ink-faint: #a49dab;
   --line: #2a1e34;
   --hairline: #e4dfd6;
-  --accent: #e2621b;
-  --grade-perfect: #e2621b;
-  --grade-good: #f09a3e;
-  --grade-ok: #7a4bb0;
+  --accent: #6b3fa0;
+  --grade-perfect: #6b3fa0;
+  --grade-good: #a466c8;
+  --grade-ok: #f09a3e;
   --grade-miss: #d23b3b;
   --ui: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;

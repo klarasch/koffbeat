@@ -53,11 +53,11 @@ const MODES: [number, number, number][] = [
 ];
 const MAX_K = 8;
 
-/** Grade colours, shared with the staff: orange clean, light orange good, purple close, red miss. */
+/** Grade colours, shared with the staff: purple clean, light purple good, orange close, red miss. */
 const GRADE_RGB: Record<StrikeKind, [number, number, number]> = {
-  perfect: [0.89, 0.38, 0.11],
-  good: [0.94, 0.6, 0.24],
-  ok: [0.48, 0.29, 0.69],
+  perfect: [0.42, 0.25, 0.63],
+  good: [0.64, 0.4, 0.78],
+  ok: [0.94, 0.6, 0.24],
   miss: [0.82, 0.23, 0.23],
   neutral: [0.45, 0.4, 0.5],
 };
@@ -150,7 +150,7 @@ void main() {
       float ang = atan(p.x, -p.y);
       float a01 = fract(ang / 6.2831853 + 1.0);
       float filled = step(a01, clamp(uHold.x, 0.0, 1.0));
-      vec3 holdCol = uHold.y > 2.5 ? vec3(0.82, 0.23, 0.23) : uHold.y > 1.5 ? vec3(0.17, 0.12, 0.2) : vec3(0.89, 0.38, 0.11);
+      vec3 holdCol = uHold.y > 2.5 ? vec3(0.82, 0.23, 0.23) : uHold.y > 1.5 ? vec3(0.17, 0.12, 0.2) : vec3(0.42, 0.25, 0.63);
       col = mix(col, vec3(0.17, 0.12, 0.2), band * 0.08 * uHold.z);
       col = mix(col, holdCol, band * filled * uHold.z * 0.9);
     }

@@ -311,7 +311,7 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
           }
           const recent = usableTaps.slice(-TAPS_NEEDED);
           progressDots.forEach((dot, i) => {
-            dot.style.background = i < recent.length ? "#e2621b" : "#e4dfd6";
+            dot.style.background = i < recent.length ? "#6b3fa0" : "#e4dfd6";
           });
           if (recent.length >= TAPS_NEEDED) result = computeOffset(recent, clickTimes);
           if (result.ok || t >= endTime) {

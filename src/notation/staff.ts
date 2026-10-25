@@ -56,11 +56,11 @@ const INK: Record<"dark" | "light", string> = {
   light: "#2a1e34",
 };
 
-/** Played notes take the sand colour of how they landed (shared with the scene's palette). */
+/** Played notes take a sand colour by how they landed: purple clean, light purple good, orange close, red miss (shared with the scene's palette). */
 export const GRADE_COLORS: Record<Grade, string> = {
-  perfect: "#e2621b",
-  good: "#f09a3e",
-  ok: "#7a4bb0",
+  perfect: "#6b3fa0",
+  good: "#a466c8",
+  ok: "#f09a3e",
   miss: "#d23b3b",
 };
 /** Notes not reached yet are drawn in a softer ink, so the next one stands out. */
