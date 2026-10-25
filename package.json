@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@types/three": "^0.170.0",
+    "three": "^0.170.0",
     "vexflow": "^5.0.0"
   },
   "devDependencies": {

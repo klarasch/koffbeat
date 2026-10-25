@@ -74,7 +74,7 @@ body,
 /* ---------- Controls: plain rectangles ---------- */
 
 .mode-option,
-.level-item,
+.level-tile,
 .primary-button,
 .results-button,
 .home-button,
@@ -98,7 +98,7 @@ body,
 
 .primary-button:active,
 .results-button:active,
-.level-item:active,
+.level-tile:active,
 .mode-option:active,
 .home-button:active {
   background: var(--ink);
@@ -125,56 +125,53 @@ body,
   margin: 0 0 10px;
 }
 
-/* ---------- Home ---------- */
+/* ---------- Home: a full-screen start screen over the scene ---------- */
 
 .home {
-  max-width: 520px;
-  margin: 0 auto;
-  padding: env(safe-area-inset-top) 16px calc(40px + env(safe-area-inset-bottom));
+  position: fixed;
+  inset: 0;
   display: flex;
   flex-direction: column;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  overflow: hidden;
 }
 
-.home-hero {
-  position: relative;
-  height: clamp(320px, min(56vh, 100vw), 480px);
-  display: flex;
-  flex-direction: column;
-}
-
-.home-hero-top {
+.home-top {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 12px;
-  padding-top: 20px;
+  gap: 16px;
+  padding: clamp(20px, 5vh, 48px) clamp(16px, 5vw, 48px) 0;
 }
 
 .home-title {
-  font-family: var(--mono);
-  font-weight: 500;
-  font-size: 22px;
-  letter-spacing: 0.04em;
+  font-family: var(--ui);
+  font-weight: 600;
+  font-size: clamp(40px, 11vw, 88px);
+  letter-spacing: -0.045em;
+  line-height: 0.9;
   margin: 0;
 }
 
 .home-tagline {
-  margin: 4px 0 0;
-  font-size: 13px;
+  margin: 12px 0 0;
+  max-width: 24ch;
+  font-size: clamp(14px, 1.6vw, 17px);
+  line-height: 1.4;
   color: var(--ink-dim);
 }
 
 .sound-toggles {
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
 }
 
 .sound-toggle {
   font-family: var(--mono);
   font-size: 11px;
-  padding: 5px 8px;
+  padding: 6px 9px;
   white-space: nowrap;
 }
 
@@ -183,20 +180,24 @@ body,
   border-color: var(--ink-faint);
 }
 
-/* The empty area of the hero the sand bed is fitted into. */
+/* The open middle of the screen: the sand bed is fitted into it. */
 .home-plate-slot {
   flex: 1;
+  min-height: 120px;
 }
 
-/* Content below the hero covers the floor as it scrolls up. */
-.panel {
-  background: var(--bg);
-  padding: 18px 0;
-  border-top: 1px solid var(--hairline);
+.home-dock {
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 clamp(16px, 5vw, 48px) 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .hint {
-  margin: 0 0 12px;
+  margin: 0;
   padding: 8px 10px;
   border: 1px solid var(--hairline);
   background: var(--bg);
@@ -204,13 +205,19 @@ body,
   color: var(--ink-dim);
 }
 
+.mode-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .mode-switch {
   display: flex;
+  flex: 0 0 auto;
 }
 
 .mode-option {
-  flex: 1;
-  padding: 10px 8px;
+  padding: 9px 14px;
 }
 
 .mode-option + .mode-option {
@@ -218,85 +225,129 @@ body,
 }
 
 .mode-hint {
-  margin: 8px 0 0;
-  font-size: 13px;
-  color: var(--ink-dim);
-}
-
-.level-list {
-  list-style: none;
   margin: 0;
-  padding: 0;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+.level-picker {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  margin: 0 calc(-1 * clamp(16px, 5vw, 48px));
+  padding: 0 clamp(16px, 5vw, 48px);
+  scroll-padding: 0 clamp(16px, 5vw, 48px);
+}
+
+.level-picker::-webkit-scrollbar {
+  display: none;
+}
+
+.level-tile {
+  flex: 0 0 auto;
+  width: 150px;
+  min-height: 96px;
+  scroll-snap-align: start;
   display: flex;
   flex-direction: column;
-}
-
-.level-list li + li .level-item {
-  border-top: none;
-}
-
-.level-item {
-  width: 100%;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px 12px;
   text-align: left;
-  padding: 13px 12px;
-  font-size: 15px;
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
 }
 
-.level-item-num {
+.level-tile + .level-tile {
+  border-left: none;
+}
+
+.level-tile.active {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.level-tile-num {
   font-family: var(--mono);
-  font-size: 12px;
-  color: var(--ink-dim);
+  font-size: 11px;
+  opacity: 0.6;
 }
 
-.level-item-title {
+.level-tile-name {
   flex: 1;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.2;
 }
 
-.level-item-bpm {
+.level-tile-meta {
   font-family: var(--mono);
-  font-size: 12px;
-  color: var(--ink-dim);
+  font-size: 11px;
+  opacity: 0.6;
 }
 
-.level-item:active .level-item-num,
-.level-item:active .level-item-bpm {
-  color: inherit;
-}
-
-.home-footer {
-  background: var(--bg);
-  text-align: center;
-  padding-top: 8px;
-}
-
-.random-section {
+.random-row {
   display: flex;
-  flex-direction: column;
   gap: 8px;
 }
 
-.random-section .section-label {
-  margin-bottom: 2px;
+.random-row[hidden] {
+  display: none;
 }
 
 .tier-select {
   appearance: none;
   -webkit-appearance: none;
-  width: 100%;
-  padding: 12px 36px 12px 12px;
-  font-size: 15px;
+  flex: 1;
+  min-width: 0;
+  padding: 10px 32px 10px 12px;
+  font-size: 14px;
   background:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0h10L5 6z' fill='%232a1e34'/%3E%3C/svg%3E") no-repeat right 12px center,
     var(--bg);
 }
 
-.primary-button {
-  padding: 14px 16px;
-  font-size: 15px;
-  font-weight: 500;
+.bars-switch .mode-option {
+  min-width: 44px;
+  padding: 9px 10px;
+}
+
+.play-button {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 18px 18px;
+  border: 1px solid var(--ink);
+  border-radius: 0;
+  background: var(--ink);
+  color: var(--bg);
+  cursor: pointer;
+}
+
+.play-button:active {
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.play-button-label {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.play-button-what {
+  font-family: var(--mono);
+  font-size: 12px;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.home-dock .link-button {
+  align-self: center;
+  padding: 2px 0;
 }
 
 /* ---------- Calibration ---------- */

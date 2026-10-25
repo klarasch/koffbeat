@@ -326,6 +326,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   function setNext(index: number): void {
     nextPointer = index;
     const item = timeline[nextPointer];
+    // While the music rests, the sand settles flat.
+    scene.setRest(item?.kind === "rest");
     if (item) {
       setTimelineState(item, "next");
       staff.revealEvent(primaryEventIndex(item));
@@ -347,6 +349,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   }
 
   function finalizeRelease(onsetIndex: number, combinedGrade: Grade | null, releaseGrade: Grade | null): void {
+    if (holding && holding.onsetIndex === onsetIndex) scene.release(releaseGrade ?? "neutral");
     endHold(onsetIndex);
     if (releaseGrade !== null) {
       // A sustained note's release lands like a second strike: a clean release keeps the figure.
@@ -387,9 +390,9 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     matchedCount++;
     coherence = coherence * 0.7 + GRADE_VALUE[judged.grade] * 0.3;
     scene.setCoherence(coherence);
-    scene.strike(judged.grade, lastPress.x, lastPress.y);
-
     const onset = onsets[judged.onsetIndex];
+    scene.strike(judged.grade, lastPress.x, lastPress.y, onset?.quarters ?? 1);
+
     if (onset) {
       const barIndex = Math.floor(onset.beat / beatsPerBar);
       const figure = baseFigure + Math.floor(barIndex / BARS_PER_FIGURE);

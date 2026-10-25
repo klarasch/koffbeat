@@ -38,7 +38,7 @@ function startHomeScene(scene: Scene, slot: HTMLElement): void {
 
   const place = () => {
     const rect = slot.getBoundingClientRect();
-    const radius = Math.min(rect.width * 0.46, rect.height * 1.1, 340);
+    const radius = Math.min(rect.width * 0.46, rect.height * 1.25, 460);
     scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height / 2, radius);
   };
   place();
@@ -86,17 +86,16 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   const root = document.createElement("div");
   root.className = "home";
 
-  const hero = document.createElement("header");
-  hero.className = "home-hero";
-  const heroTop = document.createElement("div");
-  heroTop.className = "home-hero-top";
+  // ---- Top: title and sound switches ----
+  const top = document.createElement("header");
+  top.className = "home-top";
   const titleBlock = document.createElement("div");
   const title = document.createElement("h1");
   title.className = "home-title";
   title.textContent = "Resonance";
   const tagline = document.createElement("p");
   tagline.className = "home-tagline";
-  tagline.textContent = "Read rhythm. Play in time and the sand lifts.";
+  tagline.textContent = "Read the rhythm. Play in time and the sand lifts.";
   titleBlock.append(title, tagline);
 
   const toggles = document.createElement("div");
@@ -107,7 +106,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     button.className = "sound-toggle";
     const paint = () => {
       const on = sound.isOn();
-      button.textContent = `${sound.label}: ${on ? "on" : "off"}`;
+      button.textContent = `${sound.label} ${on ? "on" : "off"}`;
       button.classList.toggle("off", !on);
       button.setAttribute("aria-pressed", String(on));
     };
@@ -118,41 +117,35 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     });
     toggles.appendChild(button);
   }
-  heroTop.append(titleBlock, toggles);
+  top.append(titleBlock, toggles);
+  root.appendChild(top);
+
+  // ---- Middle: the sand bed ----
   const plateSlot = document.createElement("div");
   plateSlot.className = "home-plate-slot";
-  hero.append(heroTop, plateSlot);
-  root.appendChild(hero);
+  root.appendChild(plateSlot);
+
+  // ---- Bottom: what to play, and Play ----
+  const dock = document.createElement("div");
+  dock.className = "home-dock";
 
   if (isTouchDevice() && !hasSeenHint()) {
     const hint = document.createElement("p");
     hint.className = "hint";
-    hint.textContent = "Turn off silent mode to hear the clicks";
-    root.appendChild(hint);
+    hint.textContent = "Turn off silent mode to hear the clicks.";
+    dock.appendChild(hint);
     markHintSeen();
   }
-
-  const modeSection = document.createElement("div");
-  modeSection.className = "panel";
-  const modeLabel = document.createElement("p");
-  modeLabel.className = "section-label";
-  modeLabel.textContent = "Mode";
-  modeSection.appendChild(modeLabel);
 
   let mode: Mode = "practice";
   const modeSwitch = document.createElement("div");
   modeSwitch.className = "mode-switch";
-
   const practiceButton = createModeOption("Practice", true);
   const countInButton = createModeOption("Count-in", false);
   modeSwitch.append(practiceButton, countInButton);
-  modeSection.appendChild(modeSwitch);
-
   const modeHint = document.createElement("p");
   modeHint.className = "mode-hint";
   modeHint.textContent = "Clicks continue throughout.";
-  modeSection.appendChild(modeHint);
-
   practiceButton.addEventListener("click", () => {
     mode = "practice";
     practiceButton.classList.add("active");
@@ -163,48 +156,91 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     mode = "countIn";
     countInButton.classList.add("active");
     practiceButton.classList.remove("active");
-    modeHint.textContent = "One bar of clicks, then silence — keep the pulse yourself.";
+    modeHint.textContent = "One bar of clicks, then keep the pulse yourself.";
   });
 
-  root.appendChild(modeSection);
+  // Level picker: the fixed levels plus "Random", as one row of plain tiles.
+  const prefs = loadRandomPrefs();
+  let picked: number | "random" = loadPicked(opts.levels.length);
+  const picker = document.createElement("div");
+  picker.className = "level-picker";
+  picker.setAttribute("role", "listbox");
+  const tiles: HTMLButtonElement[] = [];
+  const addTile = (key: number | "random", num: string, name: string, meta: string) => {
+    const tile = document.createElement("button");
+    tile.type = "button";
+    tile.className = "level-tile";
+    tile.setAttribute("role", "option");
+    tile.innerHTML = `<span class="level-tile-num"></span><span class="level-tile-name"></span><span class="level-tile-meta"></span>`;
+    (tile.children[0] as HTMLElement).textContent = num;
+    (tile.children[1] as HTMLElement).textContent = name;
+    (tile.children[2] as HTMLElement).textContent = meta;
+    tile.addEventListener("click", () => {
+      picked = key;
+      savePicked(key);
+      paintPicker();
+    });
+    tile.dataset.key = String(key);
+    tiles.push(tile);
+    picker.appendChild(tile);
+  };
+  opts.levels.forEach((level, i) => addTile(i, String(i + 1).padStart(2, "0"), level.title, `${level.bpm} bpm`));
+  addTile("random", "··", "Random exercise", "new each time");
 
-  const levelsPanel = document.createElement("div");
-  levelsPanel.className = "panel";
-  const levelsLabel = document.createElement("p");
-  levelsLabel.className = "section-label";
-  levelsLabel.textContent = "Levels";
-  levelsPanel.appendChild(levelsLabel);
-
-  const list = document.createElement("ul");
-  list.className = "level-list";
-  opts.levels.forEach((level, index) => {
-    const li = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "level-item";
-
-    const titleSpan = document.createElement("span");
-    titleSpan.textContent = level.title;
-    const bpmSpan = document.createElement("span");
-    bpmSpan.className = "level-item-bpm";
-    bpmSpan.textContent = `${level.bpm} bpm`;
-    const num = document.createElement("span");
-    num.className = "level-item-num";
-    num.textContent = String(index + 1).padStart(2, "0");
-    titleSpan.className = "level-item-title";
-    button.append(num, titleSpan, bpmSpan);
-
-    button.addEventListener("click", () => opts.onPlay(index, mode));
-    li.appendChild(button);
-    list.appendChild(li);
+  const randomRow = document.createElement("div");
+  randomRow.className = "random-row";
+  const tierSelect = document.createElement("select");
+  tierSelect.className = "tier-select";
+  tierSelect.setAttribute("aria-label", "Difficulty");
+  TIER_NAMES.forEach((name, i) => {
+    const option = document.createElement("option");
+    option.value = String(i + 1);
+    option.textContent = `${i + 1} · ${name}`;
+    tierSelect.appendChild(option);
   });
-  levelsPanel.appendChild(list);
-  root.appendChild(levelsPanel);
+  tierSelect.value = String(prefs.tier);
+  const barsSwitch = document.createElement("div");
+  barsSwitch.className = "mode-switch bars-switch";
+  let bars = prefs.bars;
+  const barButtons = BAR_OPTIONS.map((b) => {
+    const button = createModeOption(`${b}`, b === bars);
+    button.setAttribute("aria-label", `${b} bars`);
+    button.addEventListener("click", () => {
+      bars = b;
+      barButtons.forEach((other, i) => other.classList.toggle("active", BAR_OPTIONS[i] === b));
+    });
+    return button;
+  });
+  barsSwitch.append(...barButtons);
+  randomRow.append(tierSelect, barsSwitch);
 
-  root.appendChild(buildRandomSection(() => mode, opts));
+  const play = document.createElement("button");
+  play.type = "button";
+  play.className = "play-button";
+  play.innerHTML = `<span class="play-button-label">Play</span><span class="play-button-what"></span>`;
+  const playWhat = play.lastChild as HTMLElement;
 
-  const footer = document.createElement("div");
-  footer.className = "home-footer";
+  function paintPicker(): void {
+    for (const tile of tiles) tile.classList.toggle("active", tile.dataset.key === String(picked));
+    tile0Scroll();
+    randomRow.hidden = picked !== "random";
+    playWhat.textContent = picked === "random" ? "Random exercise" : (opts.levels[picked]?.title ?? "");
+  }
+  function tile0Scroll(): void {
+    const active = tiles.find((t) => t.classList.contains("active"));
+    active?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  play.addEventListener("click", () => {
+    if (picked === "random") {
+      const tier = Number(tierSelect.value);
+      saveRandomPrefs({ tier, bars });
+      opts.onRandom(tier, bars, mode);
+    } else {
+      opts.onPlay(picked, mode);
+    }
+  });
+
   const calibrateLink = document.createElement("button");
   calibrateLink.type = "button";
   calibrateLink.className = "link-button";
@@ -222,11 +258,15 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
       renderHome(container, opts);
     })();
   });
-  footer.appendChild(calibrateLink);
-  root.appendChild(footer);
+
+  const modeRow = document.createElement("div");
+  modeRow.className = "mode-row";
+  modeRow.append(modeSwitch, modeHint);
+  dock.append(modeRow, picker, randomRow, play, calibrateLink);
+  root.appendChild(dock);
 
   container.appendChild(root);
-  window.scrollTo(0, 0);
+  paintPicker();
   startHomeScene(opts.scene, plateSlot);
   opts.engine.setAmbience(0.6, 2);
 }
@@ -237,6 +277,28 @@ function createModeOption(label: string, active: boolean): HTMLButtonElement {
   button.className = active ? "mode-option active" : "mode-option";
   button.textContent = label;
   return button;
+}
+
+const PICKED_KEY = "resonance.picked";
+
+function loadPicked(levelCount: number): number | "random" {
+  try {
+    const raw = localStorage.getItem(PICKED_KEY);
+    if (raw === "random") return "random";
+    const n = Number(raw);
+    if (raw !== null && Number.isInteger(n) && n >= 0 && n < levelCount) return n;
+  } catch {
+    // Storage unavailable.
+  }
+  return 0;
+}
+
+function savePicked(key: number | "random"): void {
+  try {
+    localStorage.setItem(PICKED_KEY, String(key));
+  } catch {
+    // Not persisted; harmless.
+  }
 }
 
 const RANDOM_PREFS_KEY = "resonance.randomPrefs";
@@ -264,52 +326,3 @@ function saveRandomPrefs(prefs: { tier: number; bars: 4 | 8 | 16 }): void {
   }
 }
 
-/** "Random exercise": pick a tier (what's being practised) and a length, get a fresh sight-reading exercise. */
-function buildRandomSection(getMode: () => Mode, opts: HomeOptions): HTMLElement {
-  const prefs = loadRandomPrefs();
-  const section = document.createElement("div");
-  section.className = "random-section panel";
-
-  const label = document.createElement("p");
-  label.className = "section-label";
-  label.textContent = "Random exercise";
-  section.appendChild(label);
-
-  const tierSelect = document.createElement("select");
-  tierSelect.className = "tier-select";
-  TIER_NAMES.forEach((name, i) => {
-    const option = document.createElement("option");
-    option.value = String(i + 1);
-    option.textContent = `${i + 1} · ${name}`;
-    tierSelect.appendChild(option);
-  });
-  tierSelect.value = String(prefs.tier);
-  section.appendChild(tierSelect);
-
-  const barsSwitch = document.createElement("div");
-  barsSwitch.className = "mode-switch";
-  let bars = prefs.bars;
-  const barButtons = BAR_OPTIONS.map((b) => {
-    const button = createModeOption(`${b} bars`, b === bars);
-    button.addEventListener("click", () => {
-      bars = b;
-      barButtons.forEach((other, i) => other.classList.toggle("active", BAR_OPTIONS[i] === b));
-    });
-    return button;
-  });
-  barsSwitch.append(...barButtons);
-  section.appendChild(barsSwitch);
-
-  const start = document.createElement("button");
-  start.type = "button";
-  start.className = "primary-button";
-  start.textContent = "New exercise";
-  start.addEventListener("click", () => {
-    const tier = Number(tierSelect.value);
-    saveRandomPrefs({ tier, bars });
-    opts.onRandom(tier, bars, getMode());
-  });
-  section.appendChild(start);
-
-  return section;
-}
