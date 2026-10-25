@@ -84,6 +84,20 @@ describe("judgeRun", () => {
     expect(extraResult.accuracy).toBeLessThan(cleanResult.accuracy);
   });
 
+  it("scores a steady player with realistic phone jitter in the 90s", () => {
+    // Deterministic pseudo-random jitter: ±~25 ms spread around a constant 30 ms lateness.
+    let seed = 7;
+    const rand = () => {
+      seed = (seed * 16807) % 2147483647;
+      return seed / 2147483647;
+    };
+    const gaussian = () => Math.sqrt(-2 * Math.log(rand() + 1e-9)) * Math.cos(2 * Math.PI * rand());
+    const hits = onsets.map((o) => ({ time: startTime + o.beat * secPerQuarter + 0.03 + 0.025 * gaussian(), zone: 0 as const }));
+    const result = judgeRun(onsets, rests, startTime, bpm, hits, []);
+    expect(result.accuracy).toBeGreaterThan(90);
+    expect(result.judgements.filter((j) => j.grade === "miss")).toHaveLength(0);
+  });
+
   it("validates every shipped level", () => {
     for (const lvl of LEVELS) {
       const lvlOnsets = levelOnsets(lvl);
@@ -103,18 +117,30 @@ describe("judgeRun", () => {
     expect(result.accuracy).toBeGreaterThan(98);
   });
 
-  it("widened onset windows: a 60ms-late tap still grades good, a 130ms-late tap still matches and grades ok", () => {
-    const firstOnset = onsets[0];
-    if (!firstOnset) throw new Error("expected an onset");
-    const judge = createLiveJudge(onsets, startTime, bpm);
+  it("widened onset windows: an 80ms-late tap still grades good, a 140ms-late tap still matches and grades ok", () => {
+    // Judged on the second note: the first one has no pulse of the player's own yet, so it is
+    // deliberately graded more leniently (see the next test).
+    const second = onsets[1];
+    if (!second) throw new Error("expected two onsets");
+    const onTime = (beat: number) => startTime + beat * secPerQuarter;
 
-    const good = judge.judgeHit({ time: startTime + firstOnset.beat * secPerQuarter + 0.06, zone: 0 });
+    const judge = createLiveJudge(onsets, startTime, bpm);
+    judge.judgeHit({ time: onTime(0), zone: 0 });
+    const good = judge.judgeHit({ time: onTime(second.beat) + 0.08, zone: 0 });
     expect(good.grade).toBe("good");
 
     const judge2 = createLiveJudge(onsets, startTime, bpm);
-    const ok = judge2.judgeHit({ time: startTime + firstOnset.beat * secPerQuarter + 0.13, zone: 0 });
+    judge2.judgeHit({ time: onTime(0), zone: 0 });
+    const ok = judge2.judgeHit({ time: onTime(second.beat) + 0.14, zone: 0 });
     expect(ok.grade).toBe("ok");
-    expect(ok.onsetIndex).toBe(0); // still matched, not discarded as an unrelated extra hit
+    expect(ok.onsetIndex).toBe(1); // still matched, not discarded as an unrelated extra hit
+  });
+
+  it("does not let a constant timing offset (calibration error) spoil the notes after the first", () => {
+    const judge = createLiveJudge(onsets, startTime, bpm);
+    const grades = onsets.map((o) => judge.judgeHit({ time: startTime + o.beat * secPerQuarter + 0.2, zone: 0 }).grade);
+    expect(grades[0]).not.toBe("miss");
+    expect(grades.slice(1).every((g) => g === "perfect")).toBe(true);
   });
 
   describe("holding note lengths", () => {
@@ -182,13 +208,13 @@ describe("judgeRun", () => {
       expect(restJudgement?.grade).toBe("perfect");
     });
 
-    it("marks a rest miss when the previous note (even a plain quarter) is held more than 150ms into it, but not for a small overhang", () => {
+    it("marks a rest miss when the previous note (even a plain quarter) is held well into it (past 30% of its length), but not for a small overhang", () => {
       const hits = hitsAtTempo(restsOnsets, 1);
       const firstRest = restsRestSpans[0];
       if (!firstRest) throw new Error("expected a rest");
       const restStartTime = startTime + firstRest.beat * restsSecPerQuarter;
 
-      const releasesHeldThrough = heldReleases(restsOnsets, 1).map((r, i) => (restsOnsets[i]?.eventIndex === firstRest.eventIndex - 1 ? { ...r, time: restStartTime + 0.2 } : r));
+      const releasesHeldThrough = heldReleases(restsOnsets, 1).map((r, i) => (restsOnsets[i]?.eventIndex === firstRest.eventIndex - 1 ? { ...r, time: restStartTime + 0.3 } : r));
       const heldThroughResult = judgeRun(restsOnsets, restsRestSpans, startTime, restsLevel.bpm, hits, releasesHeldThrough);
       const heldThroughRest = heldThroughResult.restJudgements.find((r) => r.eventIndex === firstRest.eventIndex);
       expect(heldThroughRest?.grade).toBe("miss");

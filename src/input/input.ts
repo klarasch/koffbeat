@@ -1,6 +1,13 @@
 import type { AudioEngine } from "../audio/engine";
 import type { Hit, Release } from "../types";
 
+export interface InputOptions {
+  /** Draw the built-in DOM ripple under the tap (default true). */
+  ripple?: boolean;
+  /** Called synchronously on every press, with the tap point (null for keyboard), for custom visuals. */
+  onPress?: (zone: 0 | 1, clientX: number | null, clientY: number | null) => void;
+}
+
 /**
  * Attaches pointer + keyboard input handling to `target`.
  * Returns a detach function that removes every listener and style it added.
@@ -17,7 +24,9 @@ export function attachInput(
   onHit: (hit: Hit) => void,
   getOffsetSec: () => number,
   onRelease: (release: Release) => void = () => {},
+  options: InputOptions = {},
 ): () => void {
+  const showRipple = options.ripple ?? true;
   const previousTouchAction = target.style.touchAction;
   const previousUserSelect = target.style.userSelect;
   const previousWebkitUserSelect = target.style.getPropertyValue("-webkit-user-select");
@@ -80,9 +89,10 @@ export function attachInput(
     animation.onfinish = () => el.remove();
   }
 
-  function registerHit(zone: 0 | 1, eventTimeStamp: number, clientX: number | null): void {
+  function registerHit(zone: 0 | 1, eventTimeStamp: number, clientX: number | null, clientY: number | null): void {
     const time = eventTimeToAudioTime(eventTimeStamp);
-    ripple(clientX, zone);
+    if (showRipple) ripple(clientX, zone);
+    options.onPress?.(zone, clientX, clientY);
     onHit({ time, zone });
   }
 
@@ -95,7 +105,7 @@ export function attachInput(
     event.preventDefault();
     const zone = zoneForClientX(event.clientX);
     pointerZones.set(event.pointerId, zone);
-    registerHit(zone, event.timeStamp, event.clientX);
+    registerHit(zone, event.timeStamp, event.clientX, event.clientY);
   }
 
   function handlePointerUp(event: PointerEvent): void {
@@ -126,7 +136,7 @@ export function attachInput(
     if (key === " " || key === "arrowleft" || key === "arrowright") {
       event.preventDefault();
     }
-    registerHit(zone, event.timeStamp, null);
+    registerHit(zone, event.timeStamp, null, null);
   }
 
   function handleKeyUp(event: KeyboardEvent): void {

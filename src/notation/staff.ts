@@ -36,6 +36,12 @@ export interface StaffView {
    * player should be free to scroll and review every system.
    */
   setScrollable(scrollable: boolean): void;
+  /**
+   * Draws (or, with null, removes) the hold bar under a sustained note: a thin track spanning the
+   * note's written length on the staff, filled to `progress` (0..1). `quarters` is the sounding
+   * length of the whole tied chain starting at `eventIndex`.
+   */
+  setHold(eventIndex: number, quarters: number, progress: number | null, state?: "filling" | "ready" | "over"): void;
   /** Remove all grading colours, restoring the default ink. */
   clearMarks(): void;
   destroy(): void;
@@ -113,6 +119,7 @@ interface EventMeta {
   note: StaveNote;
   x: number;
   line: number;
+  beat: number;
 }
 
 interface Anchor {
@@ -121,6 +128,7 @@ interface Anchor {
 }
 
 interface BarMeta {
+  line: number;
   startBeat: number;
   endBeat: number;
   top: number;
@@ -263,6 +271,11 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   let cursorEl: HTMLDivElement | null = null;
   let nextMarkerEl: HTMLDivElement | null = null;
   let nextMarkerIndex: number | null = null;
+  let holdEl: HTMLDivElement | null = null;
+  /** Every non-default note state, re-applied after a rebuild (resize) so marks survive it. */
+  const states = new Map<number, NoteState>();
+  let builtWidth = -1;
+  let holdFillEl: HTMLDivElement | null = null;
   let eventMeta: EventMeta[] = [];
   let bars: BarMeta[] = [];
   let scrollable = false;
@@ -310,12 +323,15 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     container.innerHTML = "";
     nextMarkerEl = null;
     nextMarkerIndex = null;
+    holdEl = null;
+    holdFillEl = null;
     if (getComputedStyle(container).position === "static") {
       container.style.position = "relative";
     }
     applyScrollStyle();
 
     const measuredWidth = container.clientWidth || container.getBoundingClientRect().width || FALLBACK_WIDTH;
+    builtWidth = container.clientWidth;
     const availableWidth = Math.max(measuredWidth, CLEF_TIME_WIDTH + 60);
     const totalBars = level.bars.length;
 
@@ -396,13 +412,14 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
           const x = (note.getNoteHeadBeginX() + note.getNoteHeadEndX()) / 2;
           const globalIndex = noteByEvent.length;
           noteByEvent[globalIndex] = note;
-          newEventMeta[globalIndex] = { note, x, line: s };
+          newEventMeta[globalIndex] = { note, x, line: s, beat: beatAcc };
           barAnchors.push({ beat: beatAcc, x });
           beatAcc += eventQuarters(ev);
         });
         barAnchors.push({ beat: beatAcc, x: stave.getNoteEndX() });
 
         newBars.push({
+          line: s,
           startBeat: barStartBeat,
           endBeat: beatAcc,
           top: staveY - CURSOR_TOP_OFFSET,
@@ -470,17 +487,28 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
 
   build();
 
-  resizeObserver = new ResizeObserver(() => build());
+  // Layout depends only on width: a height change (the results panel opening) needs no rebuild.
+  resizeObserver = new ResizeObserver(() => {
+    if (container.clientWidth === builtWidth) return;
+    const scrollTop = container.scrollTop;
+    build();
+    for (const [eventIndex, state] of states) view.setState(eventIndex, state);
+    container.scrollTop = scrollTop;
+  });
   resizeObserver.observe(container);
 
   function ensureNextMarker(): HTMLDivElement {
     if (nextMarkerEl) return nextMarkerEl;
     const marker = document.createElement("div");
     marker.style.position = "absolute";
-    marker.style.width = "6px";
-    marker.style.height = "6px";
-    marker.style.borderRadius = "50%";
+    // A short glowing dash under the notehead: never beside it, where a dot would read as a
+    // dotted note.
+    marker.style.width = "14px";
+    marker.style.height = "2px";
+    marker.style.borderRadius = "1px";
     marker.style.background = ink;
+    marker.style.boxShadow = `0 0 8px ${NEXT_GLOW_COLOR}`;
+    marker.style.opacity = "0.8";
     marker.style.pointerEvents = "none";
     marker.style.transform = "translate(-50%, 0)";
     container.appendChild(marker);
@@ -494,7 +522,7 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     const marker = ensureNextMarker();
     const staveY = TOP_MARGIN + meta.line * SYSTEM_GAP;
     marker.style.left = `${meta.x}px`;
-    marker.style.top = `${staveY + 22}px`;
+    marker.style.top = `${staveY + 53}px`;
     marker.style.display = "block";
     nextMarkerIndex = eventIndex;
   }
@@ -506,7 +534,48 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     }
   }
 
-  return {
+  function ensureHoldBar(): { track: HTMLDivElement; fill: HTMLDivElement } {
+    if (holdEl && holdFillEl) return { track: holdEl, fill: holdFillEl };
+    const track = document.createElement("div");
+    track.className = "staff-hold";
+    const fill = document.createElement("div");
+    fill.className = "staff-hold-fill";
+    track.appendChild(fill);
+    container.appendChild(track);
+    holdEl = track;
+    holdFillEl = fill;
+    return { track, fill };
+  }
+
+  /** x where a note starting at `meta` and lasting `quarters` ends, clamped to the note's own line. */
+  function holdEndX(meta: EventMeta, quarters: number): number {
+    const endBeat = meta.beat + quarters;
+    const lineBars = bars.filter((b) => b.line === meta.line);
+    const lastOnLine = lineBars[lineBars.length - 1];
+    if (!lastOnLine) return meta.x + 40;
+    if (endBeat >= lastOnLine.endBeat) return lastOnLine.anchors[lastOnLine.anchors.length - 1]?.x ?? meta.x + 40;
+    const bar = lineBars.find((b) => endBeat >= b.startBeat && endBeat < b.endBeat) ?? lastOnLine;
+    return interpolateX(bar, endBeat) - 8;
+  }
+
+  const view: StaffView = {
+    setHold(eventIndex: number, quarters: number, progress: number | null, state: "filling" | "ready" | "over" = "filling"): void {
+      if (progress === null) {
+        if (holdEl) holdEl.style.display = "none";
+        return;
+      }
+      const meta = eventMeta[eventIndex];
+      if (!meta) return;
+      const { track, fill } = ensureHoldBar();
+      const left = meta.x - 6;
+      const right = Math.max(left + 16, holdEndX(meta, quarters));
+      track.style.display = "block";
+      track.style.left = `${left}px`;
+      track.style.width = `${right - left}px`;
+      track.style.top = `${TOP_MARGIN + meta.line * SYSTEM_GAP + 52}px`;
+      track.dataset.state = state;
+      fill.style.transform = `scaleX(${Math.min(1, Math.max(0, progress))})`;
+    },
     onsetX(eventIndex: number): { x: number; line: number } {
       const meta = eventMeta[eventIndex];
       if (!meta) throw new RangeError(`onsetX: no event at index ${eventIndex}`);
@@ -556,6 +625,8 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       if (el) paintSvgTree(el, GRADE_COLORS[grade]);
     },
     setState(eventIndex: number, state: NoteState): void {
+      if (state === "upcoming") states.delete(eventIndex);
+      else states.set(eventIndex, state);
       const meta = eventMeta[eventIndex];
       if (!meta) return;
       const el = meta.note.getSVGElement();
@@ -602,6 +673,7 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       applyScrollStyle();
     },
     clearMarks(): void {
+      states.clear();
       for (const meta of eventMeta) {
         const el = meta.note.getSVGElement();
         if (el) {
@@ -619,4 +691,5 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       container.innerHTML = "";
     },
   };
+  return view;
 }

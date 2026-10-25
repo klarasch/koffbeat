@@ -4,12 +4,16 @@
 
 import type { Grade, Hit, Onset, Release, RestSpan, RunResult } from "../types";
 
-/** Grade windows, as the absolute relative error in ms. Loosened for phone play: a touchscreen
- * tap has more inherent jitter than a drum pad, and these still comfortably separate "good
- * musician, phone latency" from an actually wrong tap. */
-export const PERFECT_MS = 50;
-export const GOOD_MS = 90;
-export const OK_MS = 140;
+/** Base grade windows, as the absolute relative error in ms, for notes that follow closely on
+ * the previous one (an interval of `WINDOW_REFERENCE_GAP_MS` or less). Human timing spread grows
+ * with the interval being timed (roughly Weber's law), so after a longer gap the windows widen
+ * with the square root of the gap — see `gradeWindows`. */
+export const PERFECT_MS = 55;
+export const GOOD_MS = 95;
+export const OK_MS = 150;
+const WINDOW_REFERENCE_GAP_MS = 600;
+/** The windows never widen beyond this multiple of the base, however long the gap. */
+const WINDOW_MAX_SCALE = 1.8;
 
 /**
  * Matching is decoupled from grading: a press can MATCH an onset far outside the grading
@@ -22,6 +26,12 @@ const NEIGHBOUR_WINDOW_FRACTION = 0.45;
 
 /** Online pulse tracking: how much each matched hit nudges the tempo estimate. */
 const PULSE_SMOOTHING = 0.2;
+/**
+ * Online pulse tracking: how far the phase follows each matched hit. Snapping fully (1.0) would
+ * judge every note against the previous tap alone, adding that tap's own jitter to this one's;
+ * partial correction keeps following a drifting player while averaging the jitter out.
+ */
+const PHASE_CORRECTION = 0.5;
 /** Online pulse tracking: estimate is clamped to nominal tempo ± this fraction. */
 const PULSE_CLAMP_FRACTION = 0.15;
 
@@ -37,23 +47,41 @@ const PULSE_CLAMP_FRACTION = 0.15;
  * tied chains) are hold-graded at all: a quarter note or shorter is "played" the instant it's
  * tapped, and a normal short tap on it must not read as a release miss.
  */
-export const RELEASE_EARLY_MIN_MS = 150;
+export const RELEASE_EARLY_MIN_MS = 180;
 export const RELEASE_EARLY_FRACTION = 0.3;
-export const RELEASE_LATE_MS = 120;
-export const RELEASE_OK_EXTRA_MS = 150;
+export const RELEASE_LATE_MIN_MS = 180;
+export const RELEASE_LATE_FRACTION = 0.15;
+export const RELEASE_OK_EXTRA_MS = 200;
 /** Notes at or below this length (in quarters) get no release/hold grade at all. */
 export const SUSTAINED_MIN_QUARTERS = 1;
-/** A rest is spoiled when the previous note is still held this many ms into it. */
+/** A rest is spoiled when the previous note is still held this many ms into it (or this
+ * fraction of the rest's length, whichever is larger). */
 export const REST_HELD_THROUGH_MS = 150;
+const REST_HELD_THROUGH_FRACTION = 0.3;
 
 function nominalSecPerQuarter(bpm: number): number {
   return 60 / bpm;
 }
 
-function gradeFor(absErrorMs: number): Grade {
-  if (absErrorMs <= PERFECT_MS) return "perfect";
-  if (absErrorMs <= GOOD_MS) return "good";
-  if (absErrorMs <= OK_MS) return "ok";
+/** Gap from onset `index` back to the previous onset, in quarters (a quarter for the first). */
+function gapQuartersBefore(onsets: Onset[], index: number): number {
+  const onset = onsets[index];
+  const prev = onsets[index - 1];
+  if (!onset || !prev) return 1;
+  return Math.max(0.25, onset.beat - prev.beat);
+}
+
+/** Grade windows for a note that comes `gapMs` after the previous one. */
+export function gradeWindows(gapMs: number): { perfect: number; good: number; ok: number } {
+  const scale = Math.min(WINDOW_MAX_SCALE, Math.max(1, Math.sqrt(gapMs / WINDOW_REFERENCE_GAP_MS)));
+  return { perfect: PERFECT_MS * scale, good: GOOD_MS * scale, ok: OK_MS * scale };
+}
+
+function gradeFor(absErrorMs: number, gapMs: number): Grade {
+  const w = gradeWindows(gapMs);
+  if (absErrorMs <= w.perfect) return "perfect";
+  if (absErrorMs <= w.good) return "good";
+  if (absErrorMs <= w.ok) return "ok";
   return "miss";
 }
 
@@ -93,6 +121,9 @@ class PulseEstimator {
   private secPerQuarter: number;
   private readonly min: number;
   private readonly max: number;
+  /** False until the first matched hit: that one sets the phase outright (it carries any
+   * leftover latency-calibration error, which shouldn't leak into the following notes). */
+  private hasHit = false;
 
   constructor(startTime: number, nominal: number) {
     this.anchorTime = startTime;
@@ -110,13 +141,16 @@ class PulseEstimator {
   }
 
   update(beat: number, time: number): void {
+    const predicted = this.predict(beat);
+    const corrected = this.hasHit ? predicted + PHASE_CORRECTION * (time - predicted) : time;
+    this.hasHit = true;
     if (beat > this.anchorBeat) {
       const instantaneous = (time - this.anchorTime) / (beat - this.anchorBeat);
       const blended = this.secPerQuarter + PULSE_SMOOTHING * (instantaneous - this.secPerQuarter);
       this.secPerQuarter = Math.min(this.max, Math.max(this.min, blended));
     }
     this.anchorBeat = beat;
-    this.anchorTime = time;
+    this.anchorTime = corrected;
   }
 }
 
@@ -173,18 +207,31 @@ export interface LiveJudge {
    * (the player pressed again before releasing) — call before processing the new press.
    */
   implicitRelease(zone: 0 | 1, time: number): LiveReleaseJudgement;
+  /** Predicted audio time of `beat` on the player's current pulse (e.g. a held note's end). */
+  predictTime(beat: number): number;
+  /** The player's current pulse, in seconds per quarter note. */
+  secPerQuarter(): number;
 }
 
 function durationMsFor(onset: Onset, secPerQuarter: number): number {
   return onset.quarters * secPerQuarter * 1000;
 }
 
+/** The release window around a sustained note's end, in ms: how early and how late still counts as clean. */
+export function releaseWindowMs(durationMs: number): { early: number; late: number } {
+  return {
+    early: Math.max(RELEASE_EARLY_MIN_MS, RELEASE_EARLY_FRACTION * durationMs),
+    late: Math.max(RELEASE_LATE_MIN_MS, RELEASE_LATE_FRACTION * durationMs),
+  };
+}
+
 function gradeRelease(releaseTime: number, predictedEnd: number, durationMs: number): { errorMs: number; grade: Grade } {
   const errorMs = (releaseTime - predictedEnd) * 1000;
   const earlyWindowMs = Math.max(RELEASE_EARLY_MIN_MS, RELEASE_EARLY_FRACTION * durationMs);
+  const lateWindowMs = Math.max(RELEASE_LATE_MIN_MS, RELEASE_LATE_FRACTION * durationMs);
   let overshootMs = 0;
   if (errorMs < -earlyWindowMs) overshootMs = -earlyWindowMs - errorMs;
-  else if (errorMs > RELEASE_LATE_MS) overshootMs = errorMs - RELEASE_LATE_MS;
+  else if (errorMs > lateWindowMs) overshootMs = errorMs - lateWindowMs;
   const grade: Grade = overshootMs <= 0 ? "perfect" : overshootMs < RELEASE_OK_EXTRA_MS ? "ok" : "miss";
   return { errorMs, grade };
 }
@@ -230,7 +277,11 @@ export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number)
       const onset = onsets[match.index];
       if (onset) estimator.update(onset.beat, hit.time);
 
-      const grade = gradeFor(Math.abs(match.errorMs));
+      // The very first note has no pulse of the player's own to be judged against yet, only the
+      // count-in (plus any calibration error), so it gets the widest windows.
+      const isFirst = matchedOnsets.size === 1;
+      const gapMs = isFirst ? Number.POSITIVE_INFINITY : gapQuartersBefore(onsets, match.index) * estimator.currentSecPerQuarter() * 1000;
+      const grade = gradeFor(Math.abs(match.errorMs), gapMs);
       onsetGradeByIndex.set(match.index, grade);
       heldByZone.set(hit.zone, match.index);
 
@@ -241,6 +292,12 @@ export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number)
     },
     implicitRelease(zone: 0 | 1, time: number): LiveReleaseJudgement {
       return releaseHeld(zone, time);
+    },
+    predictTime(beat: number): number {
+      return estimator.predict(beat);
+    },
+    secPerQuarter(): number {
+      return estimator.currentSecPerQuarter();
     },
   };
 }
@@ -352,7 +409,7 @@ function localRelativeErrorMs(matchedPoints: MatchedPoint[], onsetIndex: number,
   return (hitTime - predicted) * 1000;
 }
 
-const GRADE_SCORE: Record<Grade, number> = { perfect: 1, good: 0.8, ok: 0.5, miss: 0 };
+const GRADE_SCORE: Record<Grade, number> = { perfect: 1, good: 0.9, ok: 0.65, miss: 0 };
 const EXTRA_HIT_PENALTY = 3;
 /** Weight of onset (attack) timing vs hold/rest correctness in the blended accuracy score. */
 const ONSET_WEIGHT = 0.7;
@@ -528,7 +585,8 @@ function judgeRests(
     if (pressedDuringRest) return { eventIndex: rest.eventIndex, grade: "miss" as Grade, reason: "you tapped during it" };
 
     const prevReleaseTime = prevOnsetIndex === -1 ? undefined : releaseTimes.get(prevOnsetIndex);
-    const heldThroughRest = prevReleaseTime !== undefined && prevReleaseTime > restStart + REST_HELD_THROUGH_MS / 1000;
+    const heldAllowanceSec = Math.max(REST_HELD_THROUGH_MS / 1000, REST_HELD_THROUGH_FRACTION * (restEnd - restStart));
+    const heldThroughRest = prevReleaseTime !== undefined && prevReleaseTime > restStart + heldAllowanceSec;
     if (heldThroughRest) return { eventIndex: rest.eventIndex, grade: "miss" as Grade, reason: "held through it" };
 
     return { eventIndex: rest.eventIndex, grade: "perfect" as Grade, reason: null };
@@ -573,7 +631,7 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
     const nominalTime = startTime + onset.beat * nominal;
     const strictErrorMs = (hit.time - nominalTime) * 1000;
     const relativeErrorMs = localRelativeErrorMs(matchedPoints, index, onset.beat, hit.time, startTime, nominal);
-    const grade = gradeFor(Math.abs(relativeErrorMs));
+    const grade = gradeFor(Math.abs(relativeErrorMs), gapQuartersBefore(onsets, index) * nominal * 1000);
 
     const releaseTime = releaseTimes.get(index) ?? null;
     let releaseErrorMs: number | null = null;

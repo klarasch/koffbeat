@@ -180,8 +180,8 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
     tapPad.style.height = "40vh";
     tapPad.style.margin = "0 0 20px";
     tapPad.style.borderRadius = "16px";
-    tapPad.style.background = "#161a22";
-    tapPad.style.border = "1px solid #2a303c";
+    tapPad.style.background = "rgba(127, 224, 196, 0.06)";
+    tapPad.style.border = "1px solid rgba(127, 224, 196, 0.25)";
     tapPad.style.fontSize = "18px";
     tapPad.style.letterSpacing = "0.08em";
 

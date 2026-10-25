@@ -30,6 +30,13 @@ export interface AudioEngine {
   stopAll(): void;
   /** Plays an immediate, low-latency tactile tap sound for player input feedback. */
   playHit(zone: 0 | 1): void;
+  /**
+   * Fades the ambient drone to `level` (0 = silent, 1 = full). It has no rhythm of its own, so
+   * it can sit under the clicks without pulling the player's timing. Not affected by stopAll.
+   */
+  setAmbience(level: number, rampSec?: number): void;
+  /** A soft, slow-blooming chord for the end of a run; brighter for higher `quality` (0..1). */
+  chime(quality: number): void;
 }
 
 /** How far ahead of "now" the look-ahead scheduler schedules audio nodes, in seconds. */
@@ -210,5 +217,92 @@ export function createAudioEngine(): AudioEngine {
     trackNode(osc);
   }
 
-  return { ctx, unlock, now, scheduleClick, scheduleCountIn, startMetronome, stopAll, playHit };
+  // ---- Ambience: a slowly breathing Dmaj9 drone, routed around the compressor so the clicks
+  // never make it pump. Built lazily on first use (the context may still be suspended at load).
+  let ambienceGain: GainNode | null = null;
+
+  function buildAmbience(): GainNode {
+    const out = ctx.createGain();
+    out.gain.value = 0;
+    const filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = 650;
+    filter.Q.value = 0.7;
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 0.045;
+    const lfoDepth = ctx.createGain();
+    lfoDepth.gain.value = 320;
+    lfo.connect(lfoDepth);
+    lfoDepth.connect(filter.frequency);
+    lfo.start();
+
+    const voices: [number, OscillatorType, number][] = [
+      [73.42, "sine", 0.32],
+      [110.0, "triangle", 0.16],
+      [146.83, "sine", 0.14],
+      [164.81, "triangle", 0.07],
+      [185.0, "sine", 0.08],
+      [329.63, "sine", 0.035],
+    ];
+    for (const [freq, type, gain] of voices) {
+      for (const detune of [-6, 5]) {
+        const osc = ctx.createOscillator();
+        osc.type = type;
+        osc.frequency.value = freq;
+        osc.detune.value = detune;
+        const g = ctx.createGain();
+        g.gain.value = gain;
+        // Each voice swells on its own slow cycle, so the chord keeps shifting colour.
+        const swell = ctx.createOscillator();
+        swell.frequency.value = 0.02 + Math.random() * 0.05;
+        const swellDepth = ctx.createGain();
+        swellDepth.gain.value = gain * 0.6;
+        swell.connect(swellDepth);
+        swellDepth.connect(g.gain);
+        swell.start();
+        osc.connect(g);
+        g.connect(filter);
+        osc.start();
+      }
+    }
+    filter.connect(out);
+    out.connect(ctx.destination);
+    return out;
+  }
+
+  function setAmbience(level: number, rampSec = 2.5): void {
+    if (!ambienceGain) {
+      if (level <= 0) return;
+      ambienceGain = buildAmbience();
+    }
+    const t = ctx.currentTime;
+    const g = ambienceGain.gain;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(Math.max(0, Math.min(1, level)) * 0.16, t + Math.max(0.05, rampSec));
+  }
+
+  function chime(quality: number): void {
+    const t = ctx.currentTime + 0.05;
+    const q = Math.max(0, Math.min(1, quality));
+    // D major add9, opened upward with quality.
+    const partials = [293.66, 440, 587.33, 659.25, 880, 1174.66].slice(0, 3 + Math.round(q * 3));
+    partials.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      const g = ctx.createGain();
+      const start = t + i * 0.09;
+      const peak = 0.05 / (1 + i * 0.35);
+      g.gain.setValueAtTime(0, start);
+      g.gain.linearRampToValueAtTime(peak, start + 0.6);
+      g.gain.exponentialRampToValueAtTime(0.0005, start + 4.5);
+      osc.connect(g);
+      g.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 4.6);
+    });
+  }
+
+  return { ctx, unlock, now, scheduleClick, scheduleCountIn, startMetronome, stopAll, playHit, setAmbience, chime };
 }

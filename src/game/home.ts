@@ -1,6 +1,7 @@
 // Home screen: title, level list, practice/countIn mode switch, and the calibration link.
 
 import type { AudioEngine } from "../audio/engine";
+import type { Scene } from "../scene/resonance";
 import { runCalibration } from "../input/calibration";
 import { TIER_NAMES } from "../rhythm/generate";
 import type { Level, Mode } from "../types";
@@ -10,6 +11,52 @@ export interface HomeOptions {
   engine: AudioEngine;
   onPlay: (levelIndex: number, mode: Mode) => void;
   onRandom: (tier: number, bars: 4 | 8 | 16, mode: Mode) => void;
+  scene: Scene;
+  soundOn: () => boolean;
+  setSoundOn: (on: boolean) => void;
+}
+
+/** Cleanup for the home screen's scene choreography (figure cycling, plate tracking). */
+let homeCleanup: (() => void) | null = null;
+
+/** Stops the home screen's background choreography; call before showing another screen. */
+export function leaveHome(): void {
+  homeCleanup?.();
+  homeCleanup = null;
+}
+
+const FIGURE_CYCLE_MS = 9000;
+
+/** The plate floats behind the hero, gently ringing and drifting through figures. */
+function startHomeScene(scene: Scene, slot: HTMLElement): void {
+  leaveHome();
+  let figure = Math.floor(Math.random() * 12);
+  scene.reset();
+  scene.setFigure(figure);
+  scene.setCoherence(1);
+  scene.setAmbient(0.32);
+  scene.setDim(0.15);
+
+  const place = () => {
+    const rect = slot.getBoundingClientRect();
+    const radius = Math.min(rect.width * 0.46, rect.height * 0.48, 300);
+    scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height / 2, radius);
+  };
+  place();
+  const observer = new ResizeObserver(place);
+  observer.observe(slot);
+  window.addEventListener("scroll", place, { passive: true });
+  const timer = setInterval(() => {
+    figure += 1;
+    scene.setFigure(figure);
+  }, FIGURE_CYCLE_MS);
+
+  homeCleanup = () => {
+    observer.disconnect();
+    window.removeEventListener("scroll", place);
+    clearInterval(timer);
+    scene.setAmbient(0);
+  };
 }
 
 const HINT_SEEN_KEY = "resonance.seenSilentModeHint";
@@ -40,10 +87,33 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   const root = document.createElement("div");
   root.className = "home";
 
+  const hero = document.createElement("header");
+  hero.className = "home-hero";
+  const plateSlot = document.createElement("div");
+  plateSlot.className = "home-plate-slot";
   const title = document.createElement("h1");
   title.className = "home-title";
   title.textContent = "Resonance";
-  root.appendChild(title);
+  const tagline = document.createElement("p");
+  tagline.className = "home-tagline";
+  tagline.textContent = "Read rhythm. Play it true, and the sand finds its shape.";
+  plateSlot.append(title, tagline);
+
+  const soundButton = document.createElement("button");
+  soundButton.type = "button";
+  soundButton.className = "sound-toggle";
+  const paintSound = () => {
+    const on = opts.soundOn();
+    soundButton.textContent = on ? "Ambience on" : "Ambience off";
+    soundButton.classList.toggle("off", !on);
+  };
+  paintSound();
+  soundButton.addEventListener("click", () => {
+    opts.setSoundOn(!opts.soundOn());
+    paintSound();
+  });
+  hero.append(soundButton, plateSlot);
+  root.appendChild(hero);
 
   if (isTouchDevice() && !hasSeenHint()) {
     const hint = document.createElement("p");
@@ -54,6 +124,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   }
 
   const modeSection = document.createElement("div");
+  modeSection.className = "panel glass";
   const modeLabel = document.createElement("p");
   modeLabel.className = "section-label";
   modeLabel.textContent = "Mode";
@@ -88,10 +159,12 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
 
   root.appendChild(modeSection);
 
+  const levelsPanel = document.createElement("div");
+  levelsPanel.className = "panel glass";
   const levelsLabel = document.createElement("p");
   levelsLabel.className = "section-label";
   levelsLabel.textContent = "Levels";
-  root.appendChild(levelsLabel);
+  levelsPanel.appendChild(levelsLabel);
 
   const list = document.createElement("ul");
   list.className = "level-list";
@@ -106,13 +179,18 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     const bpmSpan = document.createElement("span");
     bpmSpan.className = "level-item-bpm";
     bpmSpan.textContent = `${level.bpm} bpm`;
-    button.append(titleSpan, bpmSpan);
+    const num = document.createElement("span");
+    num.className = "level-item-num";
+    num.textContent = String(index + 1).padStart(2, "0");
+    titleSpan.className = "level-item-title";
+    button.append(num, titleSpan, bpmSpan);
 
     button.addEventListener("click", () => opts.onPlay(index, mode));
     li.appendChild(button);
     list.appendChild(li);
   });
-  root.appendChild(list);
+  levelsPanel.appendChild(list);
+  root.appendChild(levelsPanel);
 
   root.appendChild(buildRandomSection(() => mode, opts));
 
@@ -124,6 +202,8 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   calibrateLink.textContent = "Calibrate latency";
   calibrateLink.addEventListener("click", () => {
     void (async () => {
+      leaveHome();
+      opts.scene.setDim(0.6);
       await opts.engine.unlock();
       container.innerHTML = "";
       const calContainer = document.createElement("div");
@@ -137,6 +217,9 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   root.appendChild(footer);
 
   container.appendChild(root);
+  window.scrollTo(0, 0);
+  startHomeScene(opts.scene, plateSlot);
+  opts.engine.setAmbience(0.6, 2);
 }
 
 function createModeOption(label: string, active: boolean): HTMLButtonElement {
@@ -176,7 +259,7 @@ function saveRandomPrefs(prefs: { tier: number; bars: 4 | 8 | 16 }): void {
 function buildRandomSection(getMode: () => Mode, opts: HomeOptions): HTMLElement {
   const prefs = loadRandomPrefs();
   const section = document.createElement("div");
-  section.className = "random-section";
+  section.className = "random-section panel glass";
 
   const label = document.createElement("p");
   label.className = "section-label";

@@ -4,7 +4,8 @@
 import "./style.css";
 import { createAudioEngine } from "./audio/engine";
 import { runCalibration } from "./input/calibration";
-import { renderHome } from "./game/home";
+import { leaveHome, renderHome } from "./game/home";
+import { createScene } from "./scene/resonance";
 import { startPlay } from "./game/play";
 import { generateLevel } from "./rhythm/generate";
 import { LEVELS } from "./rhythm/levels";
@@ -14,6 +15,53 @@ const app = document.getElementById("app");
 if (!app) throw new Error("missing #app root");
 
 const engine = createAudioEngine();
+
+// One WebGL scene for the whole app, fixed behind every screen; screens only tell it what to do.
+const canvas = document.createElement("canvas");
+canvas.id = "scene";
+canvas.setAttribute("aria-hidden", "true");
+document.body.prepend(canvas);
+const scene = createScene(canvas);
+if (!scene.supported) document.body.classList.add("no-webgl");
+// Dev-only handle for scripted test runs in the browser.
+if (import.meta.env.DEV) (window as unknown as { __resonance: unknown }).__resonance = { engine, scene };
+
+// The ambient drone respects the player's sound preference; screens just ask for a level.
+const AMBIENCE_KEY = "resonance.ambience";
+function ambienceOn(): boolean {
+  try {
+    return localStorage.getItem(AMBIENCE_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+const rawSetAmbience = engine.setAmbience.bind(engine);
+const rawChime = engine.chime.bind(engine);
+let ambienceLevel = 0;
+engine.setAmbience = (level: number, rampSec?: number) => {
+  ambienceLevel = level;
+  rawSetAmbience(ambienceOn() ? level : 0, rampSec);
+};
+engine.chime = (quality: number) => {
+  if (ambienceOn()) rawChime(quality);
+};
+function setAmbienceOn(on: boolean): void {
+  try {
+    localStorage.setItem(AMBIENCE_KEY, on ? "on" : "off");
+  } catch {
+    // Not persisted; still applies for this visit.
+  }
+  rawSetAmbience(on ? ambienceLevel : 0, 0.8);
+}
+
+// Browsers keep audio locked until a gesture: the first touch anywhere wakes the drone.
+document.addEventListener(
+  "pointerdown",
+  () => {
+    void engine.unlock().then(() => engine.setAmbience(ambienceLevel || 0.6));
+  },
+  { once: true, capture: true },
+);
 
 // iOS Safari ignores user-scalable=no and doesn't always honour touch-action, so block its
 // pinch gestures and treat a second touch within 300 ms as a tap, not a zoom. Tap targets
@@ -61,6 +109,9 @@ function showHome(): void {
   renderHome(app as HTMLElement, {
     levels: LEVELS,
     engine,
+    scene,
+    soundOn: ambienceOn,
+    setSoundOn: setAmbienceOn,
     onPlay: (index, mode) => beginLevel(fixedPick(index), mode),
     onRandom: (tier, bars, mode) => beginLevel(randomPick(tier, bars), mode),
   });
@@ -72,6 +123,7 @@ function beginLevel(pick: LevelPick | null, mode: Mode): void {
 }
 
 async function doBeginLevel(pick: LevelPick, mode: Mode): Promise<void> {
+  leaveHome();
   await engine.unlock();
 
   if (!hasSavedOffset()) {
@@ -80,10 +132,11 @@ async function doBeginLevel(pick: LevelPick, mode: Mode): Promise<void> {
     const calContainer = document.createElement("div");
     calContainer.className = "calibration-screen";
     root.appendChild(calContainer);
+    scene.setDim(0.6);
     await runCalibration(engine, calContainer);
   }
 
-  startPlay(app as HTMLElement, engine, pick.level, mode, {
+  startPlay(app as HTMLElement, engine, scene, pick.level, mode, {
     onHome: showHome,
     onRetry: () => beginLevel(pick, mode),
     onNext: () => beginLevel(pick.next(), mode),

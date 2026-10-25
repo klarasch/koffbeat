@@ -7,7 +7,8 @@ import type { AudioEngine } from "../audio/engine";
 import { loadOffset } from "../input/calibration";
 import { attachInput } from "../input/input";
 import { type NoteState, renderStaff } from "../notation/staff";
-import { combineGrades, createLiveJudge, judgeRun } from "../rhythm/judge";
+import { combineGrades, createLiveJudge, judgeRun, releaseWindowMs, SUSTAINED_MIN_QUARTERS } from "../rhythm/judge";
+import type { HoldState, Scene } from "../scene/resonance";
 import { levelOnsets, restSpans } from "../rhythm/onsets";
 import type { Grade, Hit, Level, Mode, Release, RunResult } from "../types";
 import { buildResultsPanel, describeNoteJudgement, describeRestJudgement } from "./results";
@@ -24,7 +25,17 @@ const END_MARGIN_QUARTERS = 2;
 const END_MARGIN_QUARTERS_COUNT_IN = 3;
 /** Lead-in before the count-in's first click, in seconds — gives the scheduler headroom. */
 const LEAD_IN_SEC = 0.3;
-const GRADE_FLASH_MS = 260;
+const GRADE_FLASH_MS = 420;
+/** Each 4-bar phrase draws the sand toward a new figure. */
+const BARS_PER_FIGURE = 4;
+const GRADE_VALUE: Record<Grade, number> = { perfect: 1, good: 0.85, ok: 0.55, miss: 0 };
+
+/** A stable small integer from a level id, so a level always starts on the same figure. */
+function figureSeed(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return h % 12;
+}
 
 /** True when event `index` ties into the next event (continuation, not a new sound). */
 function flattenTieFlags(level: Level): boolean[] {
@@ -62,23 +73,25 @@ interface TimelineRest {
 }
 type TimelineItem = TimelineNote | TimelineRest;
 
-export function startPlay(container: HTMLElement, engine: AudioEngine, level: Level, mode: Mode, callbacks: PlayCallbacks): void {
+export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Scene, level: Level, mode: Mode, callbacks: PlayCallbacks): void {
   container.innerHTML = "";
 
   const screen = document.createElement("div");
   screen.className = "play-screen";
-
-  const scene = document.createElement("div");
-  scene.id = "scene";
-  screen.appendChild(scene);
 
   const topbar = document.createElement("div");
   topbar.className = "play-topbar";
   const homeButton = document.createElement("button");
   homeButton.type = "button";
   homeButton.className = "home-button";
-  homeButton.textContent = "Home";
-  topbar.appendChild(homeButton);
+  homeButton.setAttribute("aria-label", "Home");
+  homeButton.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const titleEl = document.createElement("div");
+  titleEl.className = "play-title";
+  titleEl.innerHTML = `<span class="play-title-name"></span><span class="play-title-meta"></span>`;
+  (titleEl.firstChild as HTMLElement).textContent = level.title;
+  (titleEl.lastChild as HTMLElement).textContent = `${level.bpm} bpm · ${mode === "practice" ? "practice" : "count-in"}`;
+  topbar.append(homeButton, titleEl);
   screen.appendChild(topbar);
 
   const dotsRow = document.createElement("div");
@@ -93,11 +106,19 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
   screen.appendChild(dotsRow);
 
   const staffArea = document.createElement("div");
-  staffArea.className = "staff-area";
+  staffArea.className = "staff-area glass";
   const staffContainer = document.createElement("div");
   staffContainer.className = "staff-container";
   staffArea.appendChild(staffContainer);
   screen.appendChild(staffArea);
+
+  // The plate lives in the WebGL scene behind everything; this empty slot only tells it where to sit.
+  const stage = document.createElement("div");
+  stage.className = "stage";
+  const plateSlot = document.createElement("div");
+  plateSlot.className = "plate-slot";
+  stage.appendChild(plateSlot);
+  screen.appendChild(stage);
 
   const tapArea = document.createElement("div");
   tapArea.className = "tap-area";
@@ -105,20 +126,20 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
   zoneLeft.className = "tap-zone tap-zone-left";
   const zoneLeftLabel = document.createElement("span");
   zoneLeftLabel.className = "tap-zone-label";
-  zoneLeftLabel.textContent = "Tap";
+  zoneLeftLabel.textContent = "tap · F";
   zoneLeft.appendChild(zoneLeftLabel);
   const zoneRight = document.createElement("div");
   zoneRight.className = "tap-zone tap-zone-right";
   const zoneRightLabel = document.createElement("span");
   zoneRightLabel.className = "tap-zone-label";
-  zoneRightLabel.textContent = "Tap";
+  zoneRightLabel.textContent = "tap · J";
   zoneRight.appendChild(zoneRightLabel);
   tapArea.append(zoneLeft, zoneRight);
-  screen.appendChild(tapArea);
+  stage.appendChild(tapArea);
 
   const gradeFlash = document.createElement("div");
   gradeFlash.className = "grade-flash";
-  screen.appendChild(gradeFlash);
+  plateSlot.appendChild(gradeFlash);
 
   const resultsOverlay = document.createElement("div");
   resultsOverlay.className = "results-overlay";
@@ -127,7 +148,30 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
 
   container.appendChild(screen);
 
+  function placePlate(): void {
+    const rect = plateSlot.getBoundingClientRect();
+    const radius = Math.max(40, Math.min(rect.width * 0.44, rect.height * 0.46));
+    scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height / 2, radius);
+  }
+  const plateObserver = new ResizeObserver(placePlate);
+  plateObserver.observe(plateSlot);
+  placePlate();
+
+  const baseFigure = figureSeed(level.id);
+  let currentFigure = baseFigure;
+  let coherence = 1;
+  // The sand keeps whatever figure it last settled into; the piece's own figure takes over
+  // as the player plays.
+  scene.reset();
+  scene.setFigure(baseFigure);
+  scene.setCoherence(1);
+  scene.setAmbient(0);
+  scene.setDim(0);
+
   const staff = renderStaff(staffContainer, level, { theme: "dark" });
+  // The card hugs a short piece instead of leaving empty glass; long pieces scroll inside it.
+  const staffSvg = staffContainer.querySelector("svg");
+  if (staffSvg) staffArea.style.maxHeight = `${Math.ceil(staffSvg.getBoundingClientRect().height) + 12}px`;
   const onsets = levelOnsets(level);
   const rests = restSpans(level);
   const tieFlags = flattenTieFlags(level);
@@ -161,6 +205,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
   }
 
   const offsetSec = loadOffset();
+  engine.setAmbience(0.35, 1.5);
   const liveJudge = createLiveJudge(onsets, startTime, level.bpm);
   const hits: Hit[] = [];
   const releases: Release[] = [];
@@ -170,6 +215,11 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
   let flashTimeout: ReturnType<typeof setTimeout> | null = null;
   let lastResult: RunResult | null = null;
   let tooltipEl: HTMLDivElement | null = null;
+  /** The sustained note currently held, if any, for the hold bar and the plate's ring. */
+  let holding: { onsetIndex: number; eventIndex: number; quarters: number; startPerf: number; durationSec: number; earlyFrac: number; lateFrac: number } | null = null;
+  /** Screen position of the latest press, for the plate ripple. */
+  let lastPress: { x: number | null; y: number | null } = { x: null, y: null };
+  let allTappedAt: number | null = null;
 
   let nextPointer = 0;
   if (timeline.length > 0) {
@@ -187,6 +237,28 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
   const lastBeat = lastOnset ? lastOnset.beat + lastOnset.quarters : 0;
   const endMarginQuarters = mode === "countIn" ? END_MARGIN_QUARTERS_COUNT_IN : END_MARGIN_QUARTERS;
   const endTime = startTime + lastBeat * secPerQuarter + endMarginQuarters * secPerQuarter;
+
+  function holdState(fraction: number): HoldState {
+    if (!holding) return "filling";
+    if (fraction < 1 - holding.earlyFrac) return "filling";
+    if (fraction <= 1 + holding.lateFrac) return "ready";
+    return "over";
+  }
+
+  function updateHold(): void {
+    if (!holding) return;
+    const fraction = (performance.now() - holding.startPerf) / 1000 / holding.durationSec;
+    const state = holdState(fraction);
+    staff.setHold(holding.eventIndex, holding.quarters, Math.min(1, fraction), state);
+    scene.setHold({ progress: Math.min(1, fraction), state });
+  }
+
+  function endHold(onsetIndex: number | null): void {
+    if (!holding || (onsetIndex !== null && holding.onsetIndex !== onsetIndex)) return;
+    holding = null;
+    staff.setHold(0, 0, null);
+    scene.setHold(null);
+  }
 
   function showGradeFlash(grade: Grade): void {
     gradeFlash.textContent = grade;
@@ -233,6 +305,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
   }
 
   function finalizeRelease(onsetIndex: number, combinedGrade: Grade | null, releaseGrade: Grade | null): void {
+    endHold(onsetIndex);
+    if (releaseGrade !== null) {
+      // A sustained note's release lands like a second strike: a clean release keeps the figure.
+      coherence = coherence * 0.8 + GRADE_VALUE[releaseGrade] * 0.2;
+      scene.setCoherence(coherence);
+      if (releaseGrade === "miss") scene.strike("miss");
+    }
     const timelineIndex = timelineIndexForOnset.get(onsetIndex);
     if (timelineIndex === undefined) return;
     const item = timeline[timelineIndex];
@@ -253,10 +332,40 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
       // An unmatched press while a rest is the current target means the rest wasn't silent.
       const current = timeline[nextPointer];
       if (current && current.kind === "rest") setTimelineState(current, "miss");
+      coherence *= 0.8;
+      scene.setCoherence(coherence);
+      scene.strike("miss", lastPress.x, lastPress.y);
       return;
     }
 
     matchedCount++;
+    coherence = coherence * 0.7 + GRADE_VALUE[judged.grade] * 0.3;
+    scene.setCoherence(coherence);
+    scene.strike(judged.grade, lastPress.x, lastPress.y);
+
+    const onset = onsets[judged.onsetIndex];
+    if (onset) {
+      const barIndex = Math.floor(onset.beat / beatsPerBar);
+      const figure = baseFigure + Math.floor(barIndex / BARS_PER_FIGURE);
+      if (figure !== currentFigure) {
+        currentFigure = figure;
+        scene.setFigure(figure);
+      }
+      if (onset.quarters > SUSTAINED_MIN_QUARTERS) {
+        const durationSec = Math.max(0.05, liveJudge.predictTime(onset.beat + onset.quarters) - hit.time);
+        const window = releaseWindowMs(onset.quarters * liveJudge.secPerQuarter() * 1000);
+        holding = {
+          onsetIndex: judged.onsetIndex,
+          eventIndex: onset.eventIndex,
+          quarters: onset.quarters,
+          startPerf: performance.now(),
+          durationSec,
+          earlyFrac: window.early / 1000 / durationSec,
+          lateFrac: window.late / 1000 / durationSec,
+        };
+        updateHold();
+      }
+    }
     const timelineIndex = timelineIndexForOnset.get(judged.onsetIndex);
     if (timelineIndex !== undefined) {
       if (timelineIndex > nextPointer) markSkippedAsMiss(nextPointer, timelineIndex);
@@ -276,7 +385,12 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
     if (result.onsetIndex !== null) finalizeRelease(result.onsetIndex, result.combinedGrade, result.releaseGrade);
   }
 
-  const detachInput = attachInput(tapArea, engine, handleHit, () => offsetSec, handleRelease);
+  const detachInput = attachInput(tapArea, engine, handleHit, () => offsetSec, handleRelease, {
+    ripple: !scene.supported,
+    onPress: (_zone, x, y) => {
+      lastPress = { x, y };
+    },
+  });
 
   function updateCountInDots(t: number): void {
     for (let i = 0; i < dots.length; i++) {
@@ -291,10 +405,29 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
     const t = engine.now();
 
     updateCountInDots(t);
+    updateHold();
 
-    if (matchedCount >= onsets.length || t >= endTime) {
+    if (t >= endTime) {
       finish();
       return;
+    }
+    // Every note is tapped: wait for a held last note to be let go (or to run well past its
+    // end), then a breath so the final strike can ring out, before showing the results.
+    if (matchedCount >= onsets.length) {
+      const nowPerf = performance.now();
+      if (holding) {
+        const fraction = (nowPerf - holding.startPerf) / 1000 / holding.durationSec;
+        if (fraction > 1 + holding.lateFrac + 0.15) {
+          finish();
+          return;
+        }
+      } else {
+        allTappedAt ??= nowPerf;
+        if (nowPerf - allTappedAt > 450) {
+          finish();
+          return;
+        }
+      }
     }
     rafId = requestAnimationFrame(tick);
   }
@@ -349,6 +482,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
 
   function teardown(): void {
     ended = true;
+    endHold(null);
     cancelAnimationFrame(rafId);
     engine.stopAll();
     detachInput();
@@ -381,22 +515,32 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, level: Le
     // The results panel replaces the tap area (which is no longer needed) rather than
     // overlaying the whole screen, so the staff with its final grade marks stays fully visible.
     tapArea.hidden = true;
+    screen.classList.add("finished");
+
+    const quality = result.judgements.some((j) => j.hitTime !== null) ? result.accuracy / 100 : 0;
+    scene.reveal(quality);
+    engine.setAmbience(0.8, 3);
+    if (quality > 0) engine.chime(quality);
 
     resultsOverlay.innerHTML = "";
     resultsOverlay.appendChild(
       buildResultsPanel(result, level.bpm, mode, {
-        onRetry: callbacks.onRetry,
-        onNext: callbacks.onNext,
-        onHome: callbacks.onHome,
+        onRetry: () => leave(callbacks.onRetry),
+        onNext: () => leave(callbacks.onNext),
+        onHome: () => leave(callbacks.onHome),
       }),
     );
     resultsOverlay.hidden = false;
   }
 
-  homeButton.addEventListener("click", () => {
+  /** Leaving the screen for good: the plate stops following this layout. */
+  function leave(then: () => void): void {
     teardown();
-    callbacks.onHome();
-  });
+    plateObserver.disconnect();
+    then();
+  }
+
+  homeButton.addEventListener("click", () => leave(callbacks.onHome));
 
   rafId = requestAnimationFrame(tick);
 }
