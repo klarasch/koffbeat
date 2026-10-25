@@ -179,9 +179,9 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
     tapPad.style.justifyContent = "center";
     tapPad.style.height = "40vh";
     tapPad.style.margin = "0 0 20px";
-    tapPad.style.borderRadius = "16px";
-    tapPad.style.background = "rgba(127, 224, 196, 0.06)";
-    tapPad.style.border = "1px solid rgba(127, 224, 196, 0.25)";
+    tapPad.style.borderRadius = "0";
+    tapPad.style.background = "transparent";
+    tapPad.style.border = "1px solid #2a1e34";
     tapPad.style.fontSize = "18px";
     tapPad.style.letterSpacing = "0.08em";
 
@@ -250,7 +250,7 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
     const progressDots: HTMLElement[] = [];
     for (let i = 0; i < TAPS_NEEDED; i++) {
       const dot = document.createElement("span");
-      dot.style.cssText = "width:10px;height:10px;border-radius:50%;background:#2a303c;transition:background 120ms;";
+      dot.style.cssText = "width:10px;height:10px;border-radius:0;background:#e4dfd6;transition:background 120ms;";
       progress.appendChild(dot);
       progressDots.push(dot);
     }
@@ -280,7 +280,7 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
       tapPad.style.display = "flex";
       progress.style.visibility = "visible";
       progressDots.forEach((dot) => {
-        dot.style.background = "#2a303c";
+        dot.style.background = "#e4dfd6";
       });
       detach = attachInput(
         tapPad,
@@ -311,7 +311,7 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
           }
           const recent = usableTaps.slice(-TAPS_NEEDED);
           progressDots.forEach((dot, i) => {
-            dot.style.background = i < recent.length ? "#7fe0c4" : "#2a303c";
+            dot.style.background = i < recent.length ? "#e2621b" : "#e4dfd6";
           });
           if (recent.length >= TAPS_NEEDED) result = computeOffset(recent, clickTimes);
           if (result.ok || t >= endTime) {

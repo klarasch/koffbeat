@@ -12,8 +12,7 @@ export interface HomeOptions {
   onPlay: (levelIndex: number, mode: Mode) => void;
   onRandom: (tier: number, bars: 4 | 8 | 16, mode: Mode) => void;
   scene: Scene;
-  soundOn: () => boolean;
-  setSoundOn: (on: boolean) => void;
+  sounds: { label: string; isOn: () => boolean; set: (on: boolean) => void }[];
 }
 
 /** Cleanup for the home screen's scene choreography (figure cycling, plate tracking). */
@@ -39,7 +38,7 @@ function startHomeScene(scene: Scene, slot: HTMLElement): void {
 
   const place = () => {
     const rect = slot.getBoundingClientRect();
-    const radius = Math.min(rect.width * 0.46, rect.height * 0.48, 300);
+    const radius = Math.min(rect.width * 0.46, rect.height * 1.1, 340);
     scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height / 2, radius);
   };
   place();
@@ -89,30 +88,40 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
 
   const hero = document.createElement("header");
   hero.className = "home-hero";
-  const plateSlot = document.createElement("div");
-  plateSlot.className = "home-plate-slot";
+  const heroTop = document.createElement("div");
+  heroTop.className = "home-hero-top";
+  const titleBlock = document.createElement("div");
   const title = document.createElement("h1");
   title.className = "home-title";
   title.textContent = "Resonance";
   const tagline = document.createElement("p");
   tagline.className = "home-tagline";
-  tagline.textContent = "Read rhythm. Play it true, and the sand finds its shape.";
-  plateSlot.append(title, tagline);
+  tagline.textContent = "Read rhythm. Play in time and the sand lifts.";
+  titleBlock.append(title, tagline);
 
-  const soundButton = document.createElement("button");
-  soundButton.type = "button";
-  soundButton.className = "sound-toggle";
-  const paintSound = () => {
-    const on = opts.soundOn();
-    soundButton.textContent = on ? "Ambience on" : "Ambience off";
-    soundButton.classList.toggle("off", !on);
-  };
-  paintSound();
-  soundButton.addEventListener("click", () => {
-    opts.setSoundOn(!opts.soundOn());
-    paintSound();
-  });
-  hero.append(soundButton, plateSlot);
+  const toggles = document.createElement("div");
+  toggles.className = "sound-toggles";
+  for (const sound of opts.sounds) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "sound-toggle";
+    const paint = () => {
+      const on = sound.isOn();
+      button.textContent = `${sound.label}: ${on ? "on" : "off"}`;
+      button.classList.toggle("off", !on);
+      button.setAttribute("aria-pressed", String(on));
+    };
+    paint();
+    button.addEventListener("click", () => {
+      sound.set(!sound.isOn());
+      paint();
+    });
+    toggles.appendChild(button);
+  }
+  heroTop.append(titleBlock, toggles);
+  const plateSlot = document.createElement("div");
+  plateSlot.className = "home-plate-slot";
+  hero.append(heroTop, plateSlot);
   root.appendChild(hero);
 
   if (isTouchDevice() && !hasSeenHint()) {
@@ -124,7 +133,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   }
 
   const modeSection = document.createElement("div");
-  modeSection.className = "panel glass";
+  modeSection.className = "panel";
   const modeLabel = document.createElement("p");
   modeLabel.className = "section-label";
   modeLabel.textContent = "Mode";
@@ -160,7 +169,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   root.appendChild(modeSection);
 
   const levelsPanel = document.createElement("div");
-  levelsPanel.className = "panel glass";
+  levelsPanel.className = "panel";
   const levelsLabel = document.createElement("p");
   levelsLabel.className = "section-label";
   levelsLabel.textContent = "Levels";
@@ -259,7 +268,7 @@ function saveRandomPrefs(prefs: { tier: number; bars: 4 | 8 | 16 }): void {
 function buildRandomSection(getMode: () => Mode, opts: HomeOptions): HTMLElement {
   const prefs = loadRandomPrefs();
   const section = document.createElement("div");
-  section.className = "random-section panel glass";
+  section.className = "random-section panel";
 
   const label = document.createElement("p");
   label.className = "section-label";

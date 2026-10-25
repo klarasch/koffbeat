@@ -1,11 +1,11 @@
-// The Resonance scene: a dark glass plate covered in glowing sand, drawn with raw WebGL2 behind
-// the whole app. Playing excites the plate. Particles on vibrating parts (antinodes) get kicked
-// around and drift toward the still lines (nodes), so steady, accurate playing settles the sand
-// into a clean Chladni figure, while misses mix in a second, competing mode and blur it.
+// The Resonance scene: red, orange and purple sand lying on an endless white floor, seen from a
+// low camera, drawn with raw WebGL2 behind the whole app. Playing makes the floor resonate: grains
+// on the vibrating parts (antinodes) lift off and hover, grains drift toward the still lines
+// (nodes), so steady playing settles the sand into a Chladni figure. How high the sand floats
+// follows how in-tempo the playing is.
 //
-// The physics runs on the CPU (a few thousand particles; cheap thanks to a cosine recurrence),
-// the rendering on the GPU: a background shader (nebula, glass plate, ripples, hold ring, glow)
-// plus two particle passes (a sharp one and a blurred low-res one that becomes the glow).
+// Physics runs on the CPU (a cosine recurrence keeps it cheap), rendering on the GPU: a floor
+// shader (ray-cast floor with ripples and the hold ring), a shadow pass and a grain pass.
 
 import type { Grade } from "../types";
 
@@ -13,30 +13,30 @@ export type StrikeKind = Grade | "neutral";
 export type HoldState = "filling" | "ready" | "over";
 
 export interface Scene {
-  /** Where the plate sits, in viewport CSS px. The plate glides there smoothly. */
+  /** Where the sand bed sits on screen, in viewport CSS px: its centre and half-width. */
   setPlate(cx: number, cy: number, radius: number): void;
   /** Which Chladni figure the sand is drawn toward (any integer; wraps around the mode list). */
   setFigure(index: number): void;
-  /** A tap landed: ripple at the tap point (or the plate centre) and an energy kick. */
+  /** A tap landed: a ripple on the floor under the tap point (or the centre) and an energy kick. */
   strike(kind: StrikeKind, clientX?: number | null, clientY?: number | null): void;
   /** A held note in progress (0..1 of its written length), or null when nothing is held. */
   setHold(hold: { progress: number; state: HoldState } | null): void;
-  /** 0..1: how clean the playing has been so far. Low coherence blurs the figure. */
+  /** 0..1: how in-tempo and clean the playing is. High lifts the sand; low blurs the figure. */
   setCoherence(value: number): void;
   /** Background energy that keeps the sand gently moving (the home screen's idle state). */
   setAmbient(level: number): void;
-  /** 0..1: how much the plate recedes behind UI (home screen text sits on top of it). */
+  /** 0..1: how much the scene fades back behind UI. */
   setDim(value: number): void;
-  /** Scatter the sand evenly, ready for a new piece. */
+  /** Scatter the sand evenly. */
   scatter(): void;
-  /** End of a run: the figure settles and glows. `quality` is 0..1. */
+  /** End of a run: the sand rises together and settles into the figure. `quality` is 0..1. */
   reveal(quality: number): void;
-  /** Clear the reveal glow and any hold ring. */
+  /** Clear the reveal and any hold ring. */
   reset(): void;
   readonly supported: boolean;
 }
 
-/** Chladni modes (n, m, sign) for f = cos(nπx)cos(mπy) + s·cos(mπx)cos(nπy), in plate coordinates [-1, 1]. */
+/** Chladni modes (n, m, sign) for f = cos(nπx)cos(mπz) + s·cos(mπx)cos(nπz), x, z in [-1, 1]. */
 const MODES: [number, number, number][] = [
   [1, 3, -1],
   [2, 3, 1],
@@ -53,177 +53,161 @@ const MODES: [number, number, number][] = [
 ];
 const MAX_K = 8;
 
+/** Grade colours, shared with the staff: orange clean, light orange good, purple close, red miss. */
 const GRADE_RGB: Record<StrikeKind, [number, number, number]> = {
-  perfect: [0.5, 0.95, 0.82],
-  good: [0.66, 0.9, 0.48],
-  ok: [0.95, 0.78, 0.38],
-  miss: [0.95, 0.42, 0.48],
-  neutral: [0.7, 0.85, 1.0],
+  perfect: [0.89, 0.38, 0.11],
+  good: [0.94, 0.6, 0.24],
+  ok: [0.48, 0.29, 0.69],
+  miss: [0.82, 0.23, 0.23],
+  neutral: [0.45, 0.4, 0.5],
 };
-const STRIKE_ENERGY: Record<StrikeKind, number> = { perfect: 0.75, good: 0.6, ok: 0.45, miss: 0.5, neutral: 0.45 };
+const STRIKE_ENERGY: Record<StrikeKind, number> = { perfect: 0.8, good: 0.65, ok: 0.5, miss: 0.55, neutral: 0.45 };
 
 const MAX_RIPPLES = 8;
 
-const BG_VERT = `#version 300 es
+/** Camera: low over the floor, looking slightly down at the sand bed. */
+const EYE: [number, number, number] = [0, 0.62, 2.55];
+const TARGET: [number, number, number] = [0, 0, 0];
+const FOV_TAN = Math.tan((32 * Math.PI) / 180 / 2);
+
+/** Shared GLSL: world → screen through the camera basis, then the 2D fit onto the layout. */
+const CAMERA_GLSL = `
+uniform vec3 uEye;
+uniform vec3 uRight;
+uniform vec3 uUp;
+uniform vec3 uFwd;
+uniform float uTan;
+uniform float uAspect;
+uniform vec4 uFit;   // scale x, scale y, offset x, offset y (NDC)
+vec4 project(vec3 p) {
+  vec3 v = p - uEye;
+  float zc = dot(v, uFwd);
+  vec2 ndc = vec2(dot(v, uRight) / (uTan * uAspect), dot(v, uUp) / uTan) / zc;
+  ndc = ndc * uFit.xy + uFit.zw;
+  return vec4(ndc, 0.0, 1.0);
+}
+float depthOf(vec3 p) { return dot(p - uEye, uFwd); }
+`;
+
+const FLOOR_VERT = `#version 300 es
 in vec2 aPos;
-out vec2 vUv;
+out vec2 vNdc;
 void main() {
-  vUv = aPos * 0.5 + 0.5;
+  vNdc = aPos;
   gl_Position = vec4(aPos, 0.0, 1.0);
 }`;
 
-const BG_FRAG = `#version 300 es
+const FLOOR_FRAG = `#version 300 es
 precision highp float;
-in vec2 vUv;
+in vec2 vNdc;
 out vec4 outColor;
-uniform vec2 uRes;
+${CAMERA_GLSL}
 uniform float uTime;
-uniform vec3 uPlate;      // centre x, y (device px, origin bottom-left), radius
 uniform float uEnergy;
 uniform float uDim;
 uniform float uReveal;
-uniform vec3 uHold;       // progress, state (0 none, 1 filling, 2 ready, 3 over), visibility
-uniform vec4 uRipples[${MAX_RIPPLES}];   // x, y (device px), age (s), strength
+uniform vec3 uHold;     // progress, state (1 filling, 2 ready, 3 over), visibility
+uniform vec4 uRipples[${MAX_RIPPLES}];  // x, z (world), age (s), strength
 uniform vec3 uRippleColor[${MAX_RIPPLES}];
-uniform sampler2D uGlow;
+
+const vec3 SKY_TOP = vec3(0.985, 0.98, 0.968);
+const vec3 SKY_LOW = vec3(0.965, 0.955, 0.94);
+const vec3 FLOOR = vec3(0.975, 0.968, 0.955);
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-float noise(vec2 p) {
-  vec2 i = floor(p), f = fract(p);
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
-}
-float fbm(vec2 p) {
-  float v = 0.0, a = 0.5;
-  for (int i = 0; i < 5; i++) { v += a * noise(p); p = p * 2.03 + vec2(1.7, 9.2); a *= 0.5; }
-  return v;
-}
 
 void main() {
-  vec2 frag = gl_FragCoord.xy;
-  float minRes = min(uRes.x, uRes.y);
+  vec2 base = (vNdc - uFit.zw) / uFit.xy;
+  vec3 ray = normalize(uFwd + base.x * uTan * uAspect * uRight + base.y * uTan * uUp);
+  vec3 col;
+  if (ray.y >= -0.0005) {
+    col = mix(SKY_LOW, SKY_TOP, smoothstep(0.0, 0.35, ray.y));
+  } else {
+    float t = -uEye.y / ray.y;
+    vec3 hit = uEye + ray * t;
+    vec2 p = hit.xz;
+    col = FLOOR;
+    // A faint bed of warmth where the sand lies.
+    float r = length(p);
+    col -= vec3(0.01, 0.018, 0.02) * exp(-r * r * 1.4) * (0.6 + uEnergy * 0.6);
+    col += vec3(0.02, 0.006, -0.01) * exp(-r * r * 1.2) * uReveal;
 
-  // Ripples bend the background slightly (cheap refraction) and add coloured rings.
-  vec2 bend = vec2(0.0);
-  vec3 rippleLight = vec3(0.0);
-  for (int i = 0; i < ${MAX_RIPPLES}; i++) {
-    vec4 r = uRipples[i];
-    if (r.w <= 0.0) continue;
-    vec2 d = frag - r.xy;
-    float dist = length(d);
-    float radius = r.z * minRes * 0.55;
-    float width = minRes * (0.012 + r.z * 0.03);
-    float ring = exp(-pow((dist - radius) / width, 2.0)) * exp(-r.z * 2.6) * r.w;
-    bend += (dist > 0.0 ? d / dist : vec2(0.0)) * ring * 6.0;
-    rippleLight += uRippleColor[i] * ring;
+    // Ripples travel across the floor from each tap.
+    for (int i = 0; i < ${MAX_RIPPLES}; i++) {
+      vec4 rp = uRipples[i];
+      if (rp.w <= 0.0) continue;
+      float d = length(p - rp.xy);
+      float radius = rp.z * 1.1;
+      float width = 0.025 + rp.z * 0.05;
+      float ring = exp(-pow((d - radius) / width, 2.0)) * exp(-rp.z * 2.2) * rp.w;
+      col = mix(col, uRippleColor[i], clamp(ring * 0.35, 0.0, 0.6));
+    }
+
+    // Hold ring: a thin arc on the floor around the sand, sweeping clockwise from the back.
+    if (uHold.z > 0.001) {
+      float ringR = 1.16;
+      float band = exp(-pow((r - ringR) / 0.012, 2.0));
+      float ang = atan(p.x, -p.y);
+      float a01 = fract(ang / 6.2831853 + 1.0);
+      float filled = step(a01, clamp(uHold.x, 0.0, 1.0));
+      vec3 holdCol = uHold.y > 2.5 ? vec3(0.82, 0.23, 0.23) : uHold.y > 1.5 ? vec3(0.17, 0.12, 0.2) : vec3(0.89, 0.38, 0.11);
+      col = mix(col, vec3(0.17, 0.12, 0.2), band * 0.08 * uHold.z);
+      col = mix(col, holdCol, band * filled * uHold.z * 0.9);
+    }
+
+    // The floor dissolves into the sky towards the horizon.
+    col = mix(col, SKY_LOW, smoothstep(3.5, 16.0, t));
   }
-
-  vec2 p = (frag + bend) / minRes;
-  float t = uTime * 0.025;
-
-  // Deep space: a slow two-colour nebula over a blue-black gradient.
-  vec3 col = mix(vec3(0.012, 0.016, 0.03), vec3(0.03, 0.04, 0.07), vUv.y);
-  float n1 = fbm(p * 1.6 + vec2(t, -t * 0.6));
-  float n2 = fbm(p * 2.4 - vec2(t * 0.7, t * 0.3) + n1);
-  col += vec3(0.05, 0.16, 0.16) * pow(n2, 2.2) * 0.9;
-  col += vec3(0.12, 0.06, 0.18) * pow(n1, 3.0) * 0.8;
-  // Faint dust stars.
-  float star = step(0.9965, hash(floor(frag / 2.0))) * (0.4 + 0.6 * sin(uTime * 0.8 + hash(floor(frag)) * 30.0));
-  col += vec3(star) * 0.35;
-
-  // The glass plate.
-  vec2 rel = frag - uPlate.xy;
-  float dist = length(rel);
-  float rad = uPlate.z;
-  float inside = 1.0 - smoothstep(rad - 1.5, rad + 1.5, dist);
-  float rn = dist / max(rad, 1.0);
-
-  // Light pooling under and around the plate, brighter while it rings.
-  float halo = exp(-pow(max(rn - 1.0, 0.0) * 3.2, 2.0)) * (1.0 - inside);
-  col += vec3(0.1, 0.35, 0.33) * halo * (0.18 + uEnergy * 0.55) * (1.0 - uDim * 0.5);
-  col += vec3(0.9, 0.7, 0.35) * halo * uReveal * 0.35;
-
-  vec3 glass = vec3(0.016, 0.022, 0.034) + vec3(0.02, 0.035, 0.045) * (1.0 - rn);
-  // Soft specular highlight towards the top left, and fine concentric sheen.
-  vec2 hl = rel / max(rad, 1.0) - vec2(-0.35, 0.45);
-  glass += vec3(0.07, 0.09, 0.11) * exp(-dot(hl, hl) * 5.0);
-  glass += vec3(0.012, 0.02, 0.024) * sin(rn * 140.0 + uTime * 0.4) * (1.0 - rn) * 0.6;
-  // Energy makes the plate faintly shimmer.
-  glass += vec3(0.03, 0.08, 0.08) * uEnergy * (0.5 + 0.5 * sin(rn * 30.0 - uTime * 18.0)) * (1.0 - rn);
-  col = mix(col, glass, inside * 0.92);
-
-  // Fresnel rim.
-  float rimLine = exp(-pow((dist - rad) / 1.6, 2.0));
-  float rimGlow = exp(-pow((dist - rad) / (rad * 0.045), 2.0));
-  vec3 rimCol = mix(vec3(0.55, 0.8, 0.85), vec3(1.0, 0.85, 0.55), uReveal);
-  col += rimCol * (rimLine * 0.45 + rimGlow * (0.06 + uEnergy * 0.18));
-
-  // Hold ring: an arc just outside the rim, sweeping clockwise from the top.
-  if (uHold.z > 0.001) {
-    float ringR = rad * 1.055;
-    float band = exp(-pow((dist - ringR) / max(2.2, rad * 0.009), 2.0));
-    float bandGlow = exp(-pow((dist - ringR) / (rad * 0.04), 2.0));
-    float ang = atan(rel.x, rel.y);                // 0 at top, clockwise positive
-    float a01 = fract(ang / 6.2831853 + 1.0);
-    float filled = step(a01, clamp(uHold.x, 0.0, 1.0));
-    vec3 holdCol = uHold.y > 2.5 ? vec3(1.0, 0.7, 0.3) : uHold.y > 1.5 ? vec3(1.0, 0.97, 0.85) : vec3(0.5, 0.95, 0.82);
-    float readyPulse = uHold.y > 1.5 && uHold.y < 2.5 ? 0.6 + 0.4 * sin(uTime * 14.0) : 1.0;
-    col += vec3(0.5, 0.6, 0.65) * band * 0.12 * uHold.z;                       // track
-    col += holdCol * (band * 1.1 + bandGlow * 0.35) * filled * uHold.z * readyPulse;
-  }
-
-  // Sand glow (blurred low-res particle pass).
-  vec2 g = vUv;
-  vec2 px = 1.0 / vec2(textureSize(uGlow, 0));
-  vec3 glow = texture(uGlow, g).rgb * 0.24;
-  glow += (texture(uGlow, g + vec2(px.x * 1.5, 0)).rgb + texture(uGlow, g - vec2(px.x * 1.5, 0)).rgb) * 0.15;
-  glow += (texture(uGlow, g + vec2(0, px.y * 1.5)).rgb + texture(uGlow, g - vec2(0, px.y * 1.5)).rgb) * 0.15;
-  glow += (texture(uGlow, g + px * 2.5).rgb + texture(uGlow, g - px * 2.5).rgb) * 0.08;
-  glow += (texture(uGlow, g + vec2(px.x, -px.y) * 2.5).rgb + texture(uGlow, g + vec2(-px.x, px.y) * 2.5).rgb) * 0.08;
-  col += glow * (0.75 + uReveal * 0.5);
-
-  col += rippleLight * 0.55;
-
-  // Vignette, dim for UI legibility, gentle film grain against banding.
-  float vig = smoothstep(1.25, 0.25, length((vUv - 0.5) * vec2(uRes.x / minRes, uRes.y / minRes)));
-  col *= mix(0.55, 1.0, vig);
-  col *= 1.0 - uDim * 0.35;
-  col += (hash(frag + fract(uTime) * 100.0) - 0.5) * 0.012;
-
-  outColor = vec4(pow(max(col, 0.0), vec3(0.95)), 1.0);
+  col = mix(col, SKY_TOP, uDim * 0.6);
+  col += (hash(gl_FragCoord.xy + fract(uTime) * 91.0) - 0.5) * 0.006;
+  outColor = vec4(col, 1.0);
 }`;
 
-const PT_VERT = `#version 300 es
-in vec3 aPart;           // x, y in plate units, speed
-uniform vec4 uPlateNdc;  // centre x, y, radius x, radius y (NDC)
+const GRAIN_VERT = `#version 300 es
+in vec3 aGrain;   // x, z, height
+${CAMERA_GLSL}
 uniform float uSize;
-uniform float uReveal;
-uniform vec3 uTint;
-uniform float uTintAmt;
-out vec3 vCol;
+uniform float uShadow;   // 1 for the shadow pass
+uniform vec3 uLight;     // shadow offset per unit of height (world xz)
+uniform float uDim;
+out vec4 vCol;
+
+const vec3 PALETTE[6] = vec3[6](
+  vec3(0.84, 0.25, 0.2), vec3(0.93, 0.44, 0.19), vec3(0.96, 0.59, 0.27),
+  vec3(0.59, 0.27, 0.67), vec3(0.42, 0.24, 0.63), vec3(0.78, 0.24, 0.43));
+
 void main() {
-  vec2 pos = uPlateNdc.xy + aPart.xy * uPlateNdc.zw;
-  gl_Position = vec4(pos, 0.0, 1.0);
-  float s = clamp(aPart.z * 6.0, 0.0, 1.0);
-  vec3 sand = vec3(0.92, 0.84, 0.68);
-  vec3 lit = vec3(0.6, 1.0, 0.92);
-  vec3 gold = vec3(1.0, 0.82, 0.48);
-  vec3 c = mix(sand, lit, s * 0.8);
-  c = mix(c, gold, uReveal * 0.65);
-  c = mix(c, uTint, uTintAmt * (0.4 + s * 0.6));
-  float grain = 0.55 + 0.75 * fract(sin(float(gl_VertexID) * 12.9898) * 43758.5453);
-  vCol = c * grain * (0.36 + s * 0.7 + uReveal * 0.15);
-  gl_PointSize = uSize * (1.0 + s * 0.35);
+  float h = aGrain.z;
+  float id = float(gl_VertexID);
+  float rnd = fract(sin(id * 12.9898) * 43758.5453);
+  vec3 world = uShadow > 0.5 ? vec3(aGrain.x + uLight.x * h, 0.0, aGrain.y + uLight.z * h) : vec3(aGrain.x, h, aGrain.y);
+  gl_Position = project(world);
+  float zc = depthOf(world);
+  float fog = 1.0 - smoothstep(4.0, 9.0, zc);
+  // Sand thins out at the bed's edge instead of ending in a hard rim.
+  float r = length(aGrain.xy);
+  float edge = 1.0 - smoothstep(0.9, 1.0, r);
+  if (uShadow > 0.5) {
+    float lifted = smoothstep(0.0, 0.02, h);
+    float a = mix(0.07, 0.15 * (1.0 - smoothstep(0.05, 0.4, h)), lifted);
+    vCol = vec4(vec3(0.17, 0.12, 0.2), a * fog * edge * (1.0 - uDim * 0.7));
+    gl_PointSize = uSize * (1.2 + h * 6.0) / zc;
+  } else {
+    vec3 c = PALETTE[int(mod(id, 6.0))];
+    c *= 0.82 + 0.3 * rnd;
+    vCol = vec4(c, (0.78 + 0.22 * rnd) * fog * edge * (1.0 - uDim * 0.75));
+    gl_PointSize = uSize * (0.75 + 0.5 * rnd) / zc;
+  }
 }`;
 
-const PT_FRAG = `#version 300 es
+const GRAIN_FRAG = `#version 300 es
 precision mediump float;
-in vec3 vCol;
+in vec4 vCol;
 out vec4 outColor;
 void main() {
   vec2 d = gl_PointCoord - 0.5;
-  float a = smoothstep(0.5, 0.0, length(d));
-  outColor = vec4(vCol * a, a);
+  float a = smoothstep(0.5, 0.32, length(d));
+  outColor = vec4(vCol.rgb, vCol.a * a);
 }`;
 
 function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader {
@@ -261,90 +245,110 @@ function noopScene(): Scene {
   };
 }
 
-function isCoarsePointer(): boolean {
-  return typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
-}
+type Vec3 = [number, number, number];
+const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const dot = (a: Vec3, b: Vec3): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm = (a: Vec3): Vec3 => {
+  const l = Math.hypot(a[0], a[1], a[2]) || 1;
+  return [a[0] / l, a[1] / l, a[2] / l];
+};
 
 export function createScene(canvas: HTMLCanvasElement): Scene {
-  const gl = canvas.getContext("webgl2", { antialias: false, alpha: false, premultipliedAlpha: false, powerPreference: "high-performance" });
-  if (!gl) return noopScene();
+  const glMaybe = canvas.getContext("webgl2", { antialias: true, alpha: false, premultipliedAlpha: false, powerPreference: "high-performance" });
+  if (!glMaybe) return noopScene();
+  const gl: WebGL2RenderingContext = glMaybe;
 
   const reducedMotion = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const mobile = isCoarsePointer();
-  const COUNT = mobile ? 9000 : 16000;
-  const dprCap = mobile ? 1.75 : 2;
+  const mobile = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+  const COUNT = mobile ? 11000 : 20000;
 
-  let bgProg: WebGLProgram;
-  let ptProg: WebGLProgram;
+  let floorProg: WebGLProgram;
+  let grainProg: WebGLProgram;
   try {
-    bgProg = program(gl, BG_VERT, BG_FRAG);
-    ptProg = program(gl, PT_VERT, PT_FRAG);
+    floorProg = program(gl, FLOOR_VERT, FLOOR_FRAG);
+    grainProg = program(gl, GRAIN_VERT, GRAIN_FRAG);
   } catch (err) {
     console.warn("resonance: WebGL scene unavailable", err);
     return noopScene();
   }
 
-  // Fullscreen triangle pair.
+  // Camera basis (fixed).
+  const fwd = norm(sub(TARGET, EYE));
+  const right = norm(cross(fwd, [0, 1, 0]));
+  const up = cross(right, fwd);
+
   const quad = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, quad);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
-  const bgVao = gl.createVertexArray();
-  gl.bindVertexArray(bgVao);
-  const bgPosLoc = gl.getAttribLocation(bgProg, "aPos");
-  gl.enableVertexAttribArray(bgPosLoc);
-  gl.vertexAttribPointer(bgPosLoc, 2, gl.FLOAT, false, 0, 0);
+  const floorVao = gl.createVertexArray();
+  gl.bindVertexArray(floorVao);
+  const floorPosLoc = gl.getAttribLocation(floorProg, "aPos");
+  gl.enableVertexAttribArray(floorPosLoc);
+  gl.vertexAttribPointer(floorPosLoc, 2, gl.FLOAT, false, 0, 0);
 
-  // Particles: x, y, vx, vy on the CPU; x, y, speed uploaded every frame.
   const px = new Float32Array(COUNT);
-  const py = new Float32Array(COUNT);
+  const pz = new Float32Array(COUNT);
   const vx = new Float32Array(COUNT);
-  const vy = new Float32Array(COUNT);
+  const vz = new Float32Array(COUNT);
+  /** |f| at each grain: how hard its spot of floor vibrates. */
+  const amp = new Float32Array(COUNT);
+  const phase = new Float32Array(COUNT);
+  const heights = new Float32Array(COUNT);
   const gpu = new Float32Array(COUNT * 3);
-  const ptBuf = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, ptBuf);
+  for (let i = 0; i < COUNT; i++) phase[i] = Math.random() * Math.PI * 2;
+  const grainBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, grainBuf);
   gl.bufferData(gl.ARRAY_BUFFER, gpu.byteLength, gl.DYNAMIC_DRAW);
-  const ptVao = gl.createVertexArray();
-  gl.bindVertexArray(ptVao);
-  const ptLoc = gl.getAttribLocation(ptProg, "aPart");
-  gl.enableVertexAttribArray(ptLoc);
-  gl.vertexAttribPointer(ptLoc, 3, gl.FLOAT, false, 0, 0);
+  const grainVao = gl.createVertexArray();
+  gl.bindVertexArray(grainVao);
+  const grainLoc = gl.getAttribLocation(grainProg, "aGrain");
+  gl.enableVertexAttribArray(grainLoc);
+  gl.vertexAttribPointer(grainLoc, 3, gl.FLOAT, false, 0, 0);
   gl.bindVertexArray(null);
 
-  // Low-res target for the glow pass.
-  const glowTex = gl.createTexture();
-  const glowFbo = gl.createFramebuffer();
-  let glowW = 1;
-  let glowH = 1;
-
-  const u = {
-    res: gl.getUniformLocation(bgProg, "uRes"),
-    time: gl.getUniformLocation(bgProg, "uTime"),
-    plate: gl.getUniformLocation(bgProg, "uPlate"),
-    energy: gl.getUniformLocation(bgProg, "uEnergy"),
-    dim: gl.getUniformLocation(bgProg, "uDim"),
-    reveal: gl.getUniformLocation(bgProg, "uReveal"),
-    hold: gl.getUniformLocation(bgProg, "uHold"),
-    ripples: gl.getUniformLocation(bgProg, "uRipples"),
-    rippleColor: gl.getUniformLocation(bgProg, "uRippleColor"),
-    glow: gl.getUniformLocation(bgProg, "uGlow"),
-    plateNdc: gl.getUniformLocation(ptProg, "uPlateNdc"),
-    size: gl.getUniformLocation(ptProg, "uSize"),
-    ptReveal: gl.getUniformLocation(ptProg, "uReveal"),
-    tint: gl.getUniformLocation(ptProg, "uTint"),
-    tintAmt: gl.getUniformLocation(ptProg, "uTintAmt"),
+  function cameraUniforms(prog: WebGLProgram) {
+    return {
+      eye: gl.getUniformLocation(prog, "uEye"),
+      right: gl.getUniformLocation(prog, "uRight"),
+      up: gl.getUniformLocation(prog, "uUp"),
+      fwd: gl.getUniformLocation(prog, "uFwd"),
+      tan: gl.getUniformLocation(prog, "uTan"),
+      aspect: gl.getUniformLocation(prog, "uAspect"),
+      fit: gl.getUniformLocation(prog, "uFit"),
+    };
+  }
+  const floorCam = cameraUniforms(floorProg);
+  const grainCam = cameraUniforms(grainProg);
+  const uf = {
+    time: gl.getUniformLocation(floorProg, "uTime"),
+    energy: gl.getUniformLocation(floorProg, "uEnergy"),
+    dim: gl.getUniformLocation(floorProg, "uDim"),
+    reveal: gl.getUniformLocation(floorProg, "uReveal"),
+    hold: gl.getUniformLocation(floorProg, "uHold"),
+    ripples: gl.getUniformLocation(floorProg, "uRipples"),
+    rippleColor: gl.getUniformLocation(floorProg, "uRippleColor"),
+  };
+  const ug = {
+    size: gl.getUniformLocation(grainProg, "uSize"),
+    shadow: gl.getUniformLocation(grainProg, "uShadow"),
+    light: gl.getUniformLocation(grainProg, "uLight"),
+    dim: gl.getUniformLocation(grainProg, "uDim"),
   };
 
   // ---- State ----
   let dpr = 1;
   let width = 1;
-  let height = 1;
+  let heightPx = 1;
   const plate = { cx: 0, cy: 0, r: 100 };
   const plateTarget = { cx: 0, cy: 0, r: 100 };
   let plateInit = false;
+  const fit = [1, 1, 0, 0];
 
   let energy = 0;
   let ambient = 0;
   let coherence = 1;
+  let lift = 0;
   let dim = 0;
   let dimTarget = 0;
   let reveal = 0;
@@ -352,13 +356,11 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   let hold: { progress: number; state: HoldState } | null = null;
   let holdVis = 0;
   let holdShown = { progress: 0, state: 1 };
-  const tint: [number, number, number] = [1, 1, 1];
-  let tintAmt = 0;
 
   let figure = 0;
   let prevFigure = 0;
-  let morph = 1; // 0 → 1 crossfade from prevFigure to figure
-  const noiseFigure = { index: 5 };
+  let morph = 1;
+  let noiseFigure = 5;
 
   const ripples = new Float32Array(MAX_RIPPLES * 4);
   const rippleColors = new Float32Array(MAX_RIPPLES * 3);
@@ -367,44 +369,70 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   function scatter(): void {
     for (let i = 0; i < COUNT; i++) {
       const a = Math.random() * Math.PI * 2;
-      const r = Math.sqrt(Math.random()) * 0.985;
+      const r = Math.sqrt(Math.random()) * 0.99;
       px[i] = Math.cos(a) * r;
-      py[i] = Math.sin(a) * r;
+      pz[i] = Math.sin(a) * r;
       vx[i] = 0;
-      vy[i] = 0;
+      vz[i] = 0;
     }
   }
   scatter();
 
   function resize(): void {
-    dpr = Math.min(window.devicePixelRatio || 1, dprCap);
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
     width = Math.max(1, Math.round(window.innerWidth * dpr));
-    height = Math.max(1, Math.round(window.innerHeight * dpr));
-    if (canvas.width !== width || canvas.height !== height) {
+    heightPx = Math.max(1, Math.round(window.innerHeight * dpr));
+    if (canvas.width !== width || canvas.height !== heightPx) {
       canvas.width = width;
-      canvas.height = height;
+      canvas.height = heightPx;
     }
-    glowW = Math.max(1, Math.round(width / 4));
-    glowH = Math.max(1, Math.round(height / 4));
-    if (!gl) return;
-    gl.bindTexture(gl.TEXTURE_2D, glowTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, glowW, glowH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, glowFbo);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, glowTex, 0);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
   resize();
   window.addEventListener("resize", resize);
 
+  /** Unfitted NDC of a world point (before the layout fit). */
+  function baseNdc(p: Vec3): [number, number] {
+    const v = sub(p, EYE);
+    const zc = dot(v, fwd);
+    const aspect = width / heightPx;
+    return [dot(v, right) / (FOV_TAN * aspect) / zc, dot(v, up) / FOV_TAN / zc];
+  }
+
+  /** Scale and offset so the bed's centre lands on (cx, cy) and its width spans 2r. */
+  function updateFit(): void {
+    const leftP = baseNdc([-1, 0, 0]);
+    const rightP = baseNdc([1, 0, 0]);
+    const centre = baseNdc([0, 0, 0]);
+    const spanPx = ((rightP[0] - leftP[0]) / 2) * window.innerWidth;
+    const s = spanPx > 0 ? (2 * plate.r) / spanPx : 1;
+    const targetX = (plate.cx / window.innerWidth) * 2 - 1;
+    const targetY = 1 - (plate.cy / window.innerHeight) * 2;
+    fit[0] = s;
+    fit[1] = s;
+    fit[2] = targetX - centre[0] * s;
+    fit[3] = targetY - centre[1] * s;
+  }
+
+  /** The floor point under a screen point, or null when it's above the horizon. */
+  function floorAt(clientX: number, clientY: number): [number, number] | null {
+    const ndcX = ((clientX / window.innerWidth) * 2 - 1 - fit[2]!) / fit[0]!;
+    const ndcY = (1 - (clientY / window.innerHeight) * 2 - fit[3]!) / fit[1]!;
+    const aspect = width / heightPx;
+    const ray = norm([
+      fwd[0] + ndcX * FOV_TAN * aspect * right[0] + ndcY * FOV_TAN * up[0],
+      fwd[1] + ndcX * FOV_TAN * aspect * right[1] + ndcY * FOV_TAN * up[1],
+      fwd[2] + ndcX * FOV_TAN * aspect * right[2] + ndcY * FOV_TAN * up[2],
+    ]);
+    if (ray[1] >= -0.01) return null;
+    const t = -EYE[1] / ray[1];
+    return [EYE[0] + ray[0] * t, EYE[2] + ray[2] * t];
+  }
+
   // ---- Physics ----
-  const cx = new Float64Array(MAX_K + 1);
-  const sx = new Float64Array(MAX_K + 1);
-  const cy = new Float64Array(MAX_K + 1);
-  const sy = new Float64Array(MAX_K + 1);
+  const cxr = new Float64Array(MAX_K + 1);
+  const sxr = new Float64Array(MAX_K + 1);
+  const czr = new Float64Array(MAX_K + 1);
+  const szr = new Float64Array(MAX_K + 1);
 
   function fillRecurrence(c: Float64Array, s: Float64Array, v: number): void {
     const c1 = Math.cos(Math.PI * v);
@@ -417,33 +445,25 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     }
   }
 
-  // Mode evaluation writes into these to avoid allocating.
   let fOut = 0;
   let gxOut = 0;
-  let gyOut = 0;
+  let gzOut = 0;
   function evalMode(index: number): void {
     const mode = MODES[((index % MODES.length) + MODES.length) % MODES.length]!;
     const n = mode[0];
     const m = mode[1];
     const sgn = mode[2];
-    const A = cx[n]!;
-    const B = cy[m]!;
-    const C = cx[m]!;
-    const D = cy[n]!;
+    const A = cxr[n]!;
+    const B = czr[m]!;
+    const C = cxr[m]!;
+    const D = czr[n]!;
     fOut = A * B + sgn * C * D;
-    gxOut = -n * Math.PI * sx[n]! * B - sgn * m * Math.PI * sx[m]! * D;
-    gyOut = -m * Math.PI * A * sy[m]! - sgn * n * Math.PI * C * sy[n]!;
+    gxOut = -n * Math.PI * sxr[n]! * B - sgn * m * Math.PI * sxr[m]! * D;
+    gzOut = -m * Math.PI * A * szr[m]! - sgn * n * Math.PI * C * szr[n]!;
   }
 
-  function stepPhysics(dt: number): void {
+  function stepPhysics(dt: number, time: number): void {
     const drive = Math.max(energy, ambient);
-    if (drive < 0.004) {
-      for (let i = 0; i < COUNT; i++) {
-        vx[i] = 0;
-        vy[i] = 0;
-      }
-      return;
-    }
     const noiseW = (1 - coherence) * 0.85;
     const wPrev = (1 - morph) * (1 - noiseW);
     const wCur = morph * (1 - noiseW);
@@ -451,46 +471,56 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     const agitate = 0.95 * drive;
     const damping = Math.exp(-dt * 9);
     const sdt = Math.min(dt, 1 / 30);
+    const moving = drive > 0.004;
 
     for (let i = 0; i < COUNT; i++) {
-      const x = px[i]!;
-      const y = py[i]!;
-      fillRecurrence(cx, sx, x);
-      fillRecurrence(cy, sy, y);
-      evalMode(figure);
-      let f = fOut * wCur;
-      let gx = gxOut * wCur;
-      let gy = gyOut * wCur;
-      if (wPrev > 0.001) {
-        evalMode(prevFigure);
-        f += fOut * wPrev;
-        gx += gxOut * wPrev;
-        gy += gyOut * wPrev;
+      if (moving) {
+        const x = px[i]!;
+        const z = pz[i]!;
+        fillRecurrence(cxr, sxr, x);
+        fillRecurrence(czr, szr, z);
+        evalMode(figure);
+        let f = fOut * wCur;
+        let gx = gxOut * wCur;
+        let gz = gzOut * wCur;
+        if (wPrev > 0.001) {
+          evalMode(prevFigure);
+          f += fOut * wPrev;
+          gx += gxOut * wPrev;
+          gz += gzOut * wPrev;
+        }
+        if (noiseW > 0.001) {
+          evalMode(noiseFigure);
+          f += fOut * noiseW;
+          gx += gxOut * noiseW;
+          gz += gzOut * noiseW;
+        }
+        amp[i] = Math.abs(f);
+        const jitter = (Math.abs(f) + 0.08) * agitate;
+        let nvx = vx[i]! * damping - f * gx * pull * sdt + (Math.random() - 0.5) * jitter * sdt * 3.2;
+        let nvz = vz[i]! * damping - f * gz * pull * sdt + (Math.random() - 0.5) * jitter * sdt * 3.2;
+        let nx = x + nvx * sdt;
+        let nz = z + nvz * sdt;
+        const r2 = nx * nx + nz * nz;
+        if (r2 > 0.985) {
+          const r = Math.sqrt(r2);
+          nx *= 0.99 / r;
+          nz *= 0.99 / r;
+          nvx *= -0.3;
+          nvz *= -0.3;
+        }
+        px[i] = nx;
+        pz[i] = nz;
+        vx[i] = nvx;
+        vz[i] = nvz;
+      } else {
+        vx[i] = 0;
+        vz[i] = 0;
       }
-      if (noiseW > 0.001) {
-        evalMode(noiseFigure.index);
-        f += fOut * noiseW;
-        gx += gxOut * noiseW;
-        gy += gyOut * noiseW;
-      }
-      // Agitation is strongest on the antinodes; a little everywhere keeps the lines grainy.
-      const jitter = (Math.abs(f) + 0.08) * agitate;
-      let nvx = vx[i]! * damping - f * gx * pull * sdt + (Math.random() - 0.5) * jitter * sdt * 3.2;
-      let nvy = vy[i]! * damping - f * gy * pull * sdt + (Math.random() - 0.5) * jitter * sdt * 3.2;
-      let nx = x + nvx * sdt;
-      let ny = y + nvy * sdt;
-      const r2 = nx * nx + ny * ny;
-      if (r2 > 0.97) {
-        const r = Math.sqrt(r2);
-        nx *= 0.984 / r;
-        ny *= 0.984 / r;
-        nvx *= -0.3;
-        nvy *= -0.3;
-      }
-      px[i] = nx;
-      py[i] = ny;
-      vx[i] = nvx;
-      vy[i] = nvy;
+      // Vibrating grains bob on a slow standing wave; grains on the still lines stay down.
+      const wave = 0.55 + 0.45 * Math.sin(time * 3.2 + phase[i]! + (px[i]! - pz[i]!) * 3);
+      const target = lift * Math.min(1.6, amp[i]!) * 0.13 * wave;
+      heights[i]! += (target - heights[i]!) * Math.min(1, sdt * 8);
     }
   }
 
@@ -503,103 +533,96 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     last = now;
     const time = (now - startedAt) / 1000;
 
-    // Ease toward targets.
     const ease = 1 - Math.exp(-dt * 6);
     plate.cx += (plateTarget.cx - plate.cx) * ease;
     plate.cy += (plateTarget.cy - plate.cy) * ease;
     plate.r += (plateTarget.r - plate.r) * ease;
     dim += (dimTarget - dim) * ease;
-    reveal += (revealTarget - reveal) * (1 - Math.exp(-dt * 1.6));
+    reveal += (revealTarget - reveal) * (1 - Math.exp(-dt * 1.4));
     morph = Math.min(1, morph + dt * 0.7);
-    tintAmt *= Math.exp(-dt * 4);
 
-    // Sustained notes keep the plate ringing while held; otherwise energy decays.
     if (hold && hold.state !== "over") energy = Math.max(energy, 0.42 + 0.3 * hold.progress);
-    energy *= Math.exp(-dt * (reducedMotion ? 3 : 1.7));
+    energy *= Math.exp(-dt * (reducedMotion ? 3 : 1.6));
+    // Lift follows energy, gated by how in-tempo the playing is (squared, so a sloppy run stays
+    // visibly low), plus a gentle float when idle and the calm rise of the reveal.
+    const liftTarget = (reducedMotion ? 0.4 : 1) * (Math.min(1, energy) * coherence * coherence + ambient * 0.35 + reveal * 0.45);
+    lift += (liftTarget - lift) * (1 - Math.exp(-dt * 5));
     holdVis += ((hold ? 1 : 0) - holdVis) * (1 - Math.exp(-dt * (hold ? 20 : 5)));
     if (hold) holdShown = { progress: hold.progress, state: hold.state === "filling" ? 1 : hold.state === "ready" ? 2 : 3 };
 
     for (let i = 0; i < MAX_RIPPLES; i++) {
       if (ripples[i * 4 + 3]! > 0) {
         ripples[i * 4 + 2]! += dt;
-        if (ripples[i * 4 + 2]! > 2.2) ripples[i * 4 + 3] = 0;
+        if (ripples[i * 4 + 2]! > 2.5) ripples[i * 4 + 3] = 0;
       }
     }
 
-    stepPhysics(dt);
+    stepPhysics(dt, time);
     for (let i = 0; i < COUNT; i++) {
       gpu[i * 3] = px[i]!;
-      gpu[i * 3 + 1] = py[i]!;
-      gpu[i * 3 + 2] = Math.hypot(vx[i]!, vy[i]!);
+      gpu[i * 3 + 1] = pz[i]!;
+      gpu[i * 3 + 2] = heights[i]!;
     }
 
+    updateFit();
     render(time);
     requestAnimationFrame(frame);
   }
 
+  function setCamera(cam: ReturnType<typeof cameraUniforms>): void {
+    gl.uniform3f(cam.eye, EYE[0], EYE[1], EYE[2]);
+    gl.uniform3f(cam.right, right[0], right[1], right[2]);
+    gl.uniform3f(cam.up, up[0], up[1], up[2]);
+    gl.uniform3f(cam.fwd, fwd[0], fwd[1], fwd[2]);
+    gl.uniform1f(cam.tan, FOV_TAN);
+    gl.uniform1f(cam.aspect, width / heightPx);
+    gl.uniform4f(cam.fit, fit[0]!, fit[1]!, fit[2]!, fit[3]!);
+  }
+
   function render(time: number): void {
-    if (!gl) return;
-    const pcx = plate.cx * dpr;
-    const pcy = height - plate.cy * dpr;
-    const pr = plate.r * dpr;
-    const ndc = [(pcx / width) * 2 - 1, (pcy / height) * 2 - 1, ((pr * 0.985) / width) * 2, ((pr * 0.985) / height) * 2];
-
-    gl.bindBuffer(gl.ARRAY_BUFFER, ptBuf);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, gpu);
-
-    // 1. Particles into the low-res glow target.
-    gl.bindFramebuffer(gl.FRAMEBUFFER, glowFbo);
-    gl.viewport(0, 0, glowW, glowH);
-    gl.clearColor(0, 0, 0, 1);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.ONE, gl.ONE);
-    gl.useProgram(ptProg);
-    gl.uniform4f(u.plateNdc, ndc[0]!, ndc[1]!, ndc[2]!, ndc[3]!);
-    gl.uniform1f(u.size, Math.max(1.5, (pr / 4) * 0.012));
-    gl.uniform1f(u.ptReveal, reveal);
-    gl.uniform3f(u.tint, tint[0], tint[1], tint[2]);
-    gl.uniform1f(u.tintAmt, tintAmt);
-    gl.bindVertexArray(ptVao);
-    gl.drawArrays(gl.POINTS, 0, COUNT);
-
-    // 2. Background, plate and glow composite.
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, width, height);
+    gl.viewport(0, 0, width, heightPx);
+
+    // 1. Floor and sky.
     gl.disable(gl.BLEND);
-    gl.useProgram(bgProg);
-    gl.uniform2f(u.res, width, height);
-    gl.uniform1f(u.time, time);
-    gl.uniform3f(u.plate, pcx, pcy, pr);
-    gl.uniform1f(u.energy, Math.min(1, Math.max(energy, ambient * 0.6)));
-    gl.uniform1f(u.dim, dim);
-    gl.uniform1f(u.reveal, reveal);
-    gl.uniform3f(u.hold, holdShown.progress, holdShown.state, holdVis);
-    gl.uniform4fv(u.ripples, ripples);
-    gl.uniform3fv(u.rippleColor, rippleColors);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, glowTex);
-    gl.uniform1i(u.glow, 0);
-    gl.bindVertexArray(bgVao);
+    gl.useProgram(floorProg);
+    setCamera(floorCam);
+    gl.uniform1f(uf.time, time);
+    gl.uniform1f(uf.energy, Math.min(1, Math.max(energy, ambient * 0.5)));
+    gl.uniform1f(uf.dim, dim);
+    gl.uniform1f(uf.reveal, reveal);
+    gl.uniform3f(uf.hold, holdShown.progress, holdShown.state, holdVis);
+    gl.uniform4fv(uf.ripples, ripples);
+    gl.uniform3fv(uf.rippleColor, rippleColors);
+    gl.bindVertexArray(floorVao);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-    // 3. Sharp particles on top.
+    // 2. Shadows of the grains, then the grains themselves.
+    gl.bindBuffer(gl.ARRAY_BUFFER, grainBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, gpu);
     gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
-    gl.useProgram(ptProg);
-    gl.uniform1f(u.size, Math.max(1.2, Math.min(2.6, pr * 0.006)));
-    gl.bindVertexArray(ptVao);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(grainProg);
+    setCamera(grainCam);
+    const sizePx = Math.max(2, plate.r * dpr * 0.0105);
+    gl.uniform1f(ug.size, sizePx * 2.4);
+    gl.uniform3f(ug.light, 0.35, 0, 0.55);
+    gl.uniform1f(ug.dim, dim);
+    gl.bindVertexArray(grainVao);
+    gl.uniform1f(ug.shadow, 1);
+    gl.drawArrays(gl.POINTS, 0, COUNT);
+    gl.uniform1f(ug.shadow, 0);
     gl.drawArrays(gl.POINTS, 0, COUNT);
     gl.bindVertexArray(null);
   }
 
   requestAnimationFrame(frame);
 
-  function addRipple(x: number, y: number, strength: number, rgb: [number, number, number]): void {
+  function addRipple(x: number, z: number, strength: number, rgb: [number, number, number]): void {
     const i = rippleCursor;
     rippleCursor = (rippleCursor + 1) % MAX_RIPPLES;
-    ripples[i * 4] = x * dpr;
-    ripples[i * 4 + 1] = height - y * dpr;
+    ripples[i * 4] = x;
+    ripples[i * 4 + 1] = z;
     ripples[i * 4 + 2] = 0;
     ripples[i * 4 + 3] = strength;
     rippleColors[i * 3] = rgb[0];
@@ -625,23 +648,17 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
       prevFigure = figure;
       figure = index;
       morph = 0;
-      noiseFigure.index = index + 5;
+      noiseFigure = index + 5;
     },
     strike(kind: StrikeKind, clientX?: number | null, clientY?: number | null) {
       energy = Math.min(1.2, energy + STRIKE_ENERGY[kind]);
-      const rgb = GRADE_RGB[kind];
-      addRipple(clientX ?? plate.cx, clientY ?? plate.cy, kind === "miss" ? 1.1 : 0.9, rgb);
-      if (kind !== "neutral") {
-        tint[0] = rgb[0];
-        tint[1] = rgb[1];
-        tint[2] = rgb[2];
-        tintAmt = kind === "perfect" ? 0.35 : 0.6;
-      }
+      const at = clientX != null && clientY != null ? floorAt(clientX, clientY) : null;
+      const [x, z] = at && Math.hypot(at[0], at[1]) < 2.5 ? at : [0, 0];
+      addRipple(x, z, kind === "miss" ? 1.1 : 0.9, GRADE_RGB[kind]);
       if (kind === "miss") {
-        // A wrong tap shakes everything loose a little.
         for (let i = 0; i < COUNT; i++) {
           vx[i]! += (Math.random() - 0.5) * 0.5;
-          vy[i]! += (Math.random() - 0.5) * 0.5;
+          vz[i]! += (Math.random() - 0.5) * 0.5;
         }
       }
     },
@@ -659,8 +676,6 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     },
     scatter,
     reveal(quality: number) {
-      // The figure settles calmly (a low, steady drive) and glows; how clean it gets reflects
-      // how clean the run was.
       const q = Math.min(1, Math.max(0, quality));
       revealTarget = 0.3 + 0.7 * q;
       coherence = q;

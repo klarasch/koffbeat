@@ -35,8 +35,12 @@ export interface AudioEngine {
    * it can sit under the clicks without pulling the player's timing. Not affected by stopAll.
    */
   setAmbience(level: number, rampSec?: number): void;
-  /** A soft, slow-blooming chord for the end of a run; brighter for higher `quality` (0..1). */
+  /** A soft electric-piano chord for the end of a run; fuller for higher `quality` (0..1). */
   chime(quality: number): void;
+  /** Starts a sustained electric-piano note now; returns an id for noteOff. */
+  noteOn(freq: number, velocity?: number): number;
+  /** Releases a note started with noteOn (a short natural fade). */
+  noteOff(id: number): void;
 }
 
 /** How far ahead of "now" the look-ahead scheduler schedules audio nodes, in seconds. */
@@ -217,56 +221,74 @@ export function createAudioEngine(): AudioEngine {
     trackNode(osc);
   }
 
-  // ---- Ambience: a slowly breathing Dmaj9 drone, routed around the compressor so the clicks
-  // never make it pump. Built lazily on first use (the context may still be suspended at load).
+  // ---- Ambience: a soft drone that drifts between four related chords, with each voice, the
+  // filter and the overall level wandering on their own slow, irregular cycles, so it breathes
+  // instead of droning. Routed around the compressor so the clicks never make it pump. Built
+  // lazily on first use (the context may still be suspended at load).
+  const CHORDS: number[][] = [
+    [73.42, 110.0, 185.0, 220.0, 277.18, 329.63], // Dmaj9
+    [61.74, 92.5, 146.83, 164.81, 220.0, 277.18], // Bm11
+    [49.0, 73.42, 123.47, 185.0, 220.0, 277.18], // Gmaj9#11
+    [82.41, 123.47, 185.0, 196.0, 220.0, 293.66], // Em9
+  ];
+  const VOICE_GAINS = [0.28, 0.15, 0.1, 0.07, 0.06, 0.035];
   let ambienceGain: GainNode | null = null;
+  let ambienceTimer: ReturnType<typeof setTimeout> | null = null;
 
   function buildAmbience(): GainNode {
     const out = ctx.createGain();
     out.gain.value = 0;
+    const breath = ctx.createGain();
+    breath.gain.value = 1;
     const filter = ctx.createBiquadFilter();
     filter.type = "lowpass";
-    filter.frequency.value = 650;
-    filter.Q.value = 0.7;
-    const lfo = ctx.createOscillator();
-    lfo.frequency.value = 0.045;
-    const lfoDepth = ctx.createGain();
-    lfoDepth.gain.value = 320;
-    lfo.connect(lfoDepth);
-    lfoDepth.connect(filter.frequency);
-    lfo.start();
+    filter.frequency.value = 700;
+    filter.Q.value = 0.6;
 
-    const voices: [number, OscillatorType, number][] = [
-      [73.42, "sine", 0.32],
-      [110.0, "triangle", 0.16],
-      [146.83, "sine", 0.14],
-      [164.81, "triangle", 0.07],
-      [185.0, "sine", 0.08],
-      [329.63, "sine", 0.035],
-    ];
-    for (const [freq, type, gain] of voices) {
-      for (const detune of [-6, 5]) {
+    const oscillators: OscillatorNode[][] = [];
+    const voiceGains: GainNode[] = [];
+    CHORDS[0]!.forEach((freq, v) => {
+      const g = ctx.createGain();
+      g.gain.value = VOICE_GAINS[v] ?? 0.05;
+      const pair: OscillatorNode[] = [];
+      for (const detune of [-7, 6]) {
         const osc = ctx.createOscillator();
-        osc.type = type;
+        osc.type = v === 0 || v === 2 ? "sine" : "triangle";
         osc.frequency.value = freq;
-        osc.detune.value = detune;
-        const g = ctx.createGain();
-        g.gain.value = gain;
-        // Each voice swells on its own slow cycle, so the chord keeps shifting colour.
-        const swell = ctx.createOscillator();
-        swell.frequency.value = 0.02 + Math.random() * 0.05;
-        const swellDepth = ctx.createGain();
-        swellDepth.gain.value = gain * 0.6;
-        swell.connect(swellDepth);
-        swellDepth.connect(g.gain);
-        swell.start();
+        osc.detune.value = detune + (Math.random() - 0.5) * 4;
         osc.connect(g);
-        g.connect(filter);
         osc.start();
+        pair.push(osc);
       }
-    }
-    filter.connect(out);
+      g.connect(filter);
+      oscillators.push(pair);
+      voiceGains.push(g);
+    });
+    filter.connect(breath);
+    breath.connect(out);
     out.connect(ctx.destination);
+
+    let chord = 0;
+    // Every 9–20 s: glide some voices to the next chord, re-balance the voices, move the filter
+    // and let the whole drone breathe in or out a little. Nothing lands on a regular grid.
+    const wander = () => {
+      const t = ctx.currentTime;
+      if (Math.random() < 0.55) chord = (chord + 1 + Math.floor(Math.random() * 2)) % CHORDS.length;
+      const freqs = CHORDS[chord]!;
+      oscillators.forEach((pair, v) => {
+        const target = freqs[v] ?? freqs[0]!;
+        const glide = 3 + Math.random() * 5;
+        for (const osc of pair) osc.frequency.setTargetAtTime(target, t + Math.random() * 2, glide / 3);
+      });
+      voiceGains.forEach((g, v) => {
+        const base = VOICE_GAINS[v] ?? 0.05;
+        g.gain.setTargetAtTime(base * (0.35 + Math.random() * 1.0), t, 2 + Math.random() * 4);
+      });
+      filter.frequency.setTargetAtTime(380 + Math.random() * 900, t, 3 + Math.random() * 5);
+      breath.gain.setTargetAtTime(0.6 + Math.random() * 0.5, t, 4 + Math.random() * 4);
+      ambienceTimer = setTimeout(wander, 9000 + Math.random() * 11000);
+    };
+    ambienceTimer = setTimeout(wander, 4000);
     return out;
   }
 
@@ -281,28 +303,103 @@ export function createAudioEngine(): AudioEngine {
     g.setValueAtTime(g.value, t);
     g.linearRampToValueAtTime(Math.max(0, Math.min(1, level)) * 0.16, t + Math.max(0.05, rampSec));
   }
+  void ambienceTimer;
 
   function chime(quality: number): void {
     const t = ctx.currentTime + 0.05;
     const q = Math.max(0, Math.min(1, quality));
-    // D major add9, opened upward with quality.
+    // D major add9, opened upward with quality, played as soft electric-piano notes.
     const partials = [293.66, 440, 587.33, 659.25, 880, 1174.66].slice(0, 3 + Math.round(q * 3));
     partials.forEach((freq, i) => {
-      const osc = ctx.createOscillator();
-      osc.type = "sine";
-      osc.frequency.value = freq;
-      const g = ctx.createGain();
-      const start = t + i * 0.09;
-      const peak = 0.05 / (1 + i * 0.35);
-      g.gain.setValueAtTime(0, start);
-      g.gain.linearRampToValueAtTime(peak, start + 0.6);
-      g.gain.exponentialRampToValueAtTime(0.0005, start + 4.5);
-      osc.connect(g);
-      g.connect(ctx.destination);
-      osc.start(start);
-      osc.stop(start + 4.6);
+      const id = startEpiano(freq, 0.5 / (1 + i * 0.3), t + i * 0.11);
+      setTimeout(() => noteOff(id), 1800 + i * 110);
     });
   }
 
-  return { ctx, unlock, now, scheduleClick, scheduleCountIn, startMetronome, stopAll, playHit, setAmbience, chime };
+  // ---- Electric piano for taps: an FM tine (carrier and modulator at the same pitch, the
+  // modulation fading quickly), a short metallic "tine" click and a gentle tremolo. It sustains
+  // while the key or finger is down, so a held note sounds as long as it is held.
+  interface EpianoVoice {
+    out: GainNode;
+    oscillators: OscillatorNode[];
+  }
+  const voices = new Map<number, EpianoVoice>();
+  let nextVoiceId = 1;
+  const epianoBus = ctx.createGain();
+  epianoBus.gain.value = 0.85;
+  const epianoTone = ctx.createBiquadFilter();
+  epianoTone.type = "lowpass";
+  epianoTone.frequency.value = 3200;
+  epianoBus.connect(epianoTone);
+  epianoTone.connect(master);
+
+  function startEpiano(freq: number, velocity: number, when: number): number {
+    const t = Math.max(when, ctx.currentTime);
+    const v = Math.max(0.05, Math.min(1, velocity));
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0, t);
+    out.gain.linearRampToValueAtTime(0.32 * v, t + 0.005);
+    out.gain.exponentialRampToValueAtTime(0.16 * v, t + 0.6);
+    out.gain.exponentialRampToValueAtTime(0.07 * v, t + 4);
+
+    const carrier = ctx.createOscillator();
+    carrier.frequency.value = freq;
+    const modulator = ctx.createOscillator();
+    modulator.frequency.value = freq;
+    const modDepth = ctx.createGain();
+    modDepth.gain.setValueAtTime(freq * (1.2 + v), t);
+    modDepth.gain.exponentialRampToValueAtTime(freq * 0.2, t + 0.9);
+    modulator.connect(modDepth);
+    modDepth.connect(carrier.frequency);
+
+    const tine = ctx.createOscillator();
+    tine.frequency.value = freq * 14;
+    const tineGain = ctx.createGain();
+    tineGain.gain.setValueAtTime(0.04 * v, t);
+    tineGain.gain.exponentialRampToValueAtTime(0.0005, t + 0.1);
+    tine.connect(tineGain);
+    tineGain.connect(out);
+
+    const tremolo = ctx.createOscillator();
+    tremolo.frequency.value = 4.2 + Math.random() * 0.8;
+    const tremoloDepth = ctx.createGain();
+    tremoloDepth.gain.value = 0.025 * v;
+    tremolo.connect(tremoloDepth);
+    tremoloDepth.connect(out.gain);
+
+    carrier.connect(out);
+    out.connect(epianoBus);
+    const oscillators = [carrier, modulator, tine, tremolo];
+    for (const osc of oscillators) osc.start(t);
+
+    const id = nextVoiceId++;
+    voices.set(id, { out, oscillators });
+    // Safety: no note rings forever if its release never arrives.
+    setTimeout(() => noteOff(id), 12000);
+    return id;
+  }
+
+  function noteOn(freq: number, velocity = 0.8): number {
+    return startEpiano(freq, velocity, ctx.currentTime);
+  }
+
+  function noteOff(id: number): void {
+    const voice = voices.get(id);
+    if (!voice) return;
+    voices.delete(id);
+    const t = ctx.currentTime;
+    const g = voice.out.gain;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(Math.max(g.value, 0.0001), t);
+    g.exponentialRampToValueAtTime(0.0001, t + 0.35);
+    for (const osc of voice.oscillators) {
+      try {
+        osc.stop(t + 0.4);
+      } catch {
+        // Already stopped.
+      }
+    }
+  }
+
+  return { ctx, unlock, now, scheduleClick, scheduleCountIn, startMetronome, stopAll, playHit, setAmbience, chime, noteOn, noteOff };
 }

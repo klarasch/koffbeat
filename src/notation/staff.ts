@@ -10,7 +10,7 @@ import type { Grade, Level, NoteValue, RhythmEvent } from "../types";
  * advances, never with the clock), "active" is while a finger/key is down on it, and a Grade is
  * its final graded colour.
  */
-export type NoteState = "upcoming" | "next" | "active" | Grade;
+export type NoteState = "upcoming" | "next" | "active" | "done" | Grade;
 
 export interface StaffView {
   /** x in container CSS px of the notehead centre, and which system (line) it is on. */
@@ -53,19 +53,24 @@ export interface RenderStaffOptions {
 
 const INK: Record<"dark" | "light", string> = {
   dark: "#e8e4da",
-  light: "#1a1a1a",
+  light: "#2a1e34",
 };
 
-const GRADE_COLORS: Record<Grade, string> = {
-  perfect: "#7fe0c4",
-  good: "#a8d672",
-  ok: "#e6c35c",
-  miss: "#e0707a",
+/** Played notes take the sand colour of how they landed (shared with the scene's palette). */
+export const GRADE_COLORS: Record<Grade, string> = {
+  perfect: "#e2621b",
+  good: "#f09a3e",
+  ok: "#7a4bb0",
+  miss: "#d23b3b",
 };
+/** Notes not reached yet are drawn in a softer ink, so the next one stands out. */
+const UPCOMING_ALPHA = 0.5;
 
 /** "active" (finger down) uses the same accent colour as a "perfect" grade, with a stronger glow. */
-const ACTIVE_COLOR = "#7fe0c4";
-const NEXT_GLOW_COLOR = "rgba(232, 228, 218, 0.55)";
+/** Shadow each floating note casts on the floor below it, by state (opacity). */
+const SHADOW_OPACITY: Record<NoteState, number> = { upcoming: 0.35, next: 0.9, active: 1, done: 0.55, perfect: 0.55, good: 0.55, ok: 0.55, miss: 0.55 };
+/** How far below the staff line the note shadows fall, in px. */
+const SHADOW_DROP = 30;
 /** Radius, in container px, within which a tap counts as hitting a given event (see eventAt). */
 const HIT_TEST_RADIUS = 26;
 
@@ -75,7 +80,7 @@ const BAR_PADDING = 22;
 const CLEF_TIME_WIDTH = 70;
 const TOP_MARGIN = 40;
 // A 1-line percussion stave needs far less vertical room between systems than a 5-line stave.
-const SYSTEM_GAP = 64;
+const SYSTEM_GAP = 76;
 const BOTTOM_MARGIN = 24;
 /** Index of the one visible line on the 5-line stave. */
 const STAFF_LINE = 2;
@@ -272,6 +277,8 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   let nextMarkerEl: HTMLDivElement | null = null;
   let nextMarkerIndex: number | null = null;
   let holdEl: HTMLDivElement | null = null;
+  /** Floor shadow ellipse per note event (rests cast none). */
+  let shadows: (SVGEllipseElement | undefined)[] = [];
   /** Every non-default note state, re-applied after a rebuild (resize) so marks survive it. */
   const states = new Map<number, NoteState>();
   let builtWidth = -1;
@@ -468,8 +475,42 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     bars = newBars;
 
     const svgEl = container.querySelector("svg");
+    shadows = [];
     if (svgEl) {
       svgEl.style.display = "block";
+      svgEl.style.overflow = "visible";
+      // The notes float above the floor: each casts a soft shadow below the staff line.
+      const ns = "http://www.w3.org/2000/svg";
+      const defs = document.createElementNS(ns, "defs");
+      defs.innerHTML = `<radialGradient id="note-shadow"><stop offset="0" stop-color="${ink}" stop-opacity="0.22"/><stop offset="1" stop-color="${ink}" stop-opacity="0"/></radialGradient>`;
+      const layer = document.createElementNS(ns, "g");
+      layer.setAttribute("class", "note-shadows");
+      let flat = 0;
+      for (const bar of level.bars) {
+        for (const ev of bar) {
+          const meta = eventMeta[flat];
+          if (meta && !ev.rest) {
+            const e = document.createElementNS(ns, "ellipse");
+            e.setAttribute("cx", String(meta.x));
+            e.setAttribute("cy", String(TOP_MARGIN + meta.line * SYSTEM_GAP + 40 + SHADOW_DROP));
+            e.setAttribute("rx", "11");
+            e.setAttribute("ry", "2.6");
+            e.setAttribute("fill", "url(#note-shadow)");
+            e.setAttribute("stroke", "none");
+            e.style.opacity = String(SHADOW_OPACITY.upcoming);
+            layer.appendChild(e);
+            shadows[flat] = e;
+          }
+          flat++;
+        }
+      }
+      svgEl.insertBefore(layer, svgEl.firstChild);
+      svgEl.insertBefore(defs, svgEl.firstChild);
+      // Every note starts in the soft "upcoming" ink.
+      for (const meta of eventMeta) {
+        const el = meta?.note.getSVGElement();
+        if (el) el.style.opacity = String(UPCOMING_ALPHA);
+      }
     }
 
     const cursor = document.createElement("div");
@@ -507,8 +548,7 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     marker.style.height = "2px";
     marker.style.borderRadius = "1px";
     marker.style.background = ink;
-    marker.style.boxShadow = `0 0 8px ${NEXT_GLOW_COLOR}`;
-    marker.style.opacity = "0.8";
+    marker.style.opacity = "0.9";
     marker.style.pointerEvents = "none";
     marker.style.transform = "translate(-50%, 0)";
     container.appendChild(marker);
@@ -633,24 +673,27 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       if (!el) return;
 
       if (state !== "next") hideNextMarkerIfOwnedBy(eventIndex);
+      const shadow = shadows[eventIndex];
+      if (shadow) shadow.style.opacity = String(SHADOW_OPACITY[state]);
 
       switch (state) {
         case "upcoming":
           paintSvgTree(el, null);
-          el.style.filter = "";
+          el.style.opacity = String(UPCOMING_ALPHA);
           break;
         case "next":
           paintSvgTree(el, ink);
-          el.style.filter = `drop-shadow(0 0 4px ${NEXT_GLOW_COLOR})`;
+          el.style.opacity = "1";
           positionNextMarker(eventIndex);
           break;
         case "active":
-          paintSvgTree(el, ACTIVE_COLOR);
-          el.style.filter = `drop-shadow(0 0 6px ${ACTIVE_COLOR})`;
+        case "done":
+          paintSvgTree(el, ink);
+          el.style.opacity = "1";
           break;
         default:
           paintSvgTree(el, GRADE_COLORS[state]);
-          el.style.filter = "";
+          el.style.opacity = "1";
           break;
       }
     },
@@ -678,8 +721,10 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
         const el = meta.note.getSVGElement();
         if (el) {
           paintSvgTree(el, null);
-          el.style.filter = "";
+          el.style.opacity = String(UPCOMING_ALPHA);
         }
+        const shadow = shadows[eventMeta.indexOf(meta)];
+        if (shadow) shadow.style.opacity = String(SHADOW_OPACITY.upcoming);
       }
       if (nextMarkerEl) nextMarkerEl.style.display = "none";
       nextMarkerIndex = null;

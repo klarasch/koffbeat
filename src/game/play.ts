@@ -30,6 +30,30 @@ const GRADE_FLASH_MS = 420;
 const BARS_PER_FIGURE = 4;
 const GRADE_VALUE: Record<Grade, number> = { perfect: 1, good: 0.85, ok: 0.55, miss: 0 };
 
+/** D major pentatonic, D4–D5: every tap note sits well over the drone's chords. */
+const TAP_SCALE = [293.66, 329.63, 369.99, 440.0, 493.88, 587.33];
+
+/**
+ * A gentle melody for the piece's notes: a seeded random walk on the pentatonic scale, mostly
+ * stepwise, so each tap rings a note that leads somewhere instead of the same pitch again.
+ */
+function tapMelody(id: string, count: number): number[] {
+  let seed = figureSeed(id) * 7919 + 17;
+  const rand = () => {
+    seed = (seed * 16807) % 2147483647;
+    return seed / 2147483647;
+  };
+  let degree = 2;
+  const out: number[] = [];
+  for (let i = 0; i < count; i++) {
+    const r = rand();
+    const step = r < 0.35 ? 0 : r < 0.65 ? 1 : r < 0.9 ? -1 : rand() < 0.5 ? 2 : -2;
+    degree = Math.max(0, Math.min(TAP_SCALE.length - 1, degree + step));
+    out.push(TAP_SCALE[degree]!);
+  }
+  return out;
+}
+
 /** A stable small integer from a level id, so a level always starts on the same figure. */
 function figureSeed(id: string): number {
   let h = 0;
@@ -106,7 +130,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   screen.appendChild(dotsRow);
 
   const staffArea = document.createElement("div");
-  staffArea.className = "staff-area glass";
+  staffArea.className = "staff-area";
   const staffContainer = document.createElement("div");
   staffContainer.className = "staff-container";
   staffArea.appendChild(staffContainer);
@@ -150,7 +174,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
 
   function placePlate(): void {
     const rect = plateSlot.getBoundingClientRect();
-    const radius = Math.max(40, Math.min(rect.width * 0.44, rect.height * 0.46));
+    const radius = Math.max(40, Math.min(rect.width * 0.42, rect.height * 1.05));
     scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height / 2, radius);
   }
   const plateObserver = new ResizeObserver(placePlate);
@@ -168,8 +192,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   scene.setAmbient(0);
   scene.setDim(0);
 
-  const staff = renderStaff(staffContainer, level, { theme: "dark" });
-  // The card hugs a short piece instead of leaving empty glass; long pieces scroll inside it.
+  const staff = renderStaff(staffContainer, level, { theme: "light" });
+  // The card hugs a short piece instead of leaving empty space; long pieces scroll inside it.
   const staffSvg = staffContainer.querySelector("svg");
   if (staffSvg) staffArea.style.maxHeight = `${Math.ceil(staffSvg.getBoundingClientRect().height) + 12}px`;
   const onsets = levelOnsets(level);
@@ -205,6 +229,9 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   }
 
   const offsetSec = loadOffset();
+  const melody = tapMelody(level.id, onsets.length);
+  /** The sounding tap note per zone, released with the finger or key. */
+  const soundingByZone = new Map<0 | 1, number>();
   engine.setAmbience(0.35, 1.5);
   const liveJudge = createLiveJudge(onsets, startTime, level.bpm);
   const hits: Hit[] = [];
@@ -269,11 +296,26 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     }, GRADE_FLASH_MS);
   }
 
-  function markSkippedAsMiss(fromIndex: number, toIndexExclusive: number): void {
+  /** Rests already spoiled live (a tap during them, or a note held into them). */
+  const spoiledRests = new Set<number>();
+
+  /**
+   * The player jumped ahead to a later note: notes in between were skipped (missed), while
+   * rests in between were correctly left silent, unless something already spoiled them.
+   */
+  function settleSkipped(fromIndex: number, toIndexExclusive: number): void {
     for (let i = fromIndex; i < toIndexExclusive; i++) {
       const item = timeline[i];
-      if (item) setTimelineState(item, "miss");
+      if (!item) continue;
+      if (item.kind === "rest") setTimelineState(item, spoiledRests.has(item.restIndex) ? "miss" : "done");
+      else setTimelineState(item, "miss");
     }
+  }
+
+  function spoilRest(item: TimelineItem): void {
+    if (item.kind !== "rest") return;
+    spoiledRests.add(item.restIndex);
+    setTimelineState(item, "miss");
   }
 
   /** The event index that best represents a timeline item's on-screen position (a tie chain's first note). */
@@ -297,7 +339,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     // The note bled well past its own release window into the rest that follows: the rest is
     // already spoiled, so grade and skip it immediately rather than waiting on the next press.
     if (afterItem && afterItem.kind === "rest" && releaseGrade === "miss") {
-      setTimelineState(afterItem, "miss");
+      spoilRest(afterItem);
       setNext(afterIndex + 1);
       return;
     }
@@ -328,10 +370,14 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     if (implicit.onsetIndex !== null) finalizeRelease(implicit.onsetIndex, implicit.combinedGrade, implicit.releaseGrade);
 
     const judged = liveJudge.judgeHit(hit);
+    const previousNote = soundingByZone.get(hit.zone);
+    if (previousNote !== undefined) engine.noteOff(previousNote);
+    // A matched tap rings its melody note; a stray tap a soft low one.
+    soundingByZone.set(hit.zone, judged.onsetIndex === null ? engine.noteOn(146.83, 0.35) : engine.noteOn(melody[judged.onsetIndex] ?? 440, 0.8));
     if (judged.onsetIndex === null || judged.grade === null) {
       // An unmatched press while a rest is the current target means the rest wasn't silent.
       const current = timeline[nextPointer];
-      if (current && current.kind === "rest") setTimelineState(current, "miss");
+      if (current && current.kind === "rest") spoilRest(current);
       coherence *= 0.8;
       scene.setCoherence(coherence);
       scene.strike("miss", lastPress.x, lastPress.y);
@@ -368,7 +414,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     }
     const timelineIndex = timelineIndexForOnset.get(judged.onsetIndex);
     if (timelineIndex !== undefined) {
-      if (timelineIndex > nextPointer) markSkippedAsMiss(nextPointer, timelineIndex);
+      if (timelineIndex > nextPointer) settleSkipped(nextPointer, timelineIndex);
       nextPointer = timelineIndex;
       const item = timeline[timelineIndex];
       if (item) {
@@ -381,6 +427,11 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
 
   function handleRelease(release: Release): void {
     releases.push(release);
+    const sounding = soundingByZone.get(release.zone);
+    if (sounding !== undefined) {
+      engine.noteOff(sounding);
+      soundingByZone.delete(release.zone);
+    }
     const result = liveJudge.judgeRelease(release);
     if (result.onsetIndex !== null) finalizeRelease(result.onsetIndex, result.combinedGrade, result.releaseGrade);
   }
@@ -482,6 +533,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
 
   function teardown(): void {
     ended = true;
+    for (const id of soundingByZone.values()) engine.noteOff(id);
+    soundingByZone.clear();
     endHold(null);
     cancelAnimationFrame(rafId);
     engine.stopAll();
@@ -505,8 +558,9 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       const combined = combineGrades(judgement.grade, judgement.releaseGrade);
       for (const eventIndex of tieChainIndices(tieFlags, judgement.onset.eventIndex)) staff.setState(eventIndex, combined);
     }
+    // A clean rest is shown in plain ink, not a grade colour: silence was simply right.
     for (const restJudgement of result.restJudgements) {
-      staff.setState(restJudgement.eventIndex, restJudgement.grade);
+      staff.setState(restJudgement.eventIndex, restJudgement.grade === "miss" ? "miss" : "done");
     }
 
     // The last in-run grade flash (e.g. "PERFECT") must not linger once results are shown.

@@ -45,6 +45,26 @@ engine.setAmbience = (level: number, rampSec?: number) => {
 engine.chime = (quality: number) => {
   if (ambienceOn()) rawChime(quality);
 };
+// The electric-piano tap sound has its own switch: on phone speakers it trails the finger by
+// ~0.2 s, which some players find distracting.
+const TAP_SOUND_KEY = "resonance.tapSound";
+function tapSoundOn(): boolean {
+  try {
+    return localStorage.getItem(TAP_SOUND_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+function setTapSoundOn(on: boolean): void {
+  try {
+    localStorage.setItem(TAP_SOUND_KEY, on ? "on" : "off");
+  } catch {
+    // Not persisted; still applies for this visit.
+  }
+}
+const rawNoteOn = engine.noteOn.bind(engine);
+engine.noteOn = (freq: number, velocity?: number) => (tapSoundOn() ? rawNoteOn(freq, velocity) : 0);
+
 function setAmbienceOn(on: boolean): void {
   try {
     localStorage.setItem(AMBIENCE_KEY, on ? "on" : "off");
@@ -110,8 +130,10 @@ function showHome(): void {
     levels: LEVELS,
     engine,
     scene,
-    soundOn: ambienceOn,
-    setSoundOn: setAmbienceOn,
+    sounds: [
+      { label: "Ambience", isOn: ambienceOn, set: setAmbienceOn },
+      { label: "Tap sound", isOn: tapSoundOn, set: setTapSoundOn },
+    ],
     onPlay: (index, mode) => beginLevel(fixedPick(index), mode),
     onRandom: (tier, bars, mode) => beginLevel(randomPick(tier, bars), mode),
   });
