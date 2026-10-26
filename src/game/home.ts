@@ -1,19 +1,18 @@
-// Home screen: title, level list, practice/countIn mode switch, and the calibration link.
+// Home screen: what to practise (difficulty, hands, length), how (mode, tempo), and Play.
 
 import type { AudioEngine } from "../audio/engine";
 import type { Scene } from "../scene/resonance";
 import { runCalibration } from "../input/calibration";
 import { TIER_NAMES } from "../rhythm/generate";
-import { TWO_HAND_STAGES } from "../rhythm/twoHands";
-import type { Level, Mode } from "../types";
+import { MAX_TWO_HAND_TIER, TWO_HAND_STAGES } from "../rhythm/twoHands";
+import type { Mode } from "../types";
 
 export interface HomeOptions {
-  levels: Level[];
   engine: AudioEngine;
-  onPlay: (levelIndex: number, mode: Mode) => void;
+  /** A generated one-hand reading exercise at `tier` (see TIER_NAMES). */
   onRandom: (tier: number, bars: 4 | 8 | 16, mode: Mode) => void;
-  /** A generated two-hand exercise at `stage` (see TWO_HAND_STAGES). */
-  onTwoHands: (stage: number, bars: 4 | 8 | 16, mode: Mode) => void;
+  /** A generated two-hand exercise at `stage` (see TWO_HAND_STAGES), with `tier`'s rhythms. */
+  onTwoHands: (stage: number, tier: number, bars: 4 | 8 | 16, mode: Mode) => void;
   scene: Scene;
   sounds: { label: string; isOn: () => boolean; set: (on: boolean) => void }[];
   /** Practice tempo override (null = each level's own tempo). */
@@ -87,11 +86,12 @@ function markHintSeen(): void {
 
 export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   container.innerHTML = "";
+  const prefs = loadHomePrefs();
 
   const root = document.createElement("div");
   root.className = "home";
 
-  // ---- Top: title and sound switches ----
+  // ---- Top: wordmark and sound switches ----
   const top = document.createElement("header");
   top.className = "home-top";
   const titleBlock = document.createElement("div");
@@ -102,7 +102,6 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   tagline.className = "home-tagline";
   tagline.textContent = "Read the rhythm. Play in time and the sand lifts.";
   titleBlock.append(title, tagline);
-
   const toggles = document.createElement("div");
   toggles.className = "sound-toggles";
   for (const sound of opts.sounds) {
@@ -127,15 +126,13 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   top.append(titleBlock, toggles);
   root.appendChild(top);
 
-  // ---- Middle: the sand ----
   const plateSlot = document.createElement("div");
   plateSlot.className = "home-plate-slot";
   root.appendChild(plateSlot);
 
-  // ---- Bottom: what to play, and Play ----
+  // ---- The panel: what to practise, then how, then Play ----
   const dock = document.createElement("div");
   dock.className = "home-dock";
-
   if (isTouchDevice() && !hasSeenHint()) {
     const hint = document.createElement("p");
     hint.className = "hint";
@@ -143,19 +140,76 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     dock.appendChild(hint);
     markHintSeen();
   }
+  const panel = document.createElement("section");
+  panel.className = "home-panel";
+  panel.setAttribute("aria-label", "Choose an exercise");
 
-  // Settings line: mode and tempo, as words.
-  let mode: Mode = "practice";
-  const settings = document.createElement("div");
-  settings.className = "settings-line";
+  let { tier, hands, stage, bars, mode } = prefs;
 
-  const modeGroup = optionGroup("Mode", [
-    { key: "practice", label: "Practice", title: "Clicks continue throughout" },
-    { key: "countIn", label: "Count-in", title: "One bar of clicks, then keep the pulse yourself" },
-  ], "practice", (key) => {
-    mode = key as Mode;
+  // Difficulty: the twelve reading tiers, the heart of the curriculum.
+  const tierSection = section("Difficulty");
+  const ladder = document.createElement("div");
+  ladder.className = "tier-ladder";
+  ladder.setAttribute("role", "listbox");
+  ladder.setAttribute("aria-label", "Difficulty");
+  const tierItems = TIER_NAMES.map((name, i) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "tier-item";
+    item.setAttribute("role", "option");
+    item.innerHTML = `<span class="tier-num"></span><span class="tier-name"></span>`;
+    (item.children[0] as HTMLElement).textContent = String(i + 1).padStart(2, "0");
+    (item.children[1] as HTMLElement).textContent = name;
+    item.addEventListener("click", () => {
+      tier = i + 1;
+      paint();
+    });
+    ladder.appendChild(item);
+    return item;
   });
+  tierSection.appendChild(ladder);
 
+  // Hands, stage (two hands only) and length.
+  const shapeSection = document.createElement("div");
+  shapeSection.className = "panel-row";
+  const handsGroup = optionGroup("Hands", [
+    { key: "1", label: "One hand", title: "One line of rhythm" },
+    { key: "2", label: "Two hands", title: "Two lines: left hand on F, right hand on J" },
+  ], String(hands), (key) => {
+    hands = key === "2" ? 2 : 1;
+    paint();
+  });
+  const stageGroup = optionGroup(
+    "Stage",
+    TWO_HAND_STAGES.map((name, i) => ({ key: String(i + 1), label: name, title: name })),
+    String(stage),
+    (key) => {
+      stage = Number(key);
+      paint();
+    },
+  );
+  stageGroup.classList.add("stage-group");
+  const lengthGroup = optionGroup(
+    "Length",
+    BAR_OPTIONS.map((b) => ({ key: String(b), label: `${b} bars`, title: `${b} bars` })),
+    String(bars),
+    (key) => {
+      bars = Number(key) as 4 | 8 | 16;
+      paint();
+    },
+  );
+  shapeSection.append(handsGroup, lengthGroup, stageGroup);
+
+  // How: mode and tempo.
+  const howSection = document.createElement("div");
+  howSection.className = "panel-row";
+  const modeGroup = optionGroup("Mode", [
+    { key: "practice", label: "Practice", title: "The metronome keeps going; play on the click" },
+    { key: "countIn", label: "Count-in", title: "One bar of clicks, then keep the pulse yourself" },
+  ], mode, (key) => {
+    mode = key as Mode;
+    paint();
+  });
   const tempoGroup = document.createElement("div");
   tempoGroup.className = "option-group tempo-group";
   const tempoLabel = document.createElement("span");
@@ -167,95 +221,12 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   tempoValue.className = "tempo-value";
   const faster = textButton("+", "Faster");
   tempoGroup.append(tempoLabel, slower, tempoValue, faster);
-  settings.append(modeGroup, tempoGroup);
+  howSection.append(modeGroup, tempoGroup);
 
-  // Level picker: the fixed levels plus "Random", as a line of words.
-  const prefs = loadRandomPrefs();
-  const handPrefs = loadHandPrefs();
-  let picked: Picked = loadPicked(opts.levels.length);
-  const picker = document.createElement("div");
-  picker.className = "level-picker";
-  picker.setAttribute("role", "listbox");
-  picker.setAttribute("aria-label", "Level");
-  const items: HTMLButtonElement[] = [];
-  const addItem = (key: Picked, num: string, name: string) => {
-    const item = document.createElement("button");
-    item.type = "button";
-    item.className = "picker-item";
-    item.setAttribute("role", "option");
-    item.innerHTML = `<span class="picker-num"></span><span class="picker-name"></span>`;
-    (item.children[0] as HTMLElement).textContent = num;
-    (item.children[1] as HTMLElement).textContent = name;
-    item.dataset.key = String(key);
-    item.addEventListener("click", () => {
-      picked = key;
-      savePicked(key);
-      paint();
-    });
-    items.push(item);
-    picker.appendChild(item);
-  };
-  opts.levels.forEach((level, i) => addItem(i, String(i + 1).padStart(2, "0"), level.title));
-  addItem("random", "∞", "Random");
-  addItem("hands", "‖", "Two hands");
+  const note = document.createElement("p");
+  note.className = "panel-note";
 
-  // Random exercise options, shown only when Random is picked.
-  const randomLine = document.createElement("div");
-  randomLine.className = "settings-line random-line";
-  const tierGroup = document.createElement("label");
-  tierGroup.className = "option-group";
-  const tierLabel = document.createElement("span");
-  tierLabel.className = "option-label";
-  tierLabel.textContent = "Difficulty";
-  const tierSelect = document.createElement("select");
-  tierSelect.className = "text-select";
-  TIER_NAMES.forEach((name, i) => {
-    const option = document.createElement("option");
-    option.value = String(i + 1);
-    option.textContent = `${i + 1} · ${name}`;
-    tierSelect.appendChild(option);
-  });
-  tierSelect.value = String(prefs.tier);
-  tierGroup.append(tierLabel, tierSelect);
-  let bars = prefs.bars;
-  const barsGroup = optionGroup(
-    "Length",
-    BAR_OPTIONS.map((b) => ({ key: String(b), label: `${b} bars`, title: `${b} bars` })),
-    String(bars),
-    (key) => {
-      bars = Number(key) as 4 | 8 | 16;
-    },
-  );
-  randomLine.append(tierGroup, barsGroup);
-
-  // Two-hand options, shown only when Two hands is picked: the stage, and the same length choice.
-  const handsLine = document.createElement("div");
-  handsLine.className = "settings-line random-line";
-  const stageGroup = document.createElement("label");
-  stageGroup.className = "option-group";
-  const stageLabel = document.createElement("span");
-  stageLabel.className = "option-label";
-  stageLabel.textContent = "Stage";
-  const stageSelect = document.createElement("select");
-  stageSelect.className = "text-select";
-  TWO_HAND_STAGES.forEach((name, i) => {
-    const option = document.createElement("option");
-    option.value = String(i + 1);
-    option.textContent = `${i + 1} · ${name}`;
-    stageSelect.appendChild(option);
-  });
-  stageSelect.value = String(handPrefs.stage);
-  stageGroup.append(stageLabel, stageSelect);
-  let handBars = handPrefs.bars;
-  const handBarsGroup = optionGroup(
-    "Length",
-    BAR_OPTIONS.map((b) => ({ key: String(b), label: `${b} bars`, title: `${b} bars` })),
-    String(handBars),
-    (key) => {
-      handBars = Number(key) as 4 | 8 | 16;
-    },
-  );
-  handsLine.append(stageGroup, handBarsGroup);
+  panel.append(tierSection, shapeSection, howSection, note);
 
   const play = document.createElement("button");
   play.type = "button";
@@ -263,31 +234,33 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   play.innerHTML = `<span class="play-cta-word">Play</span><span class="play-cta-arrow" aria-hidden="true">→</span><span class="play-cta-what"></span>`;
   const playWhat = play.lastChild as HTMLElement;
 
-  function levelBpm(): number {
-    if (picked === "hands") return 72;
-    return picked === "random" ? 80 : (opts.levels[picked]?.bpm ?? 80);
-  }
+  const defaultBpm = () => (hands === 2 ? 72 : 80);
+  const effectiveTier = () => (hands === 2 ? Math.min(tier, MAX_TWO_HAND_TIER) : tier);
 
   function paint(): void {
-    for (const item of items) {
-      const active = item.dataset.key === String(picked);
+    tierItems.forEach((item, i) => {
+      const active = i + 1 === tier;
       item.classList.toggle("active", active);
       item.setAttribute("aria-selected", String(active));
-    }
-    randomLine.hidden = picked !== "random";
-    handsLine.hidden = picked !== "hands";
-    playWhat.textContent = picked === "random" ? "Random exercise" : picked === "hands" ? "Two-hand exercise" : (opts.levels[picked]?.title ?? "");
+      // 3/4 & 6/8 is one-hand only for now.
+      item.classList.toggle("unavailable", hands === 2 && i + 1 > MAX_TWO_HAND_TIER);
+    });
+    stageGroup.hidden = hands !== 2;
+    note.textContent = hands === 2 && tier > MAX_TWO_HAND_TIER ? "Two hands are in 4/4 for now: this plays tier 11, triplets." : mode === "practice" ? "The metronome keeps going: play on the click." : "One bar of clicks, then keep the pulse yourself.";
     const override = opts.tempo.get();
-    tempoValue.textContent = `${override ?? levelBpm()} bpm`;
+    tempoValue.textContent = `${override ?? defaultBpm()} bpm`;
     tempoValue.classList.toggle("custom", override !== null);
-    tempoValue.title = override === null ? "The level's own tempo" : "Custom tempo, click to reset";
-    items.find((i) => i.classList.contains("active"))?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    tempoValue.title = override === null ? "The exercise's own tempo" : "Custom tempo, click to reset";
+    const what = `${TIER_NAMES[effectiveTier() - 1] ?? ""} · ${bars} bars`;
+    playWhat.textContent = hands === 2 ? `Two hands, ${TWO_HAND_STAGES[stage - 1]?.toLowerCase()} · ${what}` : what;
+    saveHomePrefs({ tier, hands, stage, bars, mode });
+    tierItems[tier - 1]?.scrollIntoView({ block: "nearest", inline: "center" });
   }
 
   const stepTempo = (delta: number) => {
-    const current = opts.tempo.get() ?? levelBpm();
+    const current = opts.tempo.get() ?? defaultBpm();
     const next = Math.max(40, Math.min(160, Math.round((current + delta) / 5) * 5));
-    opts.tempo.set(next === levelBpm() ? null : next);
+    opts.tempo.set(next === defaultBpm() ? null : next);
     paint();
   };
   slower.addEventListener("click", () => stepTempo(-5));
@@ -298,17 +271,8 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   });
 
   const start = () => {
-    if (picked === "random") {
-      const tier = Number(tierSelect.value);
-      saveRandomPrefs({ tier, bars });
-      opts.onRandom(tier, bars, mode);
-    } else if (picked === "hands") {
-      const stage = Number(stageSelect.value);
-      saveHandPrefs({ stage, bars: handBars });
-      opts.onTwoHands(stage, handBars, mode);
-    } else {
-      opts.onPlay(picked, mode);
-    }
+    if (hands === 2) opts.onTwoHands(stage, effectiveTier(), bars, mode);
+    else opts.onRandom(tier, bars, mode);
   };
   play.addEventListener("click", start);
   const onKey = (event: KeyboardEvent) => {
@@ -339,9 +303,8 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
 
   const footer = document.createElement("div");
   footer.className = "home-footer";
-  // Play sits at the end of the reading path, bottom right; the quiet link takes the left.
   footer.append(calibrateLink, play);
-  dock.append(settings, picker, randomLine, handsLine, footer);
+  dock.append(panel, footer);
   root.appendChild(dock);
 
   container.appendChild(root);
@@ -353,6 +316,17 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     window.removeEventListener("keydown", onKey);
   };
   opts.engine.setAmbience(0.6, 2);
+}
+
+/** A labelled block inside the panel. */
+function section(label: string): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "panel-section";
+  const labelEl = document.createElement("span");
+  labelEl.className = "option-label";
+  labelEl.textContent = label;
+  el.appendChild(labelEl);
+  return el;
 }
 
 /** A labelled group of words where exactly one is selected. */
@@ -398,76 +372,41 @@ function textButton(text: string, label: string): HTMLButtonElement {
   return button;
 }
 
-const PICKED_KEY = "resonance.picked";
-
-/** A fixed level's index, a random one-line exercise, or a two-hand exercise. */
-type Picked = number | "random" | "hands";
-
-function loadPicked(levelCount: number): Picked {
-  try {
-    const raw = localStorage.getItem(PICKED_KEY);
-    if (raw === "random" || raw === "hands") return raw;
-    const n = Number(raw);
-    if (raw !== null && Number.isInteger(n) && n >= 0 && n < levelCount) return n;
-  } catch {
-    // Storage unavailable.
-  }
-  return 0;
-}
-
-function savePicked(key: Picked): void {
-  try {
-    localStorage.setItem(PICKED_KEY, String(key));
-  } catch {
-    // Not persisted; harmless.
-  }
-}
-
-const RANDOM_PREFS_KEY = "resonance.randomPrefs";
 const BAR_OPTIONS = [4, 8, 16] as const;
+const HOME_PREFS_KEY = "resonance.homePrefs";
 
-function loadRandomPrefs(): { tier: number; bars: 4 | 8 | 16 } {
-  try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(RANDOM_PREFS_KEY) ?? "null");
-    if (parsed && typeof parsed === "object" && "tier" in parsed && "bars" in parsed) {
-      const tier = Number(parsed.tier);
-      const bars = BAR_OPTIONS.find((b) => b === Number(parsed.bars));
-      if (tier >= 1 && tier <= TIER_NAMES.length && bars) return { tier, bars };
-    }
-  } catch {
-    // Storage unavailable or corrupt — fall back to defaults.
-  }
-  return { tier: 1, bars: 4 };
+interface HomePrefs {
+  tier: number;
+  hands: 1 | 2;
+  stage: number;
+  bars: 4 | 8 | 16;
+  mode: Mode;
 }
 
-function saveRandomPrefs(prefs: { tier: number; bars: 4 | 8 | 16 }): void {
+function loadHomePrefs(): HomePrefs {
+  const fallback: HomePrefs = { tier: 4, hands: 1, stage: 1, bars: 8, mode: "practice" };
   try {
-    localStorage.setItem(RANDOM_PREFS_KEY, JSON.stringify(prefs));
+    const raw: unknown = JSON.parse(localStorage.getItem(HOME_PREFS_KEY) ?? "null");
+    if (!raw || typeof raw !== "object") return fallback;
+    const r = raw as Partial<HomePrefs>;
+    const tier = Number(r.tier);
+    const stage = Number(r.stage);
+    const bars = BAR_OPTIONS.find((b) => b === Number(r.bars));
+    return {
+      tier: tier >= 1 && tier <= TIER_NAMES.length ? tier : fallback.tier,
+      hands: r.hands === 2 ? 2 : 1,
+      stage: stage >= 1 && stage <= TWO_HAND_STAGES.length ? stage : fallback.stage,
+      bars: bars ?? fallback.bars,
+      mode: r.mode === "countIn" ? "countIn" : "practice",
+    };
   } catch {
-    // Not persisted; harmless.
+    return fallback;
   }
 }
 
-
-const HAND_PREFS_KEY = "resonance.handPrefs";
-
-function loadHandPrefs(): { stage: number; bars: 4 | 8 | 16 } {
+function saveHomePrefs(prefs: HomePrefs): void {
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(HAND_PREFS_KEY) ?? "null");
-    if (parsed && typeof parsed === "object" && "stage" in parsed && "bars" in parsed) {
-      const stage = Number(parsed.stage);
-      const bars = BAR_OPTIONS.find((b) => b === Number(parsed.bars));
-      if (stage >= 1 && stage <= TWO_HAND_STAGES.length && bars) return { stage, bars };
-    }
-  } catch {
-    // Storage unavailable or corrupt — fall back to defaults.
-  }
-  return { stage: 1, bars: 4 };
-}
-
-function saveHandPrefs(prefs: { stage: number; bars: 4 | 8 | 16 }): void {
-  try {
-    localStorage.setItem(HAND_PREFS_KEY, JSON.stringify(prefs));
+    localStorage.setItem(HOME_PREFS_KEY, JSON.stringify(prefs));
   } catch {
     // Not persisted; harmless.
   }

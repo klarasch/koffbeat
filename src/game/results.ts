@@ -194,49 +194,80 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
   if (hitCount(result) === 0) {
     const noTaps = document.createElement("p");
     noTaps.className = "results-detail";
-    noTaps.textContent = "No taps detected. Try again — tap the lower half of the screen, or press F / J.";
+    noTaps.textContent = "No taps detected. Try again: tap the lower half of the screen, or press F / J.";
     panel.appendChild(noTaps);
     panel.appendChild(buildButtons(callbacks));
     return panel;
   }
 
+  const grid = document.createElement("div");
+  grid.className = "results-grid";
+
+  // Left: the numbers, and how the notes landed.
+  const numbers = document.createElement("div");
+  numbers.className = "results-numbers";
   const scores = document.createElement("div");
   scores.className = "results-scores";
   scores.appendChild(scoreCard("Rhythm accuracy", result.accuracy));
-  if (mode === "practice") {
-    scores.appendChild(textCard("Timing vs click", timingVsClickWords(result.judgements)));
-  } else {
-    scores.appendChild(scoreCard("Tempo steadiness", result.steadiness));
+  if (mode === "practice") scores.appendChild(textCard("Timing vs click", timingVsClickWords(result.judgements)));
+  else scores.appendChild(scoreCard("Tempo steadiness", result.steadiness));
+  numbers.append(scores, gradeTally(result));
+  if (result.handAccuracy) {
+    const handsLine = document.createElement("p");
+    handsLine.className = "results-detail";
+    handsLine.textContent = `Left hand ${Math.round(result.handAccuracy[0])} · right hand ${Math.round(result.handAccuracy[1])}`;
+    numbers.appendChild(handsLine);
   }
-  panel.appendChild(scores);
+
+  // Right: what a teacher would say.
+  const advice = document.createElement("div");
+  advice.className = "results-advice";
+  const adviceLabel = document.createElement("span");
+  adviceLabel.className = "option-label";
+  adviceLabel.textContent = "Notes";
+  const list = document.createElement("ul");
+  list.className = "teacher-notes";
+  for (const line of teacherNotes(result, mode)) {
+    const li = document.createElement("li");
+    li.textContent = line;
+    list.appendChild(li);
+  }
+  advice.append(adviceLabel, list);
+  grid.append(numbers, advice);
+  panel.appendChild(grid);
 
   const detail = document.createElement("p");
   detail.className = "results-detail";
   const playedBpm = Math.round(result.playedBpm);
   detail.textContent =
     mode === "practice"
-      ? `Played ${playedBpm} bpm — ${tempoVsTargetWords(result.playedBpm, targetBpm)}.`
-      : `Played ${playedBpm} bpm — ${tempoVsTargetWords(result.playedBpm, targetBpm)}. ${capitalize(driftWords(result.driftPercent))}.`;
-  panel.appendChild(detail);
-
-  if (result.handAccuracy) {
-    const handsLine = document.createElement("p");
-    handsLine.className = "results-detail";
-    handsLine.textContent = `Left hand ${Math.round(result.handAccuracy[0])} · right hand ${Math.round(result.handAccuracy[1])}`;
-    panel.appendChild(handsLine);
-  }
-
-  const advice = document.createElement("ul");
-  advice.className = "teacher-notes";
-  for (const line of teacherNotes(result, mode)) {
-    const li = document.createElement("li");
-    li.textContent = line;
-    advice.appendChild(li);
-  }
-  panel.appendChild(advice);
-
-  panel.appendChild(buildButtons(callbacks));
+      ? `Played ${playedBpm} bpm, ${tempoVsTargetWords(result.playedBpm, targetBpm)}.`
+      : `Played ${playedBpm} bpm, ${tempoVsTargetWords(result.playedBpm, targetBpm)}. ${capitalize(driftWords(result.driftPercent))}.`;
+  panel.append(detail, buildButtons(callbacks));
   return panel;
+}
+
+/** "14 clean · 3 good · 1 close · 0 missed", each count in its grade colour. */
+function gradeTally(result: RunResult): HTMLElement {
+  const tally = document.createElement("p");
+  tally.className = "grade-tally";
+  const counts: Record<Grade, number> = { perfect: 0, good: 0, ok: 0, miss: 0 };
+  for (const j of result.judgements) counts[j.hitTime === null ? "miss" : j.grade]++;
+  const words: [Grade, string][] = [
+    ["perfect", "clean"],
+    ["good", "good"],
+    ["ok", "close"],
+    ["miss", "missed"],
+  ];
+  for (const [grade, word] of words) {
+    const item = document.createElement("span");
+    item.className = `tally-item tally-${grade}`;
+    item.innerHTML = `<b></b> `;
+    (item.firstChild as HTMLElement).textContent = String(counts[grade]);
+    item.append(word);
+    tally.appendChild(item);
+  }
+  return tally;
 }
 
 /** Shown instead of scores when a run ended early: lost the beat, or stopped with Esc. */

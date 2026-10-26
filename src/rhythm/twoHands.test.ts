@@ -229,6 +229,19 @@ describe("three against two", () => {
 });
 
 describe("generateTwoHandLevel", () => {
+  it("combines every reading tier into every stage, and every result validates", () => {
+    for (let stage = 1; stage <= TWO_HAND_STAGES.length; stage++) {
+      for (let tier = 1; tier <= 11; tier++) {
+        for (let seed = 1; seed <= 15; seed++) {
+          const level = generateTwoHandLevel({ stage, tier, bars: 8, seed });
+          expect(validateLevel(level), `stage ${stage} tier ${tier} seed ${seed}`).toEqual([]);
+          expect(level.lines?.[0]?.length).toBe(8);
+          expect(level.lines?.[1]?.length).toBe(8);
+        }
+      }
+    }
+  });
+
   it("makes valid two-line levels at every stage and length", () => {
     for (let stage = 1; stage <= TWO_HAND_STAGES.length; stage++) {
       for (const bars of [4, 8, 16] as const) {

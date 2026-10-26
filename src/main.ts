@@ -9,7 +9,6 @@ import { createScene } from "./scene/resonance";
 import { startPlay } from "./game/play";
 import { generateLevel } from "./rhythm/generate";
 import { generateTwoHandLevel } from "./rhythm/twoHands";
-import { LEVELS } from "./rhythm/levels";
 import type { Level, Mode } from "./types";
 
 const app = document.getElementById("app");
@@ -140,22 +139,16 @@ function withTempo(level: Level): Level {
   return tempo === null ? level : { ...level, bpm: tempo };
 }
 
-function fixedPick(index: number): LevelPick | null {
-  const level = LEVELS[index];
-  return level ? { level: withTempo(level), next: () => fixedPick((index + 1) % LEVELS.length) } : null;
-}
-
 function randomPick(tier: number, bars: 4 | 8 | 16): LevelPick {
   return { level: withTempo(generateLevel({ tier, bars })), next: () => randomPick(tier, bars) };
 }
 
-function twoHandPick(stage: number, bars: 4 | 8 | 16): LevelPick {
-  return { level: withTempo(generateTwoHandLevel({ stage, bars })), next: () => twoHandPick(stage, bars) };
+function twoHandPick(stage: number, tier: number, bars: 4 | 8 | 16): LevelPick {
+  return { level: withTempo(generateTwoHandLevel({ stage, tier, bars })), next: () => twoHandPick(stage, tier, bars) };
 }
 
 function showHome(): void {
   renderHome(app as HTMLElement, {
-    levels: LEVELS,
     engine,
     scene,
     tempo: {
@@ -169,9 +162,8 @@ function showHome(): void {
       { label: "Ambience", isOn: ambienceOn, set: setAmbienceOn },
       { label: "Tap sound", isOn: tapSoundOn, set: setTapSoundOn },
     ],
-    onPlay: (index, mode) => beginLevel(fixedPick(index), mode),
     onRandom: (tier, bars, mode) => beginLevel(randomPick(tier, bars), mode),
-    onTwoHands: (stage, bars, mode) => beginLevel(twoHandPick(stage, bars), mode),
+    onTwoHands: (stage, tier, bars, mode) => beginLevel(twoHandPick(stage, tier, bars), mode),
   });
 }
 
@@ -194,6 +186,8 @@ async function doBeginLevel(pick: LevelPick, mode: Mode): Promise<void> {
     await runCalibration(engine, calContainer);
   }
 
+  // Dev-only: the level being played, for scripted test runs.
+  if (import.meta.env.DEV) (window as unknown as { __resonance: Record<string, unknown> }).__resonance.level = pick.level;
   startPlay(app as HTMLElement, engine, scene, pick.level, mode, {
     onHome: showHome,
     onRetry: () => beginLevel(pick, mode),

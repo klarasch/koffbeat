@@ -36,6 +36,9 @@ const LOST_STRAY_TAPS = 5;
 /** …or this many bars of silence past the note that was due. */
 const LOST_SILENT_BARS = 2;
 
+/** Every this many clean taps in a row, the sand blooms into a richer figure. */
+const STREAK_MILESTONE = 8;
+
 /** Each 4-bar phrase draws the sand toward a new figure. */
 const BARS_PER_FIGURE = 4;
 const GRADE_VALUE: Record<Grade, number> = { perfect: 1, good: 0.85, ok: 0.55, miss: 0 };
@@ -195,6 +198,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   scene.setDim(0);
 
   const staff = renderStaff(staffContainer, level, { theme: "light" });
+  staff.setAnimate(true);
   // The notes area shows whole lines only, as many as fit in about 40% of the screen (at least
   // one), so a line is never sliced through — two-hand lines, with two staves each, are tall.
   // A short piece gets exactly its own height.
@@ -294,6 +298,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   let lastPress: { x: number | null; y: number | null } = { x: null, y: null };
   let allTappedAt: number | null = null;
   let missedInARow = 0;
+  let cleanStreak = 0;
+  let streakFigures = 0;
   let strayInARow = 0;
 
   let nextPointer = 0;
@@ -463,9 +469,21 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     const onset = onsets[judged.onsetIndex];
     scene.strike(judged.grade, lastPress.x, lastPress.y, onset?.quarters ?? 1);
 
+    // A run of clean taps is rewarded: every STREAK_MILESTONE in a row the figure blooms and
+    // moves on to the next, richer pattern. Anything less than good breaks the run.
+    if (judged.grade === "perfect" || judged.grade === "good") {
+      cleanStreak++;
+      if (cleanStreak % STREAK_MILESTONE === 0) {
+        streakFigures++;
+        scene.celebrate();
+      }
+    } else {
+      cleanStreak = 0;
+    }
+
     if (onset) {
       const barIndex = Math.floor(onset.beat / beatsPerBar);
-      const figure = baseFigure + Math.floor(barIndex / BARS_PER_FIGURE);
+      const figure = baseFigure + Math.floor(barIndex / BARS_PER_FIGURE) + streakFigures;
       if (figure !== currentFigure) {
         currentFigure = figure;
         scene.setFigure(figure);
@@ -789,6 +807,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     lastResult = result;
     logDebugTable(result);
 
+    // The final repaint is still: no motion for every note at once.
+    staff.setAnimate(false);
     staff.clearMarks();
     // The player reviews the whole staff after a run — let them scroll it freely, rather than
     // only the current line as during play.

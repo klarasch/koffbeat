@@ -49,6 +49,8 @@ export interface StaffView {
    * length of the whole tied chain starting at `eventIndex`.
    */
   setHold(eventIndex: number, quarters: number, progress: number | null, state?: "filling" | "ready" | "over"): void;
+  /** Live play: state changes animate (press pop, pulse when right, shake when wrong). */
+  setAnimate(on: boolean): void;
   /** Softly highlights one bar (0-based), or none with null: where the music is right now. */
   setBarHighlight(barIndex: number | null): void;
   /** The index of the first event in a bar (0-based), for scrolling it into view. */
@@ -350,6 +352,15 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   const holdBars = new Map<number, { track: HTMLDivElement; fill: HTMLDivElement }>();
   let barBandEl: HTMLDivElement | null = null;
   let highlightedBar: number | null = null;
+  let animate = false;
+
+  /** Restarts a one-shot CSS animation class on a note's SVG group. */
+  function playMotion(el: SVGElement, cls: "note-press" | "note-pulse" | "note-shake"): void {
+    el.classList.remove("note-press", "note-pulse", "note-shake");
+    void el.getBoundingClientRect();
+    el.classList.add(cls);
+    el.addEventListener("animationend", () => el.classList.remove(cls), { once: true });
+  }
   /** Floor shadow ellipse per note event (rests cast none). */
   let shadows: (SVGEllipseElement | undefined)[] = [];
   /** Every non-default note state, re-applied after a rebuild (resize) so marks survive it. */
@@ -727,6 +738,9 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   }
 
   const view: StaffView = {
+    setAnimate(on: boolean): void {
+      animate = on;
+    },
     setBarHighlight(barIndex: number | null): void {
       highlightedBar = barIndex;
       const bar = barIndex === null ? undefined : bars[barIndex];
@@ -817,6 +831,7 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       if (el) paintSvgTree(el, GRADE_COLORS[grade]);
     },
     setState(eventIndex: number, state: NoteState): void {
+      const previous = states.get(eventIndex) ?? "upcoming";
       if (state === "upcoming") states.delete(eventIndex);
       else states.set(eventIndex, state);
       const meta = eventMeta[eventIndex];
@@ -847,6 +862,11 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
           paintSvgTree(el, GRADE_COLORS[state]);
           el.style.opacity = "1";
           break;
+      }
+      if (animate && previous !== state) {
+        if (state === "active") playMotion(el, "note-press");
+        else if (state === "perfect" || state === "good") playMotion(el, "note-pulse");
+        else if (state === "ok" || state === "miss") playMotion(el, "note-shake");
       }
     },
     layout() {

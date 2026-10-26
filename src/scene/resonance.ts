@@ -43,6 +43,8 @@ export interface Scene {
   scatter(): void;
   /** End of a run: the sand rises and settles into the figure. `quality` is 0..1. */
   reveal(quality: number): void;
+  /** A run of precise playing reached a milestone: the figure blooms and rises. */
+  celebrate(): void;
   /** Clear the reveal, hold and rest state. */
   reset(): void;
   /** Numbers for debugging in the browser console. */
@@ -152,6 +154,8 @@ uniform float uDt;
 uniform float uEnergy;
 uniform float uLift;
 uniform float uSettle;
+uniform float uShake;
+uniform float uHarmony;
 ${SURFACE_GLSL}
 ${NOISE_GLSL}
 
@@ -175,16 +179,26 @@ void main() {
 
   vec3 acc = vec3(0.0);
   // On the ground: drift toward the still lines, stirred by a smooth (never random) shimmer.
-  acc.xz += -f * grad * 3.2 * uEnergy * ground;
+  // Precise playing (harmony) sorts the sand into a crisper figure.
+  acc.xz += -f * grad * 3.2 * (0.7 + 0.8 * uHarmony) * uEnergy * ground;
   // A tiny jiggle where the ground vibrates. Uncorrelated from grain to grain, so it can never
   // herd grains into clumps the way any smooth current does; at this grain size it reads as
   // shimmer, not flicker.
   vec2 jiggle = vec2(hash12(uv * 811.0 + uTime * 61.7), hash12(uv * 577.0 - uTime * 43.1)) - 0.5;
   acc.xz += jiggle * (abs(f) + 0.08) * uEnergy * 5.0 * ground;
 
+  // A mistake shakes everything loose: grains are knocked out of the figure, in every
+  // direction, and thrown a little into the air.
+  vec2 knock = vec2(hash12(uv * 313.0 + uTime * 17.3), hash12(uv * 271.0 - uTime * 29.9)) - 0.5;
+  acc.xz += knock * uShake * 34.0;
+  acc.y += (hash12(uv * 97.0 + uTime) - 0.3) * uShake * 6.0 * ground;
+
   // In the air: an even, gentle breeze that slowly turns, so veils drift without pooling.
-  vec2 breeze = vec2(cos(uTime * 0.07), sin(uTime * 0.05)) * 0.12;
+  vec2 breeze = vec2(cos(uTime * 0.07), sin(uTime * 0.05)) * 0.05;
   acc.xz += breeze * air * (0.4 + uLift);
+  // Lifted sand keeps its shape: the figure's pull still acts in the air, so the whole figure
+  // rises intact instead of breaking into clouds.
+  acc.xz += -f * grad * 2.2 * max(uEnergy, 0.35) * air;
 
   // Ripples push and lift grains as they pass, like a wave through dry sand.
   for (int i = 0; i < ${MAX_RIPPLES}; i++) {
@@ -200,9 +214,10 @@ void main() {
 
   // Vertical: a soft spring toward a flowing height field. When the playing is in tempo the
   // field rises into thin veils, highest above the vibrating parts; otherwise it is the ground.
-  float veil = vnoise(p * 1.6 + vec2(uTime * 0.13, -uTime * 0.09) + seed * 0.15);
-  veil = smoothstep(0.25, 0.95, veil);
-  float target = floorY + min(uLift, 0.85) * (0.02 + 0.26 * veil * (0.55 + 0.6 * min(abs(f), 1.0))) * (0.8 + 0.4 * fract(seed * 7.13));
+  // A smooth, slowly rolling sheet (no patches): the figure lifts as one surface, a little
+  // higher where the plate vibrates most.
+  float veil = 0.5 + 0.5 * sin(uTime * 0.9 + p.x * 1.7 - p.y * 1.2) * cos(uTime * 0.6 + p.y * 1.4 + p.x * 0.5);
+  float target = floorY + min(uLift, 0.85) * (0.04 + 0.2 * veil * (0.65 + 0.4 * min(abs(f), 1.0))) * (0.93 + 0.14 * fract(seed * 7.13));
   acc.y += (target - pos.y) * mix(9.0, 30.0, uSettle) - vel.y * mix(3.5, 8.0, uSettle);
 
   // Keep the bed together: grounded grains are held inside it; airborne ones are drawn back.
@@ -234,6 +249,8 @@ uniform sampler2D uVelocities;
 uniform float uSize;
 uniform float uDim;
 uniform float uReveal;
+uniform float uBloom;
+uniform float uHarmony;
 attribute vec2 aRef;
 varying vec4 vColor;
 ${COLORS_GLSL}
@@ -252,7 +269,7 @@ void main() {
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
   gl_Position = projectionMatrix * mv;
   float scale = 0.7 + 0.6 * fract(seed * 13.37);
-  gl_PointSize = max(1.0, uSize * scale * mix(1.0, 0.8, air) / -mv.z);
+  gl_PointSize = max(1.0, uSize * scale * mix(1.0, 0.8, air) * (1.0 + 0.3 * uBloom) / -mv.z);
 
   vec3 c = PALETTE[int(mod(floor(seed * 6000.0), 6.0))] * (0.86 + 0.28 * fract(seed * 91.7));
   // On the ground the pigment is matte; in the air light passes through it and the veil
@@ -261,6 +278,11 @@ void main() {
   vec3 glow = mix(c, vec3(1.0), 0.22);
   vec3 col = mix(lit, glow, air);
   col = mix(col, col * 1.08 + vec3(0.04, 0.02, 0.0), uReveal * 0.5);
+  // Precision is colour: in harmony the pigment is vivid and blooms with every clean tap; as
+  // the playing falls apart it fades toward grey dust.
+  float grey = dot(col, vec3(0.3, 0.55, 0.15));
+  col = mix(vec3(grey) * 0.95 + 0.05, col, 0.35 + 0.65 * uHarmony);
+  col = mix(col, min(col * 1.35 + vec3(0.05), vec3(1.0)), uBloom * 0.6);
   float r = length(p.xz);
   float edge = 1.0 - smoothstep(1.02, 1.5, r);
   float alpha = mix(0.92, 0.42, air) * edge * (1.0 - uDim * 0.75);
@@ -397,6 +419,7 @@ function noopScene(): Scene {
     setDim() {},
     scatter() {},
     reveal() {},
+    celebrate() {},
     reset() {},
   };
 }
@@ -502,6 +525,8 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   gpu.setVariableDependencies(posVar, [posVar, velVar]);
   gpu.setVariableDependencies(velVar, [posVar, velVar]);
   const simUniforms = {
+    uShake: { value: 0 },
+    uHarmony: { value: 1 },
     uDt: { value: 1 / 60 },
     uEnergy: { value: 0 },
     uLift: { value: 0 },
@@ -552,7 +577,7 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   scene.add(ground);
 
   // ---- Pigment ----
-  const pigmentUniforms = { ...texU, uSize: { value: 10 }, uDim: dimU, uReveal: revealU };
+  const pigmentUniforms = { ...texU, uSize: { value: 10 }, uDim: dimU, uReveal: revealU, uBloom: { value: 0 }, uHarmony: simUniforms.uHarmony };
   const pigment = new THREE.Points(
     pigmentGeo,
     new THREE.ShaderMaterial({ vertexShader: PIGMENT_VERT, fragmentShader: PIGMENT_FRAG, uniforms: pigmentUniforms, transparent: true, depthWrite: false }),
@@ -594,6 +619,10 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   let reveal = 0;
   let revealTarget = 0;
   let resting = false;
+  /** 0..1: how precise the playing has been lately (rises on clean taps, collapses on mistakes). */
+  let harmony = 1;
+  let shake = 0;
+  let bloom = 0;
   let settle = 0;
   let hold: { progress: number; state: HoldState } | null = null;
   let holdVis = 0;
@@ -712,7 +741,14 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     holdLift += ((hold && hold.state !== "over" ? 0.35 + 0.65 * hold.progress : 0) - holdLift) * (1 - Math.exp(-dt * (hold ? 2.5 : 4)));
     energy *= Math.exp(-dt * (reducedMotion ? 3 : 1.4 + settle * 2.5));
     const tempo = coherence * coherence;
-    const liftTarget = (reducedMotion ? 0.35 : 1) * (Math.min(1, energy) * tempo * (1 - settle * 0.85) + holdLift * tempo * 0.9 + ambient * 0.45 + reveal * 0.6);
+    shake *= Math.exp(-dt * 3.5);
+    bloom *= Math.exp(-dt * 2.2);
+    simUniforms.uShake.value = reducedMotion ? shake * 0.3 : shake;
+    simUniforms.uHarmony.value += (harmony - simUniforms.uHarmony.value) * (1 - Math.exp(-dt * 3));
+    pigmentUniforms.uBloom.value = bloom;
+    // Lift rises with energy and precision together; a broken run keeps the sand on the floor.
+    const tempoLift = tempo * (0.25 + 0.75 * harmony);
+    const liftTarget = (reducedMotion ? 0.35 : 1) * (Math.min(1, energy) * tempoLift * (1 - settle * 0.85) + holdLift * tempoLift * 0.9 + ambient * 0.45 + reveal * 0.6);
     // Rising is slow and elegant; falling back a little quicker.
     lift += (liftTarget - lift) * (1 - Math.exp(-dt * (liftTarget > lift ? 1.8 : 2.6)));
     holdVis += ((hold ? 1 : 0) - holdVis) * (1 - Math.exp(-dt * (hold ? 20 : 5)));
@@ -738,7 +774,8 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
       }
     }
 
-    const noiseW = (1 - coherence) * 0.85;
+    // Imprecision blurs the figure with a competing mode, sooner and harder than before.
+    const noiseW = Math.pow(1 - Math.min(coherence, harmony), 0.6) * 0.9;
     shared.uModeW.value.set(morph * (1 - noiseW), (1 - morph) * (1 - noiseW), noiseW);
     shared.uStanding.value = 0.01 * Math.min(1, Math.max(energy, ambient * 0.4)) * (1 - settle);
     shared.uTime.value = time;
@@ -803,6 +840,24 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
       const speed = 0.9 + 0.25 * Math.sqrt(q);
       const strength = (kind === "miss" ? 0.05 : 0.035) * (0.8 + 0.35 * Math.sqrt(q));
       addRipple(x, z, strength, wavelength, speed, GRADE_RGB[kind]);
+      if (kind === "perfect") {
+        harmony = Math.min(1, harmony + 0.1);
+        bloom = Math.min(1.2, bloom + 0.7);
+      } else if (kind === "good") {
+        harmony = Math.min(1, harmony + 0.05);
+        bloom = Math.min(1.2, bloom + 0.35);
+      } else if (kind === "ok") {
+        harmony = Math.max(0, harmony - 0.15);
+        shake = Math.max(shake, 0.35);
+      } else if (kind === "miss") {
+        harmony *= 0.45;
+        shake = 1;
+      }
+    },
+    celebrate() {
+      bloom = 1.6;
+      energy = Math.min(1.3, energy + 0.6);
+      addRipple(0, 0, 0.06, 0.7, 0.55, GRADE_RGB.perfect);
     },
     release(kind: StrikeKind = "neutral") {
       addRipple(0, 0, 0.02, 0.5, 0.7, GRADE_RGB[kind]);
@@ -837,6 +892,8 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
       hold = null;
       resting = false;
       coherence = 1;
+      harmony = 0.7;
+      shake = 0;
     },
   };
 }
