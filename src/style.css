@@ -669,27 +669,152 @@ body,
   transform: translateX(14px);
 }
 
-/* ---------- Calibration ---------- */
+/* ---------- Calibration: the same quiet type and rectangles as the rest ---------- */
 
-.calibration-screen {
-  position: relative;
-  max-width: 440px;
-  margin: max(32px, env(safe-area-inset-top)) auto 0;
-  padding: 20px 18px;
+.cal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(14px, 2.4vh, 22px);
+  padding: max(clamp(24px, 6vh, 64px), env(safe-area-inset-top)) clamp(18px, 5vw, 56px) calc(clamp(18px, 4vh, 44px) + env(safe-area-inset-bottom));
+  overflow-y: auto;
+  max-width: 760px;
+  margin: 0 auto;
 }
 
-.calibration-screen h1,
-.calibration-screen h2 {
+.cal-label {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.cal-heading {
+  margin: 0;
   font-weight: 600;
-  letter-spacing: -0.03em;
-  font-size: 26px;
+  font-size: clamp(36px, 8vw, 64px);
+  letter-spacing: -0.045em;
+  line-height: 0.95;
 }
 
-.calibration-screen button {
+.cal-text {
+  margin: 0;
+  max-width: 48ch;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+
+.cal-status {
+  margin: 0;
+  min-height: 1.4em;
+  font-size: 19px;
+  font-weight: 500;
+}
+
+.cal-progress {
+  display: flex;
+  gap: 6px;
+}
+
+.cal-progress[hidden],
+.cal-pad[hidden],
+.cal-result[hidden],
+.cal-actions[hidden],
+.cal-button[hidden] {
+  display: none;
+}
+
+.cal-progress span {
+  flex: 1;
+  height: 3px;
+  background: rgba(42, 30, 52, 0.14);
+  transition: background 0.2s var(--ease);
+}
+
+.cal-progress span.on {
+  background: var(--accent);
+}
+
+.cal-pad {
+  flex: 1 1 auto;
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(42, 30, 52, 0.2);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.72);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+
+.cal-result {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cal-number {
+  margin: 0;
+  font-weight: 600;
+  font-size: clamp(48px, 10vw, 84px);
+  letter-spacing: -0.05em;
+  line-height: 0.9;
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.cal-button {
+  height: 44px;
+  padding: 0 22px;
+  border-radius: 3px;
+  font-size: 15px;
+  transition:
+    background 0.2s var(--ease),
+    border-color 0.2s var(--ease);
+}
+
+.cal-button.primary {
+  background: var(--ink);
+  color: var(--void);
+  border: 1px solid var(--ink);
+}
+
+.cal-button.secondary {
+  background: rgba(255, 255, 255, 0.72);
   color: var(--ink);
-  border-bottom: 1px solid var(--ink);
-  padding: 6px 0;
-  margin-right: 12px;
+  border: 1px solid rgba(42, 30, 52, 0.2);
+}
+
+@media (hover: hover) {
+  .cal-button.secondary:hover {
+    background: #fff;
+    border-color: rgba(42, 30, 52, 0.4);
+  }
+
+  .cal-button.primary:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+}
+
+.cal-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* ---------- Play ---------- */

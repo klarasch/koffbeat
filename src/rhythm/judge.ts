@@ -198,6 +198,14 @@ class PulseEstimator {
     return this.secPerQuarter;
   }
 
+  /** Re-anchor the pulse on `beat` at `time` (the player came back in on a shifted beat); the
+   * tempo estimate is kept. */
+  resync(beat: number, time: number): void {
+    this.anchorBeat = beat;
+    this.anchorTime = time;
+    this.hasHit = true;
+  }
+
   /** Inverse of predict: where in the music (in beats) a given time falls on this pulse. */
   beatAt(time: number): number {
     if (this.grid) return (time - this.startTime - this.gridOffset) / this.secPerQuarter;
@@ -259,7 +267,16 @@ export interface LiveHitJudgement {
   onsetIndex: number | null;
   errorMs: number | null;
   grade: Grade | null;
+  /** Count-in only: this tap was the player coming back in on a shifted beat, and the pulse was
+   * re-anchored on it. */
+  resynced?: boolean;
 }
+
+/** Count-in re-entry: two stray taps whose offsets from the notes agree within this many seconds
+ * mean the player is back, just on a shifted beat. */
+const RESYNC_AGREEMENT_SEC = 0.08;
+/** …and the two taps must come within this many beats of each other. */
+const RESYNC_SPAN_BEATS = 3;
 
 export interface LiveReleaseJudgement {
   /** The onset this release closes, or null if it didn't close anything currently held. */
@@ -339,34 +356,33 @@ export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number,
   const twoLines = links(onsets).twoLines;
 
   /** The first note still open from index `from` on that a press in `zone` may play. */
-  function nextOpen(from: number, zone: Hand): number {
-    for (let i = from; i < onsets.length; i++) {
-      if (!matchedOnsets.has(i) && !missedOnsets.has(i) && zoneMayPlay(onsets, onsets[i], zone)) return i;
-    }
-    return -1;
+  /**
+   * Matching is by time: a tap goes to the nearest note still open, within that note's window,
+   * on the current pulse (the metronome grid in practice, the player's own pulse in count-in).
+   * Notes the clock has settled as missed are no longer open, so a player who lost their place
+   * is judged correctly again the moment they come back in.
+   */
+  function matchByTime(hitTime: number, zone: Hand): MatchResult | null {
+    const closed = new Set<number>([...matchedOnsets, ...missedOnsets]);
+    return findBestMatch(onsets, closed, estimator, hitTime, zone);
   }
 
-  /**
-   * Sequential matching: a tap is an attempt at the next note still open, however early or
-   * late, unless it lands clearly closer to the note after that one (the player kept counting
-   * and caught on further along). A tap far earlier than the open note is a stray. On a
-   * two-hand level each hand works through its own line: a left-hand tap only ever attempts
-   * the left hand's notes.
-   */
-  function matchSequential(hitTime: number, zone: Hand): MatchResult | null {
-    const open = nextOpen(0, zone);
-    if (open === -1) return null;
-    const errorFor = (i: number) => (hitTime - estimator.predict(onsets[i]?.beat ?? 0)) * 1000;
-    const openError = errorFor(open);
-    const after = nextOpen(open + 1, zone);
-    if (after !== -1) {
-      const afterError = errorFor(after);
-      if (Math.abs(afterError) < Math.abs(openError)) return { index: after, errorMs: afterError };
+  /** The nearest open note to a tap regardless of window (within about a beat), for re-entry. */
+  function nearestOpen(hitTime: number, zone: Hand): { index: number; offsetSec: number } | null {
+    let best: { index: number; offsetSec: number } | null = null;
+    const spq = estimator.currentSecPerQuarter();
+    for (let i = 0; i < onsets.length; i++) {
+      const onset = onsets[i];
+      if (!onset || matchedOnsets.has(i) || missedOnsets.has(i) || !zoneMayPlay(onsets, onset, zone)) continue;
+      const offsetSec = hitTime - estimator.predict(onset.beat);
+      if (Math.abs(offsetSec) > spq * 1.1) continue;
+      if (!best || Math.abs(offsetSec) < Math.abs(best.offsetSec)) best = { index: i, offsetSec };
     }
-    const gapBeforeMs = gapQuartersBefore(onsets, open) * estimator.currentSecPerQuarter() * 1000;
-    if (openError < -Math.max(MATCH_WINDOW_MS, 0.6 * gapBeforeMs)) return null;
-    return { index: open, errorMs: openError };
+    return best;
   }
+
+  /** The last stray tap in count-in mode, waiting for a second one that agrees with it. */
+  let pendingReentry: { time: number; index: number; offsetSec: number } | null = null;
 
   function releaseHeld(zone: 0 | 1, time: number): LiveReleaseJudgement {
     const onsetIndex = heldByZone.get(zone);
@@ -389,8 +405,31 @@ export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number,
 
   return {
     judgeHit(hit: Hit): LiveHitJudgement {
-      const match = matchSequential(hit.time, hit.zone);
+      let match = matchByTime(hit.time, hit.zone);
+      let resynced = false;
+      if (!match && !grid) {
+        // Count-in: no metronome to come back to, only the player's own pulse. A stray tap may
+        // be the player re-entering on a shifted beat; a second stray that agrees confirms it,
+        // and the pulse is re-anchored there.
+        const near = nearestOpen(hit.time, hit.zone);
+        const previous = pendingReentry;
+        if (
+          near &&
+          previous &&
+          near.index > previous.index &&
+          hit.time - previous.time < RESYNC_SPAN_BEATS * estimator.currentSecPerQuarter() &&
+          Math.abs(near.offsetSec - previous.offsetSec) < RESYNC_AGREEMENT_SEC
+        ) {
+          estimator.resync(onsets[near.index]?.beat ?? 0, hit.time);
+          match = { index: near.index, errorMs: 0 };
+          resynced = true;
+          pendingReentry = null;
+        } else {
+          pendingReentry = near ? { time: hit.time, index: near.index, offsetSec: near.offsetSec } : null;
+        }
+      }
       if (!match) return { onsetIndex: null, errorMs: null, grade: null };
+      if (!resynced) pendingReentry = null;
 
       matchedOnsets.add(match.index);
       const onset = onsets[match.index];
@@ -398,15 +437,16 @@ export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number,
       // count-in (plus any calibration error), so it gets the widest windows.
       const isFirst = matchedOnsets.size === 1 && !grid;
       const gapMs = isFirst ? Number.POSITIVE_INFINITY : gapQuartersBefore(onsets, match.index) * estimator.currentSecPerQuarter() * 1000;
-      const grade = gradeFor(Math.abs(match.errorMs), gapMs);
+      // A re-entry is graded "ok": the player is back, but was off the count until now.
+      const grade: Grade = resynced ? "ok" : gradeFor(Math.abs(match.errorMs), gapMs);
       // Two hands share one pulse, so one hand's stumble must not knock the other hand's notes
       // off: on a two-hand level only confident attacks (perfect or good) steer the pulse.
-      const steers = !twoLines || isFirst || grade === "perfect" || grade === "good";
+      const steers = !resynced && (!twoLines || isFirst || grade === "perfect" || grade === "good");
       if (onset && steers) estimator.update(onset.beat, hit.time);
       onsetGradeByIndex.set(match.index, grade);
       heldByZone.set(hit.zone, match.index);
 
-      return { onsetIndex: match.index, errorMs: match.errorMs, grade };
+      return { onsetIndex: match.index, errorMs: match.errorMs, grade, resynced };
     },
     judgeRelease(release: Release): LiveReleaseJudgement {
       return releaseHeld(release.zone, release.time);

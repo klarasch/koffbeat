@@ -136,6 +136,48 @@ describe("judgeRun", () => {
     });
   });
 
+  describe("getting back in after losing the place", () => {
+    const at = (i: number, shiftBeats = 0) => startTime + ((onsets[i]?.beat ?? 0) + shiftBeats) * secPerQuarter;
+
+    it("practice: a tap after skipped notes goes to the note on the click, not the first skipped one", () => {
+      const judge = createLiveJudge(onsets, startTime, bpm, { grid: true });
+      for (let i = 0; i < 4; i++) judge.judgeHit({ time: at(i), zone: 0 });
+      // Notes 4 and 5 are skipped (not even settled yet); the player comes back in on note 6.
+      const back = judge.judgeHit({ time: at(6) + 0.01, zone: 0 });
+      expect(back.onsetIndex).toBe(6);
+      expect(back.grade).toBe("perfect");
+      const next = judge.judgeHit({ time: at(7) - 0.01, zone: 0 });
+      expect(next.onsetIndex).toBe(7);
+      expect(next.grade).toBe("perfect");
+    });
+
+    it("count-in: re-entering almost half a beat off is caught on the second agreeing tap, then judged clean", () => {
+      const judge = createLiveJudge(onsets, startTime, bpm);
+      for (let i = 0; i < 4; i++) judge.judgeHit({ time: at(i), zone: 0 });
+      judge.markMissed(4);
+      judge.markMissed(5);
+      const shift = 0.47;
+      const first = judge.judgeHit({ time: at(6, shift), zone: 0 });
+      expect(first.onsetIndex).toBeNull(); // too far off to be a note yet
+      const second = judge.judgeHit({ time: at(7, shift), zone: 0 });
+      expect(second.resynced).toBe(true);
+      expect(second.onsetIndex).toBe(7);
+      expect(second.grade).toBe("ok");
+      const third = judge.judgeHit({ time: at(8, shift), zone: 0 });
+      expect(third.onsetIndex).toBe(8);
+      expect(third.grade).toBe("perfect");
+    });
+
+    it("count-in: a single stray tap does not move the pulse", () => {
+      const judge = createLiveJudge(onsets, startTime, bpm);
+      for (let i = 0; i < 4; i++) judge.judgeHit({ time: at(i), zone: 0 });
+      expect(judge.judgeHit({ time: at(4, 0.47), zone: 0 }).onsetIndex).toBeNull();
+      const onBeat = judge.judgeHit({ time: at(5), zone: 0 });
+      expect(onBeat.onsetIndex).toBe(5);
+      expect(onBeat.grade).toBe("perfect");
+    });
+  });
+
   describe("grid mode (practice, metronome running)", () => {
     it("does not forgive drifting: a player 6% slow ends up missing the later notes", () => {
       const pulse = judgeRun(onsets, rests, startTime, bpm, hitsAtTempo(onsets, 1.06), [], {});

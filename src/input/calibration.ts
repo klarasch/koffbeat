@@ -150,67 +150,64 @@ const TAPS_NEEDED = 10;
 export function runCalibration(engine: AudioEngine, container: HTMLElement): Promise<number> {
   return new Promise((resolve) => {
     container.innerHTML = "";
-    applyContainerStyles(container);
+    container.classList.add("cal");
 
-    const heading = document.createElement("h2");
-    heading.textContent = "Latency calibration";
-    heading.style.margin = "0 0 8px";
+    const label = document.createElement("p");
+    label.className = "cal-label";
+    label.textContent = "Latency calibration";
+
+    const heading = document.createElement("h1");
+    heading.className = "cal-heading";
+    heading.textContent = "Tune your timing";
 
     const explanation = document.createElement("p");
-    explanation.textContent = "Tap along with the clicks on the pad (or F / J on a keyboard). This measures your device’s audio delay so your taps are judged fairly.";
-    explanation.style.margin = "0 0 20px";
-    explanation.style.opacity = "0.85";
+    explanation.className = "cal-text";
+    explanation.textContent = "Tap along with the clicks on the pad below, or press F or J. This measures your device’s delay so every tap is judged fairly. Listen to the sound, not the screen.";
 
     const statusLine = document.createElement("p");
-    statusLine.style.minHeight = "1.2em";
-    statusLine.style.margin = "0 0 20px";
+    statusLine.className = "cal-status";
 
-    const startButton = createButton("Start");
-    const skipButton = createButton("Skip for now");
-    skipButton.style.marginLeft = "12px";
-    skipButton.style.opacity = "0.7";
+    const startButton = createButton("Start", "primary");
+    const skipButton = createButton("Skip for now", "secondary");
 
     // Taps go to their own pad. Reusing the Start button as the tap target meant every tap also
     // "clicked" Start, restarting the round on top of the one still playing.
     const tapPad = document.createElement("div");
+    tapPad.className = "cal-pad";
     tapPad.textContent = "Tap here";
-    tapPad.style.display = "none";
-    tapPad.style.alignItems = "center";
-    tapPad.style.justifyContent = "center";
-    tapPad.style.height = "40vh";
-    tapPad.style.margin = "0 0 20px";
-    tapPad.style.borderRadius = "0";
-    tapPad.style.background = "transparent";
-    tapPad.style.border = "1px solid #2a1e34";
-    tapPad.style.fontSize = "18px";
-    tapPad.style.letterSpacing = "0.08em";
+    tapPad.hidden = true;
 
     const resultBox = document.createElement("div");
-    resultBox.style.display = "none";
-
+    resultBox.className = "cal-result";
+    resultBox.hidden = true;
+    const resultNumber = document.createElement("p");
+    resultNumber.className = "cal-number";
     const resultText = document.createElement("p");
-    const retryButton = createButton("Retry");
-    const saveButton = createButton("Save");
-    saveButton.style.marginLeft = "12px";
-    const skipAfterButton = createButton("Skip");
-    skipAfterButton.style.marginLeft = "12px";
-    skipAfterButton.style.opacity = "0.7";
-
-    resultBox.appendChild(resultText);
-    resultBox.appendChild(retryButton);
-    resultBox.appendChild(saveButton);
-    resultBox.appendChild(skipAfterButton);
+    resultText.className = "cal-text";
+    const saveButton = createButton("Save", "primary");
+    const retryButton = createButton("Retry", "secondary");
+    const skipAfterButton = createButton("Skip", "secondary");
+    const resultActions = document.createElement("div");
+    resultActions.className = "cal-actions";
+    resultActions.append(saveButton, retryButton, skipAfterButton);
+    resultBox.append(resultNumber, resultText, resultActions);
 
     const startRow = document.createElement("div");
-    startRow.appendChild(startButton);
-    startRow.appendChild(skipButton);
+    startRow.className = "cal-actions";
+    startRow.append(startButton, skipButton);
 
-    container.appendChild(heading);
-    container.appendChild(explanation);
-    container.appendChild(statusLine);
-    container.appendChild(tapPad);
-    container.appendChild(startRow);
-    container.appendChild(resultBox);
+    // Ten slim bars that fill as steady taps land.
+    const progress = document.createElement("div");
+    progress.className = "cal-progress";
+    progress.hidden = true;
+    const progressBars: HTMLElement[] = [];
+    for (let i = 0; i < TAPS_NEEDED; i++) {
+      const bar = document.createElement("span");
+      progress.appendChild(bar);
+      progressBars.push(bar);
+    }
+
+    container.append(label, heading, explanation, statusLine, progress, tapPad, startRow, resultBox);
 
     let lastOffsetSec = 0;
     let detach: (() => void) | null = null;
@@ -226,36 +223,26 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
       // Saving marks calibration as done, so it isn't forced again; the home screen link reruns it.
       const offset = loadOffset();
       saveOffset(offset);
-      resolve(offset);
+      finish(offset);
     };
     skipButton.addEventListener("click", skip);
     skipAfterButton.addEventListener("click", skip);
 
     retryButton.addEventListener("click", () => {
-      resultBox.style.display = "none";
-      startRow.style.display = "block";
+      resultBox.hidden = true;
+      startRow.hidden = false;
       statusLine.textContent = "";
     });
 
     saveButton.addEventListener("click", () => {
       saveOffset(lastOffsetSec);
-      resolve(lastOffsetSec);
+      finish(lastOffsetSec);
     });
 
-    const progress = document.createElement("div");
-    progress.style.display = "flex";
-    progress.style.justifyContent = "center";
-    progress.style.gap = "8px";
-    progress.style.margin = "0 0 16px";
-    const progressDots: HTMLElement[] = [];
-    for (let i = 0; i < TAPS_NEEDED; i++) {
-      const dot = document.createElement("span");
-      dot.style.cssText = "width:10px;height:10px;border-radius:0;background:#e4dfd6;transition:background 120ms;";
-      progress.appendChild(dot);
-      progressDots.push(dot);
+    function finish(offset: number): void {
+      container.classList.remove("cal");
+      resolve(offset);
     }
-    progress.style.visibility = "hidden";
-    container.insertBefore(progress, tapPad);
 
     /**
      * One bar of counted clicks, then clicks continue until the latest TAPS_NEEDED taps are
@@ -263,8 +250,8 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
      */
     async function startRound(): Promise<void> {
       running = true;
-      startRow.style.display = "none";
-      resultBox.style.display = "none";
+      startRow.hidden = true;
+      resultBox.hidden = true;
       statusLine.textContent = "Listen…";
 
       await engine.unlock();
@@ -277,11 +264,9 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
 
       /** Taps that land near a click after the listening bar. */
       const usableTaps: number[] = [];
-      tapPad.style.display = "flex";
-      progress.style.visibility = "visible";
-      progressDots.forEach((dot) => {
-        dot.style.background = "#e4dfd6";
-      });
+      tapPad.hidden = false;
+      progress.hidden = false;
+      progressBars.forEach((bar) => bar.classList.remove("on"));
       detach = attachInput(
         tapPad,
         engine,
@@ -310,9 +295,7 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
             statusLine.textContent = "Keep it steady…";
           }
           const recent = usableTaps.slice(-TAPS_NEEDED);
-          progressDots.forEach((dot, i) => {
-            dot.style.background = i < recent.length ? "#6b3fa0" : "#e4dfd6";
-          });
+          progressBars.forEach((bar, i) => bar.classList.toggle("on", i < recent.length));
           if (recent.length >= TAPS_NEEDED) result = computeOffset(recent, clickTimes);
           if (result.ok || t >= endTime) {
             clearInterval(timer);
@@ -324,43 +307,29 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
       engine.stopAll();
       if (detach) detach();
       detach = null;
-      tapPad.style.display = "none";
-      progress.style.visibility = "hidden";
+      tapPad.hidden = true;
+      progress.hidden = true;
       running = false;
 
       lastOffsetSec = result.ok ? result.offsetSec : loadOffset();
       const offsetMs = Math.round(result.offsetSec * 1000);
       statusLine.textContent = "";
+      resultNumber.textContent = result.ok ? `${Math.abs(offsetMs)} ms` : "Not yet";
       resultText.textContent = result.ok
-        ? `Your device latency: ${Math.abs(offsetMs)} ms ${offsetMs >= 0 ? "(taps landed late)" : "(taps landed early)"}`
+        ? `Your device's delay${offsetMs >= 0 ? " (taps land late)" : " (taps land early)"}. Save it, and every tap will be judged with it taken out.`
         : usableTaps.length < TAPS_NEEDED
           ? `Only ${usableTaps.length} taps landed near the clicks. Try again, or skip for now.`
           : `Taps weren’t steady enough yet (spread ${Math.round(result.spreadMs)} ms). Try again, or skip for now.`;
-      resultBox.style.display = "block";
-      saveButton.style.display = result.ok ? "inline-block" : "none";
+      resultBox.hidden = false;
+      saveButton.hidden = !result.ok;
     }
   });
 }
 
-function applyContainerStyles(container: HTMLElement): void {
-  container.style.background = "#0b0d12";
-  container.style.color = "#e8e4da";
-  container.style.fontFamily = "system-ui, sans-serif";
-  container.style.padding = "24px";
-  container.style.borderRadius = "8px";
-  container.style.textAlign = "center";
-}
-
-function createButton(label: string): HTMLButtonElement {
+function createButton(label: string, kind: "primary" | "secondary"): HTMLButtonElement {
   const button = document.createElement("button");
-  button.textContent = label;
   button.type = "button";
-  button.style.background = "#e8e4da";
-  button.style.color = "#0b0d12";
-  button.style.border = "none";
-  button.style.borderRadius = "6px";
-  button.style.padding = "12px 24px";
-  button.style.fontSize = "16px";
-  button.style.cursor = "pointer";
+  button.className = `cal-button ${kind}`;
+  button.textContent = label;
   return button;
 }

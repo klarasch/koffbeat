@@ -183,6 +183,8 @@ async function doBeginLevel(pick: LevelPick, mode: Mode): Promise<void> {
     calContainer.className = "calibration-screen";
     root.appendChild(calContainer);
     scene.setDim(0.6);
+    // The sand rests low on the screen, clear of the instructions.
+    scene.setPlate(window.innerWidth / 2, window.innerHeight * 0.86, Math.min(window.innerWidth * 0.42, 420));
     await runCalibration(engine, calContainer);
   }
 

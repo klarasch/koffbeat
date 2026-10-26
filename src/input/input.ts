@@ -77,7 +77,7 @@ export function attachInput(
     const x = clientX === null ? rect.width * (zone === 0 ? 0.25 : 0.75) : clientX - rect.left;
     const size = Math.min(rect.width, rect.height) * 0.6;
     const el = document.createElement("span");
-    el.style.cssText = `position:absolute;left:${x - size / 2}px;top:${rect.height / 2 - size / 2}px;width:${size}px;height:${size}px;border-radius:50%;pointer-events:none;background:radial-gradient(circle, rgba(127,224,196,0.55) 0%, rgba(127,224,196,0) 70%);`;
+    el.style.cssText = `position:absolute;left:${x - size / 2}px;top:${rect.height / 2 - size / 2}px;width:${size}px;height:${size}px;border-radius:50%;pointer-events:none;border:1.5px solid rgba(107,63,160,0.55);background:radial-gradient(circle, rgba(107,63,160,0.14) 0%, rgba(107,63,160,0) 70%);`;
     target.appendChild(el);
     const animation = el.animate(
       [

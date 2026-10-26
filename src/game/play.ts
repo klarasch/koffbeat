@@ -533,7 +533,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
         if (item) staff.revealEvent(primaryEventIndex(item));
       }
     }
-    showGradeFlash(judged.grade, attackWords(judged.grade, judged.errorMs ?? 0));
+    showGradeFlash(judged.grade, judged.resynced ? "back in" : attackWords(judged.grade, judged.errorMs ?? 0));
   }
 
   function handleRelease(release: Release): void {
