@@ -195,9 +195,22 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   scene.setDim(0);
 
   const staff = renderStaff(staffContainer, level, { theme: "light" });
-  // The card hugs a short piece instead of leaving empty space; long pieces scroll inside it.
-  const staffSvg = staffContainer.querySelector("svg");
-  if (staffSvg) staffArea.style.maxHeight = `${Math.ceil(staffSvg.getBoundingClientRect().height) + 12}px`;
+  // The notes area shows whole lines only, as many as fit in about 40% of the screen (at least
+  // one), so a line is never sliced through — two-hand lines, with two staves each, are tall.
+  // A short piece gets exactly its own height.
+  function fitStaffArea(): void {
+    const { top, systemHeight, total } = staff.layout();
+    // The view scrolls so the current line starts LEAD px from the top (staff.revealEvent), so
+    // exactly `lines` lines fit in lines × systemHeight + LEAD, with nothing of the next one.
+    const LEAD = 10;
+    const lines = Math.max(1, Math.floor((window.innerHeight * 0.4) / systemHeight));
+    const height = Math.min(total - (top - LEAD), lines * systemHeight + LEAD);
+    staffArea.style.height = `${height + 8}px`;
+    staffArea.style.maxHeight = "none";
+    staffArea.style.flexShrink = "0";
+  }
+  fitStaffArea();
+  window.addEventListener("resize", fitStaffArea);
   const onsets = levelOnsets(level);
   const rests = restSpans(level);
   const tieFlags = levelTieFlags(level);
@@ -826,6 +839,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
 
   /** Leaving the screen for good: the plate stops following this layout. */
   function leave(then: () => void): void {
+    window.removeEventListener("resize", fitStaffArea);
     teardown();
     plateObserver.disconnect();
     window.removeEventListener("keydown", handleKey);

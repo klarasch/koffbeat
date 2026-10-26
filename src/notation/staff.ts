@@ -33,6 +33,11 @@ export interface StaffView {
    */
   revealEvent(eventIndex: number): void;
   /**
+   * Vertical layout in px: the margin above the first line, the height of one line (system,
+   * including every hand's staff) and the total height of the whole page.
+   */
+  layout(): { top: number; systemHeight: number; total: number };
+  /**
    * Toggles whether the viewport can be scrolled by touch/wheel. During play the position is
    * driven only by `revealEvent` (never by the player dragging); on the results screen the
    * player should be free to scroll and review every system.
@@ -843,6 +848,9 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
           el.style.opacity = "1";
           break;
       }
+    },
+    layout() {
+      return { top: TOP_MARGIN, systemHeight: systemGap, total: TOP_MARGIN + Math.max(1, Math.max(...eventMeta.map((m) => m?.line ?? 0)) + 1) * systemGap + BOTTOM_MARGIN };
     },
     revealEvent(eventIndex: number): void {
       const meta = eventMeta[eventIndex];
