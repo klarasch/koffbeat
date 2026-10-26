@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { judgeRun } from "../rhythm/judge";
 import { LEVELS } from "../rhythm/levels";
 import { levelOnsets, restSpans } from "../rhythm/onsets";
+import { generateTwoHandLevel } from "../rhythm/twoHands";
 import { attackWords, releaseWords, teacherNotes } from "./results";
 
 const start = 10;
@@ -42,5 +43,15 @@ describe("teacher feedback", () => {
     const spq = 60 / level.bpm;
     const hits = onsets.map((o) => ({ time: start + o.beat * spq, zone: 0 as const }));
     expect(teacherNotes(judgeRun(onsets, restSpans(level), start, level.bpm, hits, []), "practice")).toEqual(["Clean playing. Try it a little faster."]);
+  });
+
+  it("names the weaker hand on a two-hand level", () => {
+    const level = generateTwoHandLevel({ stage: 2, bars: 4, seed: 7 });
+    const onsets = levelOnsets(level);
+    const spq = 60 / level.bpm;
+    // The right hand is clean; the left hand never plays.
+    const hits = onsets.filter((o) => o.line === 1).map((o) => ({ time: start + o.beat * spq, zone: 1 as const }));
+    const result = judgeRun(onsets, restSpans(level), start, level.bpm, hits, hits.map((h) => ({ ...h, time: h.time + 0.1 })));
+    expect(teacherNotes(result, "countIn")[0]).toMatch(/^Your left hand is less sure than your right/);
   });
 });

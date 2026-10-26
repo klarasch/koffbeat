@@ -85,6 +85,8 @@ function valueName(quarters: number): string {
 /** How far off on average (ms, either way) before a habit is worth a teacher's note. */
 const HABIT_MS = 35;
 const HOLD_HABIT_MS = 150;
+/** Two hands: accuracy points between the hands before the weaker one gets a note. */
+const HAND_GAP = 12;
 
 /**
  * Up to three short notes a teacher would give after this run: rushing or dragging a note
@@ -93,6 +95,15 @@ const HOLD_HABIT_MS = 150;
  */
 export function teacherNotes(result: RunResult, mode: Mode): string[] {
   const notes: string[] = [];
+
+  // Two hands: when one hand is clearly the weaker, that's the first thing to work on.
+  if (result.handAccuracy) {
+    const [left, right] = result.handAccuracy;
+    if (Math.abs(left - right) >= HAND_GAP) {
+      const weak = left < right ? "left" : "right";
+      notes.push(`Your ${weak} hand is less sure than your ${weak === "left" ? "right" : "left"}: play its line alone a few times, then put the hands together again.`);
+    }
+  }
   const played = result.judgements.filter((j) => j.relativeErrorMs !== null);
 
   // Rushing / dragging, by the note value it shows up on most.
@@ -207,6 +218,13 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
       ? `Played ${playedBpm} bpm — ${tempoVsTargetWords(result.playedBpm, targetBpm)}.`
       : `Played ${playedBpm} bpm — ${tempoVsTargetWords(result.playedBpm, targetBpm)}. ${capitalize(driftWords(result.driftPercent))}.`;
   panel.appendChild(detail);
+
+  if (result.handAccuracy) {
+    const handsLine = document.createElement("p");
+    handsLine.className = "results-detail";
+    handsLine.textContent = `Left hand ${Math.round(result.handAccuracy[0])} · right hand ${Math.round(result.handAccuracy[1])}`;
+    panel.appendChild(handsLine);
+  }
 
   const advice = document.createElement("ul");
   advice.className = "teacher-notes";

@@ -1,8 +1,9 @@
-// Renders a single-line percussion rhythm staff with VexFlow 5 and exposes a small
+// Renders a single-line percussion rhythm staff with VexFlow 5 (or, for a two-hand level, two
+// single-line staves joined by a brace: right hand on top, left hand below) and exposes a small
 // runtime API for cursor sweeps and per-note grading marks. See AGENTS/spec for the contract.
 
-import { BarlineType, Beam, Dot, Formatter, Fraction, type RenderContext, Renderer, Stave, StaveNote, StaveTie, Stem, Tuplet, Voice } from "vexflow";
-import { eventQuarters } from "../rhythm/durations";
+import { BarlineType, Beam, Dot, Formatter, Fraction, type RenderContext, Renderer, Stave, StaveConnector, StaveNote, StaveTie, Stem, Tuplet, Voice } from "vexflow";
+import { eventQuarters, levelLines } from "../rhythm/durations";
 import type { Grade, Level, RhythmEvent } from "../types";
 
 /**
@@ -88,6 +89,10 @@ const CLEF_TIME_WIDTH = 70;
 const TOP_MARGIN = 40;
 // A 1-line percussion stave needs far less vertical room between systems than a 5-line stave.
 const SYSTEM_GAP = 76;
+/** Two-hand levels: the distance from the right hand's staff down to the left hand's. */
+const LINE_GAP = 66;
+/** Room for the brace in front of a two-hand system. */
+const BRACE_WIDTH = 14;
 const BOTTOM_MARGIN = 24;
 /** Index of the one visible line on the 5-line stave. */
 const STAFF_LINE = 2;
@@ -109,7 +114,12 @@ const PERCUSSION_KEY = "b/4";
 interface EventMeta {
   note: StaveNote;
   x: number;
+  /** The system (row of bars) it's on. */
   line: number;
+  /** The rhythm line (hand) it belongs to: always 0 on a one-line level. */
+  hand: number;
+  /** y of its own stave (the stave's top, 40px above the visible line). */
+  staveY: number;
   beat: number;
 }
 
@@ -124,20 +134,13 @@ interface BarMeta {
   endBeat: number;
   top: number;
   height: number;
+  /** Beat → x anchors per hand (the same for both hands where their beats coincide). */
+  anchorsByHand: Anchor[][];
   anchors: Anchor[];
 }
 
-interface BarNotes {
-  notes: StaveNote[];
-  tuplets: Tuplet[];
-}
-
-/**
- * Builds a fresh, unformatted note per event (dots attached), ready to be voiced and formatted.
- * Consecutive triplet events are bracketed together, one tuplet per beat's worth (3 in the time
- * of 2). Tuplets are created here, before beaming, because attaching one rescales the notes' ticks.
- */
-function buildBarNotes(barEvents: RhythmEvent[]): BarNotes {
+/** Builds a fresh, unformatted note per event (dots attached), ready to be voiced and formatted. */
+function buildBarNotes(barEvents: RhythmEvent[]): StaveNote[] {
   const notes = barEvents.map((ev) => {
     const note = new StaveNote({
       keys: [PERCUSSION_KEY],
@@ -150,22 +153,58 @@ function buildBarNotes(barEvents: RhythmEvent[]): BarNotes {
     if (ev.dots) Dot.buildAndAttach([note]);
     return note;
   });
+  return notes;
+}
 
+/**
+ * Triplet groups (three of the same value in the time of two), created before the notes are
+ * voiced, since a tuplet changes its notes' ticks. Drawn after the voice, as a "3" over the
+ * group (bracketed unless the group is beamed).
+ */
+function buildTuplets(barEvents: RhythmEvent[], notes: StaveNote[]): Tuplet[] {
   const tuplets: Tuplet[] = [];
   let group: StaveNote[] = [];
   let groupQuarters = 0;
   barEvents.forEach((ev, i) => {
     const note = notes[i];
-    if (!note || ev.tuplet !== 3) return;
+    if (ev.tuplet !== 3 || !note) {
+      group = [];
+      groupQuarters = 0;
+      return;
+    }
     group.push(note);
     groupQuarters += eventQuarters(ev);
-    if (Math.abs(groupQuarters - 1) < 1e-6) {
-      tuplets.push(new Tuplet(group, { numNotes: 3, notesOccupied: 2, bracketed: true, ratioed: false }));
+    // A group closes once it fills a whole number of beats (same rule as validateLevel).
+    if (Math.abs(groupQuarters - Math.round(groupQuarters)) < 1e-6 && Math.round(groupQuarters) >= 1) {
+      tuplets.push(new Tuplet(group, { numNotes: 3, notesOccupied: 2, ratioed: false }));
       group = [];
       groupQuarters = 0;
     }
   });
-  return { notes, tuplets };
+  return tuplets;
+}
+
+/** One bar of one line, ready to format: notes (with tuplets and beams applied) and its voice. */
+interface BarVoice {
+  notes: StaveNote[];
+  beams: Beam[];
+  tuplets: Tuplet[];
+  voice: Voice;
+}
+
+function buildBarVoice(barEvents: RhythmEvent[], level: Level): BarVoice {
+  const notes = buildBarNotes(barEvents);
+  const tuplets = buildTuplets(barEvents, notes);
+  const beams = beamNotes(notes, level);
+  const voice = voiceFor(notes, level);
+  return { notes, beams, tuplets, voice };
+}
+
+/** Formats every hand's voice for a bar together, so notes on the same beat line up. */
+function joinedFormatter(voices: Voice[]): Formatter {
+  const formatter = new Formatter();
+  for (const voice of voices) formatter.joinVoices([voice]);
+  return formatter;
 }
 
 /**
@@ -195,13 +234,9 @@ function voiceFor(notes: StaveNote[], level: Level): Voice {
  * sixteenths reports a much larger minimum than a bar of whole notes, which is what lets
  * {@link packSystems} give each bar only the room its own content needs.
  */
-function measureBarContentWidth(barEvents: RhythmEvent[], level: Level): number {
-  const { notes } = buildBarNotes(barEvents);
-  beamNotes(notes, level);
-  const voice = voiceFor(notes, level);
-  const formatter = new Formatter();
-  formatter.joinVoices([voice]);
-  return formatter.preCalculateMinTotalWidth([voice]);
+function measureBarContentWidth(barByHand: RhythmEvent[][], level: Level): number {
+  const voices = barByHand.map((events) => buildBarVoice(events, level).voice);
+  return joinedFormatter(voices).preCalculateMinTotalWidth(voices);
 }
 
 interface System {
@@ -247,10 +282,10 @@ function packSystems(barMinWidths: number[], availableWidth: number): System[] {
  * above and below, matching standard percussion notation; a "final" barline adds a second,
  * thicker stroke just before it.
  */
-function drawBarline(ctx: RenderContext, x: number, lineY: number, staffSpace: number, kind: "single" | "final"): void {
+function drawBarline(ctx: RenderContext, x: number, lineY: number, staffSpace: number, kind: "single" | "final", bottomLineY = lineY): void {
   const extend = staffSpace * BARLINE_SPACE_MULTIPLIER;
   const top = lineY - extend;
-  const bottom = lineY + extend;
+  const bottom = bottomLineY + extend;
 
   const stroke = (strokeX: number, width: number) => {
     ctx.save();
@@ -283,13 +318,31 @@ function paintSvgTree(root: SVGElement, color: string | null): void {
 export function renderStaff(container: HTMLElement, level: Level, opts?: RenderStaffOptions): StaffView {
   const theme = opts?.theme ?? "dark";
   const ink = INK[theme];
+  /** Each hand's bars: one line, or [left, right] on a two-hand level. */
+  const handLines = levelLines(level);
+  const handCount = handLines.length;
+  const barCount = handLines[0]?.length ?? 0;
+  /** Event indices run through the left hand's line first, then the right hand's. */
+  const handOffset: number[] = [];
+  {
+    let offset = 0;
+    for (const bars of handLines) {
+      handOffset.push(offset);
+      offset += bars.reduce((n, bar) => n + bar.length, 0);
+    }
+  }
+  /** Rows within a system, top to bottom: the right hand above the left, as on a piano staff. */
+  const rowOfHand = (hand: number) => (handCount === 2 ? 1 - hand : 0);
+  const systemGap = SYSTEM_GAP + (handCount - 1) * LINE_GAP;
+  /** Every event in index order, with its hand. */
+  const flatEvents: { ev: RhythmEvent; hand: number }[] = handLines.flatMap((bars, hand) => bars.flat().map((ev) => ({ ev, hand })));
 
   let destroyed = false;
   let resizeObserver: ResizeObserver | null = null;
   let cursorEl: HTMLDivElement | null = null;
-  let nextMarkerEl: HTMLDivElement | null = null;
-  let nextMarkerIndex: number | null = null;
-  let holdEl: HTMLDivElement | null = null;
+  /** One "next" marker and one hold bar per hand, so both hands can be shown at once. */
+  const nextMarkers = new Map<number, { el: HTMLDivElement; eventIndex: number | null }>();
+  const holdBars = new Map<number, { track: HTMLDivElement; fill: HTMLDivElement }>();
   let barBandEl: HTMLDivElement | null = null;
   let highlightedBar: number | null = null;
   /** Floor shadow ellipse per note event (rests cast none). */
@@ -297,7 +350,6 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   /** Every non-default note state, re-applied after a rebuild (resize) so marks survive it. */
   const states = new Map<number, NoteState>();
   let builtWidth = -1;
-  let holdFillEl: HTMLDivElement | null = null;
   let eventMeta: EventMeta[] = [];
   let bars: BarMeta[] = [];
   let scrollable = false;
@@ -343,10 +395,8 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   function build(): void {
     if (destroyed) return;
     container.innerHTML = "";
-    nextMarkerEl = null;
-    nextMarkerIndex = null;
-    holdEl = null;
-    holdFillEl = null;
+    nextMarkers.clear();
+    holdBars.clear();
     barBandEl = null;
     if (getComputedStyle(container).position === "static") {
       container.style.position = "relative";
@@ -356,16 +406,18 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     const measuredWidth = container.clientWidth || container.getBoundingClientRect().width || FALLBACK_WIDTH;
     builtWidth = container.clientWidth;
     const availableWidth = Math.max(measuredWidth, CLEF_TIME_WIDTH + 60);
-    const totalBars = level.bars.length;
+    const totalBars = barCount;
+    const barByHand = (barIndex: number) => handLines.map((bars) => bars[barIndex] ?? []);
+    const leadWidth = CLEF_TIME_WIDTH + (handCount > 1 ? BRACE_WIDTH : 0);
 
     // Content-aware widths: each bar gets exactly the room its own notes need (plus padding, and
     // the clef/time signature for the very first bar), never an equal share of the line — so a
     // bar of sixteenths can't crowd into overlapping noteheads while a whole-note bar starves
-    // its neighbours of the space they need.
-    const barMinWidths = level.bars.map((barEvents, i) => measureBarContentWidth(barEvents, level) + BAR_PADDING + (i === 0 ? CLEF_TIME_WIDTH : 0));
+    // its neighbours of the space they need. Two hands share each bar's width.
+    const barMinWidths = Array.from({ length: totalBars }, (_, i) => measureBarContentWidth(barByHand(i), level) + BAR_PADDING + (i === 0 ? leadWidth : 0));
     const systems = packSystems(barMinWidths, availableWidth);
     const width = Math.max(availableWidth, ...systems.map((s) => s.targetWidth));
-    const totalHeight = TOP_MARGIN + systems.length * SYSTEM_GAP + BOTTOM_MARGIN;
+    const totalHeight = TOP_MARGIN + systems.length * systemGap + BOTTOM_MARGIN;
 
     const renderer = new Renderer(container as HTMLDivElement, Renderer.Backends.SVG);
     renderer.resize(width, totalHeight);
@@ -376,6 +428,8 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     const newEventMeta: EventMeta[] = [];
     const newBars: BarMeta[] = [];
     const noteByEvent: StaveNote[] = [];
+    /** Next event index to assign, per hand. */
+    const nextIndex = [...handOffset];
 
     let globalBeat = 0;
     let globalBarIndex = 0;
@@ -386,73 +440,113 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       const barIndices = system.barIndices;
       const sum = barIndices.reduce((acc, i) => acc + (barMinWidths[i] ?? 0), 0);
       const stretch = sum > 0 ? system.targetWidth / sum : 1;
-      const staveY = TOP_MARGIN + s * SYSTEM_GAP;
-      let xCursor = 0;
+      const systemY = TOP_MARGIN + s * systemGap;
+      // Two hands: a brace in front of the system, pushing the first bar in a little.
+      let xCursor = handCount > 1 ? BRACE_WIDTH : 0;
+      let firstStaves: Stave[] = [];
 
       for (let bi = 0; bi < barIndices.length; bi++) {
         const isLastBarOfSystem = bi === barIndices.length - 1;
         const isFirstBarOverall = globalBarIndex === 0;
         const isLastBarOverall = globalBarIndex === totalBars - 1;
 
-        const rawWidth = (barMinWidths[globalBarIndex] ?? 0) * stretch;
+        const rawWidth = (barMinWidths[globalBarIndex] ?? 0) * stretch - (bi === 0 && handCount > 1 ? BRACE_WIDTH : 0);
         const staveWidth = isLastBarOfSystem ? Math.max(1, Math.round(system.targetWidth - xCursor)) : Math.max(1, Math.round(rawWidth));
 
-        // A 5-line stave with only the middle line visible: clef, time signature and "b/4" notes
-        // all centre on the middle line, which is how VexFlow expects single-line percussion.
-        const stave = new Stave(xCursor, staveY, staveWidth, { spaceAboveStaffLn: 2 });
-        stave.setConfigForLines([{ visible: false }, { visible: false }, { visible: true }, { visible: false }, { visible: false }]);
-        if (isFirstBarOverall) {
-          stave.addClef("percussion");
-          stave.addTimeSignature(`${level.meter.beats}/${level.meter.beatUnit}`);
-        }
-        // VexFlow's own begin/end barlines collapse to ~0 height on a 1-line stave, so both are
-        // suppressed here and every bar's trailing edge gets a hand-drawn barline instead (see
-        // drawBarline below) — a single line between bars, a final double line at the very end.
-        stave.setBegBarType(BarlineType.NONE);
-        stave.setEndBarType(BarlineType.NONE);
-        stave.setContext(ctx).draw();
+        // A 5-line stave with only the middle line visible per hand: clef, time signature and
+        // "b/4" notes all centre on the middle line, which is how VexFlow expects single-line
+        // percussion.
+        const staves = handLines.map((_, hand) => {
+          const stave = new Stave(xCursor, systemY + rowOfHand(hand) * LINE_GAP, staveWidth, { spaceAboveStaffLn: 2 });
+          stave.setConfigForLines([{ visible: false }, { visible: false }, { visible: true }, { visible: false }, { visible: false }]);
+          if (isFirstBarOverall) {
+            stave.addClef("percussion");
+            stave.addTimeSignature(`${level.meter.beats}/${level.meter.beatUnit}`);
+          }
+          // VexFlow's own begin/end barlines collapse to ~0 height on a 1-line stave, so both
+          // are suppressed here and every bar's trailing edge gets a hand-drawn barline instead
+          // (see drawBarline below) — a single line between bars, a final double line at the end.
+          stave.setBegBarType(BarlineType.NONE);
+          stave.setEndBarType(BarlineType.NONE);
+          stave.setContext(ctx).draw();
+          return stave;
+        });
+        if (bi === 0) firstStaves = staves;
         xCursor += staveWidth;
 
-        const barEvents = level.bars[globalBarIndex] ?? [];
         const barStartBeat = globalBeat;
-        const { notes, tuplets } = buildBarNotes(barEvents);
-        const beams = beamNotes(notes, level);
-        const voice = voiceFor(notes, level);
-        new Formatter().joinVoices([voice]).formatToStave([voice], stave);
+        const bars = barByHand(globalBarIndex).map((events) => buildBarVoice(events, level));
+        // Both hands are formatted as one, so notes on the same beat sit exactly above each other.
+        const topStave = staves[0];
+        if (!topStave) continue;
+        joinedFormatter(bars.map((b) => b.voice)).formatToStave(
+          bars.map((b) => b.voice),
+          topStave,
+        );
 
-        voice.draw(ctx, stave);
-        beams.forEach((beam) => beam.setContext(ctx).draw());
-        tuplets.forEach((tuplet) => tuplet.setContext(ctx).draw());
+        const anchorsByHand: Anchor[][] = [];
+        let barEndBeat = barStartBeat;
+        bars.forEach((bar, hand) => {
+          const stave = staves[hand];
+          if (!stave) return;
+          bar.voice.draw(ctx, stave);
+          bar.beams.forEach((beam) => beam.setContext(ctx).draw());
+          bar.tuplets.forEach((tuplet) => tuplet.setContext(ctx).draw());
+
+          const events = handLines[hand]?.[globalBarIndex] ?? [];
+          const anchors: Anchor[] = [{ beat: barStartBeat, x: stave.getNoteStartX() }];
+          let beatAcc = barStartBeat;
+          events.forEach((ev, i) => {
+            const note = bar.notes[i];
+            if (!note) return;
+            const x = (note.getNoteHeadBeginX() + note.getNoteHeadEndX()) / 2;
+            const globalIndex = nextIndex[hand] ?? 0;
+            nextIndex[hand] = globalIndex + 1;
+            noteByEvent[globalIndex] = note;
+            newEventMeta[globalIndex] = { note, x, line: s, hand, staveY: stave.getY(), beat: beatAcc };
+            anchors.push({ beat: beatAcc, x });
+            beatAcc += eventQuarters(ev);
+          });
+          anchors.push({ beat: beatAcc, x: stave.getNoteEndX() });
+          anchorsByHand[hand] = anchors;
+          barEndBeat = Math.max(barEndBeat, beatAcc);
+        });
 
         // A barline at this bar's trailing edge (never a leading one — see the NONE begin type
-        // above): single between bars, final/double at the very end of the piece.
-        drawBarline(ctx, xCursor, stave.getYForLine(STAFF_LINE), stave.getSpacingBetweenLines(), isLastBarOverall ? "final" : "single");
-
-        const barAnchors: Anchor[] = [{ beat: barStartBeat, x: stave.getNoteStartX() }];
-        let beatAcc = barStartBeat;
-        barEvents.forEach((ev, i) => {
-          const note = notes[i];
-          if (!note) return;
-          const x = (note.getNoteHeadBeginX() + note.getNoteHeadEndX()) / 2;
-          const globalIndex = noteByEvent.length;
-          noteByEvent[globalIndex] = note;
-          newEventMeta[globalIndex] = { note, x, line: s, beat: beatAcc };
-          barAnchors.push({ beat: beatAcc, x });
-          beatAcc += eventQuarters(ev);
-        });
-        barAnchors.push({ beat: beatAcc, x: stave.getNoteEndX() });
+        // above): single between bars, final/double at the very end of the piece. With two
+        // hands it runs through both staves, joining them.
+        const lineYs = staves.map((st) => st.getYForLine(STAFF_LINE));
+        drawBarline(ctx, xCursor, Math.min(...lineYs), topStave.getSpacingBetweenLines(), isLastBarOverall ? "final" : "single", Math.max(...lineYs));
 
         newBars.push({
           line: s,
           startBeat: barStartBeat,
-          endBeat: beatAcc,
-          top: staveY - CURSOR_TOP_OFFSET,
-          height: CURSOR_HEIGHT,
-          anchors: barAnchors,
+          endBeat: barEndBeat,
+          top: systemY - CURSOR_TOP_OFFSET,
+          height: CURSOR_HEIGHT + (handCount - 1) * LINE_GAP,
+          anchorsByHand,
+          anchors: anchorsByHand[handCount - 1] ?? anchorsByHand[0] ?? [],
         });
 
-        globalBeat = beatAcc;
+        globalBeat = barEndBeat;
         globalBarIndex++;
+      }
+
+      // The brace and the opening line joining the two hands' staves.
+      if (handCount > 1) {
+        const [top, bottom] = [...firstStaves].sort((x, y) => x.getY() - y.getY());
+        if (top && bottom) {
+          new StaveConnector(top, bottom).setType("brace").setContext(ctx).draw();
+          const yTop = top.getYForLine(STAFF_LINE) - top.getSpacingBetweenLines();
+          const yBottom = bottom.getYForLine(STAFF_LINE) + bottom.getSpacingBetweenLines();
+          ctx.save();
+          ctx.setLineWidth(1);
+          ctx.beginPath();
+          ctx.moveTo(top.getX(), yTop);
+          ctx.lineTo(top.getX(), yBottom);
+          ctx.stroke();
+          ctx.restore();
+        }
       }
     }
 
@@ -460,26 +554,21 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     // A tie whose two notes land on different systems is drawn as two half-ties, engraved-music
     // style — StaveTie renders a partial tie out to its own stave's edge when the other side is
     // omitted, so passing a null firstNote/lastNote does exactly the right thing here.
-    let flatIndex = 0;
-    for (const bar of level.bars) {
-      for (const ev of bar) {
-        if (ev.tie) {
-          const firstNote = noteByEvent[flatIndex];
-          const lastNote = noteByEvent[flatIndex + 1];
-          const firstMeta = newEventMeta[flatIndex];
-          const lastMeta = newEventMeta[flatIndex + 1];
-          if (firstNote && lastNote && firstMeta && lastMeta) {
-            if (firstMeta.line === lastMeta.line) {
-              new StaveTie({ firstNote, lastNote }).setContext(ctx).draw();
-            } else {
-              new StaveTie({ firstNote, lastNote: null }).setContext(ctx).draw();
-              new StaveTie({ firstNote: null, lastNote }).setContext(ctx).draw();
-            }
-          }
+    flatEvents.forEach(({ ev }, flatIndex) => {
+      if (!ev.tie) return;
+      const firstNote = noteByEvent[flatIndex];
+      const lastNote = noteByEvent[flatIndex + 1];
+      const firstMeta = newEventMeta[flatIndex];
+      const lastMeta = newEventMeta[flatIndex + 1];
+      if (firstNote && lastNote && firstMeta && lastMeta) {
+        if (firstMeta.line === lastMeta.line) {
+          new StaveTie({ firstNote, lastNote }).setContext(ctx).draw();
+        } else {
+          new StaveTie({ firstNote, lastNote: null }).setContext(ctx).draw();
+          new StaveTie({ firstNote: null, lastNote }).setContext(ctx).draw();
         }
-        flatIndex++;
       }
-    }
+    });
 
     // VexFlow hard-codes stroke/fill="black" on some groups (stems, flags), overriding the
     // context's ink colour — invisible on the dark background.
@@ -502,25 +591,21 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       defs.innerHTML = `<radialGradient id="note-shadow"><stop offset="0" stop-color="${ink}" stop-opacity="0.22"/><stop offset="1" stop-color="${ink}" stop-opacity="0"/></radialGradient>`;
       const layer = document.createElementNS(ns, "g");
       layer.setAttribute("class", "note-shadows");
-      let flat = 0;
-      for (const bar of level.bars) {
-        for (const ev of bar) {
-          const meta = eventMeta[flat];
-          if (meta && !ev.rest && NOTE_SHADOWS) {
-            const e = document.createElementNS(ns, "ellipse");
-            e.setAttribute("cx", String(meta.x));
-            e.setAttribute("cy", String(TOP_MARGIN + meta.line * SYSTEM_GAP + 40 + SHADOW_DROP));
-            e.setAttribute("rx", "11");
-            e.setAttribute("ry", "2.6");
-            e.setAttribute("fill", "url(#note-shadow)");
-            e.setAttribute("stroke", "none");
-            e.style.opacity = String(SHADOW_OPACITY.upcoming);
-            layer.appendChild(e);
-            shadows[flat] = e;
-          }
-          flat++;
+      flatEvents.forEach(({ ev }, flat) => {
+        const meta = eventMeta[flat];
+        if (meta && !ev.rest && NOTE_SHADOWS) {
+          const e = document.createElementNS(ns, "ellipse");
+          e.setAttribute("cx", String(meta.x));
+          e.setAttribute("cy", String(meta.staveY + 40 + SHADOW_DROP));
+          e.setAttribute("rx", "11");
+          e.setAttribute("ry", "2.6");
+          e.setAttribute("fill", "url(#note-shadow)");
+          e.setAttribute("stroke", "none");
+          e.style.opacity = String(SHADOW_OPACITY.upcoming);
+          layer.appendChild(e);
+          shadows[flat] = e;
         }
-      }
+      });
       svgEl.insertBefore(layer, svgEl.firstChild);
       svgEl.insertBefore(defs, svgEl.firstChild);
       // Every note starts in the soft "upcoming" ink.
@@ -556,8 +641,9 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   });
   resizeObserver.observe(container);
 
-  function ensureNextMarker(): HTMLDivElement {
-    if (nextMarkerEl) return nextMarkerEl;
+  function ensureNextMarker(hand: number): { el: HTMLDivElement; eventIndex: number | null } {
+    const existing = nextMarkers.get(hand);
+    if (existing) return existing;
     const marker = document.createElement("div");
     marker.style.position = "absolute";
     // A short glowing dash under the notehead: never beside it, where a dot would read as a
@@ -570,39 +656,42 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     marker.style.pointerEvents = "none";
     marker.style.transform = "translate(-50%, 0)";
     container.appendChild(marker);
-    nextMarkerEl = marker;
-    return marker;
+    const entry = { el: marker, eventIndex: null as number | null };
+    nextMarkers.set(hand, entry);
+    return entry;
   }
 
   function positionNextMarker(eventIndex: number): void {
     const meta = eventMeta[eventIndex];
     if (!meta) return;
-    const marker = ensureNextMarker();
-    const staveY = TOP_MARGIN + meta.line * SYSTEM_GAP;
-    marker.style.left = `${meta.x}px`;
-    marker.style.top = `${staveY + 53}px`;
-    marker.style.display = "block";
-    nextMarkerIndex = eventIndex;
+    const marker = ensureNextMarker(meta.hand);
+    marker.el.style.left = `${meta.x}px`;
+    marker.el.style.top = `${meta.staveY + 53}px`;
+    marker.el.style.display = "block";
+    marker.eventIndex = eventIndex;
   }
 
   function hideNextMarkerIfOwnedBy(eventIndex: number): void {
-    if (nextMarkerIndex === eventIndex && nextMarkerEl) {
-      nextMarkerEl.style.display = "none";
-      nextMarkerIndex = null;
+    for (const marker of nextMarkers.values()) {
+      if (marker.eventIndex === eventIndex) {
+        marker.el.style.display = "none";
+        marker.eventIndex = null;
+      }
     }
   }
 
-  function ensureHoldBar(): { track: HTMLDivElement; fill: HTMLDivElement } {
-    if (holdEl && holdFillEl) return { track: holdEl, fill: holdFillEl };
+  function ensureHoldBar(hand: number): { track: HTMLDivElement; fill: HTMLDivElement } {
+    const existing = holdBars.get(hand);
+    if (existing) return existing;
     const track = document.createElement("div");
     track.className = "staff-hold";
     const fill = document.createElement("div");
     fill.className = "staff-hold-fill";
     track.appendChild(fill);
     container.appendChild(track);
-    holdEl = track;
-    holdFillEl = fill;
-    return { track, fill };
+    const entry = { track, fill };
+    holdBars.set(hand, entry);
+    return entry;
   }
 
   /** x where a note starting at `meta` and lasting `quarters` ends, clamped to the note's own line. */
@@ -611,16 +700,22 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     const lineBars = bars.filter((b) => b.line === meta.line);
     const lastOnLine = lineBars[lineBars.length - 1];
     if (!lastOnLine) return meta.x + 40;
-    if (endBeat >= lastOnLine.endBeat) return lastOnLine.anchors[lastOnLine.anchors.length - 1]?.x ?? meta.x + 40;
+    const handAnchors = (bar: BarMeta) => bar.anchorsByHand[meta.hand] ?? bar.anchors;
+    if (endBeat >= lastOnLine.endBeat) {
+      const anchors = handAnchors(lastOnLine);
+      return anchors[anchors.length - 1]?.x ?? meta.x + 40;
+    }
     const bar = lineBars.find((b) => endBeat >= b.startBeat && endBeat < b.endBeat) ?? lastOnLine;
-    return interpolateX(bar, endBeat) - 8;
+    return interpolateX({ ...bar, anchors: handAnchors(bar) }, endBeat) - 8;
   }
 
-  // First event index of each bar, from the level itself (stable across rebuilds).
+  // First event index of each bar, from the level itself (stable across rebuilds). On a
+  // two-hand level, the right hand's (the top staff, where the eye starts reading).
   const barFirstEvent: number[] = [];
   {
-    let flat = 0;
-    for (const bar of level.bars) {
+    const hand = handCount - 1;
+    let flat = handOffset[hand] ?? 0;
+    for (const bar of handLines[hand] ?? []) {
       barFirstEvent.push(flat);
       flat += bar.length;
     }
@@ -644,26 +739,27 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       barBandEl.style.display = "block";
       barBandEl.style.left = `${first - 10}px`;
       barBandEl.style.width = `${Math.max(20, last - first + 16)}px`;
-      barBandEl.style.top = `${TOP_MARGIN + bar.line * SYSTEM_GAP + 2}px`;
-      barBandEl.style.height = "58px";
+      barBandEl.style.top = `${TOP_MARGIN + bar.line * systemGap + 2}px`;
+      barBandEl.style.height = `${58 + (handCount - 1) * LINE_GAP}px`;
     },
     firstEventOfBar(barIndex: number): number {
       return barFirstEvent[Math.max(0, Math.min(barFirstEvent.length - 1, barIndex))] ?? 0;
     },
     setHold(eventIndex: number, quarters: number, progress: number | null, state: "filling" | "ready" | "over" = "filling"): void {
+      const meta = eventMeta[eventIndex];
       if (progress === null) {
-        if (holdEl) holdEl.style.display = "none";
+        // Hides the hold bar of the event's own hand (both hands' when the event is unknown).
+        for (const [hand, bar] of holdBars) if (!meta || meta.hand === hand) bar.track.style.display = "none";
         return;
       }
-      const meta = eventMeta[eventIndex];
       if (!meta) return;
-      const { track, fill } = ensureHoldBar();
+      const { track, fill } = ensureHoldBar(meta.hand);
       const left = meta.x - 6;
       const right = Math.max(left + 16, holdEndX(meta, quarters));
       track.style.display = "block";
       track.style.left = `${left}px`;
       track.style.width = `${right - left}px`;
-      track.style.top = `${TOP_MARGIN + meta.line * SYSTEM_GAP + 52}px`;
+      track.style.top = `${meta.staveY + 52}px`;
       track.dataset.state = state;
       fill.style.transform = `scaleX(${Math.min(1, Math.max(0, progress))})`;
     },
@@ -683,8 +779,8 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       let bestIndex: number | null = null;
       let bestDist = Number.POSITIVE_INFINITY;
       eventMeta.forEach((meta, i) => {
-        const staveY = TOP_MARGIN + meta.line * SYSTEM_GAP;
-        const dist = Math.hypot(meta.x - localX, staveY - localY);
+        // Measured from between the notehead and the top of its stem.
+        const dist = Math.hypot(meta.x - localX, meta.staveY + 25 - localY);
         if (dist < bestDist) {
           bestDist = dist;
           bestIndex = i;
@@ -751,7 +847,7 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     revealEvent(eventIndex: number): void {
       const meta = eventMeta[eventIndex];
       if (!meta) return;
-      const target = Math.max(0, TOP_MARGIN + meta.line * SYSTEM_GAP - REVEAL_LEAD);
+      const target = Math.max(0, TOP_MARGIN + meta.line * systemGap - REVEAL_LEAD);
       if (typeof container.scrollTo === "function") {
         try {
           container.scrollTo({ top: target, behavior: "smooth" });
@@ -777,8 +873,10 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
         const shadow = shadows[eventMeta.indexOf(meta)];
         if (shadow) shadow.style.opacity = String(SHADOW_OPACITY.upcoming);
       }
-      if (nextMarkerEl) nextMarkerEl.style.display = "none";
-      nextMarkerIndex = null;
+      for (const marker of nextMarkers.values()) {
+        marker.el.style.display = "none";
+        marker.eventIndex = null;
+      }
     },
     destroy(): void {
       destroyed = true;
