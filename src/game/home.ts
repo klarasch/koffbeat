@@ -3,6 +3,7 @@
 import type { AudioEngine } from "../audio/engine";
 import type { Scene } from "../scene/resonance";
 import { runCalibration } from "../input/calibration";
+import { field, segmented, select, stepper } from "./controls";
 import { TIER_NAMES } from "../rhythm/generate";
 import { MAX_TWO_HAND_TIER, TWO_HAND_STAGES } from "../rhythm/twoHands";
 import type { Mode } from "../types";
@@ -146,87 +147,72 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
 
   let { tier, hands, stage, bars, mode } = prefs;
 
-  // Difficulty: the twelve reading tiers, the heart of the curriculum.
-  const tierSection = section("Difficulty");
-  const ladder = document.createElement("div");
-  ladder.className = "tier-ladder";
-  ladder.setAttribute("role", "listbox");
-  ladder.setAttribute("aria-label", "Difficulty");
-  const tierItems = TIER_NAMES.map((name, i) => {
-    const item = document.createElement("button");
-    item.type = "button";
-    item.className = "tier-item";
-    item.setAttribute("role", "option");
-    item.innerHTML = `<span class="tier-num"></span><span class="tier-name"></span>`;
-    (item.children[0] as HTMLElement).textContent = String(i + 1).padStart(2, "0");
-    (item.children[1] as HTMLElement).textContent = name;
-    item.addEventListener("click", () => {
-      tier = i + 1;
+  const tierSelect = select(
+    TIER_NAMES.map((name, i) => ({ value: String(i + 1), label: `${i + 1} · ${name}` })),
+    String(tier),
+    (value) => {
+      tier = Number(value);
       paint();
-    });
-    ladder.appendChild(item);
-    return item;
-  });
-  tierSection.appendChild(ladder);
-
-  // Hands, stage (two hands only) and length.
-  const shapeSection = document.createElement("div");
-  shapeSection.className = "panel-row";
-  const handsGroup = optionGroup("Hands", [
-    { key: "1", label: "One hand", title: "One line of rhythm" },
-    { key: "2", label: "Two hands", title: "Two lines: left hand on F, right hand on J" },
-  ], String(hands), (key) => {
-    hands = key === "2" ? 2 : 1;
-    paint();
-  });
-  const stageGroup = optionGroup(
-    "Stage",
-    TWO_HAND_STAGES.map((name, i) => ({ key: String(i + 1), label: name, title: name })),
+    },
+  );
+  const handsControl = segmented(
+    [
+      { value: "1", label: "One hand" },
+      { value: "2", label: "Two hands" },
+    ],
+    String(hands),
+    (value) => {
+      hands = value === "2" ? 2 : 1;
+      paint();
+    },
+  );
+  const stageSelect = select(
+    TWO_HAND_STAGES.map((name, i) => ({ value: String(i + 1), label: name })),
     String(stage),
-    (key) => {
-      stage = Number(key);
+    (value) => {
+      stage = Number(value);
       paint();
     },
   );
-  stageGroup.classList.add("stage-group");
-  const lengthGroup = optionGroup(
-    "Length",
-    BAR_OPTIONS.map((b) => ({ key: String(b), label: `${b} bars`, title: `${b} bars` })),
+  const lengthControl = segmented(
+    BAR_OPTIONS.map((b) => ({ value: String(b), label: `${b} bars` })),
     String(bars),
-    (key) => {
-      bars = Number(key) as 4 | 8 | 16;
+    (value) => {
+      bars = Number(value) as 4 | 8 | 16;
       paint();
     },
   );
-  shapeSection.append(handsGroup, lengthGroup, stageGroup);
+  const modeControl = segmented(
+    [
+      { value: "practice", label: "Practice" },
+      { value: "countIn", label: "Count-in" },
+    ],
+    mode,
+    (value) => {
+      mode = value as Mode;
+      paint();
+    },
+  );
+  const tempoControl = stepper(
+    (delta) => stepTempo(delta * 5),
+    () => {
+      opts.tempo.set(null);
+      paint();
+    },
+    { less: "Slower", more: "Faster", reset: "Back to the default tempo" },
+  );
 
-  // How: mode and tempo.
-  const howSection = document.createElement("div");
-  howSection.className = "panel-row";
-  const modeGroup = optionGroup("Mode", [
-    { key: "practice", label: "Practice", title: "The metronome keeps going; play on the click" },
-    { key: "countIn", label: "Count-in", title: "One bar of clicks, then keep the pulse yourself" },
-  ], mode, (key) => {
-    mode = key as Mode;
-    paint();
-  });
-  const tempoGroup = document.createElement("div");
-  tempoGroup.className = "option-group tempo-group";
-  const tempoLabel = document.createElement("span");
-  tempoLabel.className = "option-label";
-  tempoLabel.textContent = "Tempo";
-  const slower = textButton("−", "Slower");
-  const tempoValue = document.createElement("button");
-  tempoValue.type = "button";
-  tempoValue.className = "tempo-value";
-  const faster = textButton("+", "Faster");
-  tempoGroup.append(tempoLabel, slower, tempoValue, faster);
-  howSection.append(modeGroup, tempoGroup);
+  const stageField = field("Stage", stageSelect.el);
+  stageField.classList.add("stage-field");
+  const difficultyField = field("Difficulty", tierSelect.el);
+  difficultyField.classList.add("difficulty-field");
+  const grid = document.createElement("div");
+  grid.className = "home-fields";
+  grid.append(difficultyField, field("Hands", handsControl.el), stageField, field("Length", lengthControl.el), field("Mode", modeControl.el), field("Tempo", tempoControl.el));
 
   const note = document.createElement("p");
   note.className = "panel-note";
-
-  panel.append(tierSection, shapeSection, howSection, note);
+  panel.append(grid, note);
 
   const play = document.createElement("button");
   play.type = "button";
@@ -238,23 +224,17 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   const effectiveTier = () => (hands === 2 ? Math.min(tier, MAX_TWO_HAND_TIER) : tier);
 
   function paint(): void {
-    tierItems.forEach((item, i) => {
-      const active = i + 1 === tier;
-      item.classList.toggle("active", active);
-      item.setAttribute("aria-selected", String(active));
-      // 3/4 & 6/8 is one-hand only for now.
-      item.classList.toggle("unavailable", hands === 2 && i + 1 > MAX_TWO_HAND_TIER);
-    });
-    stageGroup.hidden = hands !== 2;
-    note.textContent = hands === 2 && tier > MAX_TWO_HAND_TIER ? "Two hands are in 4/4 for now: this plays tier 11, triplets." : mode === "practice" ? "The metronome keeps going: play on the click." : "One bar of clicks, then keep the pulse yourself.";
+    stageField.hidden = hands !== 2;
+    // 3/4 & 6/8 is one-hand only for now.
+    tierSelect.setDisabled(hands === 2 ? TIER_NAMES.map((_, i) => String(i + 1)).filter((v) => Number(v) > MAX_TWO_HAND_TIER) : []);
+    if (hands === 2 && tier > MAX_TWO_HAND_TIER) tier = MAX_TWO_HAND_TIER;
+    tierSelect.set(String(tier));
+    note.textContent = mode === "practice" ? "The metronome keeps going: play on the click." : "One bar of clicks, then keep the pulse yourself.";
     const override = opts.tempo.get();
-    tempoValue.textContent = `${override ?? defaultBpm()} bpm`;
-    tempoValue.classList.toggle("custom", override !== null);
-    tempoValue.title = override === null ? "The exercise's own tempo" : "Custom tempo, click to reset";
+    tempoControl.setText(`${override ?? defaultBpm()} bpm`, override !== null);
     const what = `${TIER_NAMES[effectiveTier() - 1] ?? ""} · ${bars} bars`;
     playWhat.textContent = hands === 2 ? `Two hands, ${TWO_HAND_STAGES[stage - 1]?.toLowerCase()} · ${what}` : what;
     saveHomePrefs({ tier, hands, stage, bars, mode });
-    tierItems[tier - 1]?.scrollIntoView({ block: "nearest", inline: "center" });
   }
 
   const stepTempo = (delta: number) => {
@@ -263,12 +243,6 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     opts.tempo.set(next === defaultBpm() ? null : next);
     paint();
   };
-  slower.addEventListener("click", () => stepTempo(-5));
-  faster.addEventListener("click", () => stepTempo(5));
-  tempoValue.addEventListener("click", () => {
-    opts.tempo.set(null);
-    paint();
-  });
 
   const start = () => {
     if (hands === 2) opts.onTwoHands(stage, effectiveTier(), bars, mode);
@@ -276,7 +250,9 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   };
   play.addEventListener("click", start);
   const onKey = (event: KeyboardEvent) => {
-    if (event.key === "Enter" && !(event.target instanceof HTMLSelectElement)) {
+    // Enter plays, unless focus is on one of the controls (Enter belongs to that control then).
+    const inControls = event.target instanceof Element && event.target.closest(".home-panel");
+    if (event.key === "Enter" && !inControls) {
       event.preventDefault();
       start();
     }
@@ -318,59 +294,8 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   opts.engine.setAmbience(0.6, 2);
 }
 
-/** A labelled block inside the panel. */
-function section(label: string): HTMLElement {
-  const el = document.createElement("div");
-  el.className = "panel-section";
-  const labelEl = document.createElement("span");
-  labelEl.className = "option-label";
-  labelEl.textContent = label;
-  el.appendChild(labelEl);
-  return el;
-}
 
-/** A labelled group of words where exactly one is selected. */
-function optionGroup(label: string, options: { key: string; label: string; title: string }[], initial: string, onPick: (key: string) => void): HTMLElement {
-  const group = document.createElement("div");
-  group.className = "option-group";
-  group.setAttribute("role", "radiogroup");
-  group.setAttribute("aria-label", label);
-  const labelEl = document.createElement("span");
-  labelEl.className = "option-label";
-  labelEl.textContent = label;
-  group.appendChild(labelEl);
-  const buttons = options.map((option) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "opt";
-    button.textContent = option.label;
-    button.title = option.title;
-    button.setAttribute("role", "radio");
-    button.addEventListener("click", () => {
-      for (const b of buttons) {
-        const on = b === button;
-        b.classList.toggle("active", on);
-        b.setAttribute("aria-checked", String(on));
-      }
-      onPick(option.key);
-    });
-    const on = option.key === initial;
-    button.classList.toggle("active", on);
-    button.setAttribute("aria-checked", String(on));
-    group.appendChild(button);
-    return button;
-  });
-  return group;
-}
 
-function textButton(text: string, label: string): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "opt tempo-step";
-  button.textContent = text;
-  button.setAttribute("aria-label", label);
-  return button;
-}
 
 const BAR_OPTIONS = [4, 8, 16] as const;
 const HOME_PREFS_KEY = "resonance.homePrefs";

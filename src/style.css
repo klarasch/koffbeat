@@ -173,7 +173,32 @@ body,
   display: flex;
   flex-direction: column;
   padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+@media (max-width: 560px) {
+  .home-tagline {
+    display: none;
+  }
+
+  /* Play stays in reach at the bottom while the choices scroll above it. */
+  .home-footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    margin: 0 calc(-1 * clamp(18px, 5vw, 56px)) calc(-1 * clamp(18px, 4vh, 44px));
+    padding: 22px clamp(18px, 5vw, 56px) clamp(14px, 2.5vh, 24px);
+    background: linear-gradient(to top, var(--void) 72%, rgba(246, 244, 240, 0));
+  }
+
+  .home-plate-slot {
+    min-height: 170px;
+  }
+
+  .play-cta-word {
+    font-size: 48px;
+  }
 }
 
 .home-top {
@@ -334,80 +359,242 @@ body,
   color: var(--ink-dim);
 }
 
-/* The difficulty ladder: twelve tiers in a row that scrolls sideways. */
-.tier-ladder {
-  display: flex;
-  gap: 4px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  margin: 0 calc(-1 * clamp(18px, 5vw, 56px));
-  padding: 2px clamp(6px, calc(5vw - 12px), 44px) 4px;
-  scroll-padding: 0 clamp(18px, 5vw, 56px);
+
+
+
+
+
+
+
+
+
+
+/* ---------- Form controls (controls.ts): rectangles and segments ---------- */
+
+.home-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: clamp(14px, 2.2vh, 22px) 22px;
 }
 
-.tier-ladder::-webkit-scrollbar {
-  display: none;
-}
-
-.tier-item {
-  position: relative;
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  min-width: 112px;
-  padding: 9px 12px 11px;
-  border-radius: 4px;
-  text-align: left;
-  color: var(--ink-faint);
-  transition:
-    background 0.25s var(--ease),
-    color 0.25s var(--ease),
-    transform 0.25s var(--ease);
-}
-
-.tier-num {
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-}
-
-.tier-name {
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 1.25;
-  max-width: 14ch;
-}
-
-@media (hover: hover) {
-  .tier-item:hover {
-    color: var(--ink);
+@media (min-width: 720px) {
+  .difficulty-field {
+    grid-column: span 2;
   }
 }
 
-.tier-item.active {
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.field[hidden] {
+  display: none;
+}
+
+.field-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.segmented {
+  display: flex;
+  min-width: 0;
+}
+
+.segment,
+.select-button {
+  height: 44px;
+  border: 1px solid rgba(42, 30, 52, 0.2);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  font-size: 15px;
+  transition:
+    background 0.2s var(--ease),
+    border-color 0.2s var(--ease),
+    color 0.2s var(--ease);
+}
+
+.segment {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink-dim);
+}
+
+.segment + .segment {
+  margin-left: -1px;
+}
+
+.segment:first-child {
+  border-radius: 3px 0 0 3px;
+}
+
+.segment:last-child {
+  border-radius: 0 3px 3px 0;
+}
+
+@media (hover: hover) {
+  .segment:hover,
+  .select-button:hover {
+    background: #fff;
+    border-color: rgba(42, 30, 52, 0.4);
+    color: var(--ink);
+    z-index: 1;
+  }
+}
+
+.segment.selected {
+  z-index: 2;
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--void);
+}
+
+.segment:focus-visible,
+.select-button:focus-visible {
+  z-index: 3;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.stepper .step {
+  flex: 0 0 48px;
+  font-size: 18px;
   color: var(--ink);
 }
 
-.tier-item.active::after {
+.stepper .step-value {
+  flex: 1 1 auto;
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.stepper .step-value.custom {
+  color: var(--accent);
+}
+
+.select {
+  position: relative;
+  min-width: 0;
+}
+
+.select-button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 14px;
+  border-radius: 3px;
+  text-align: left;
+}
+
+.select-value {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.select-chevron {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: -4px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.25s var(--ease);
+}
+
+.select-button[aria-expanded="true"] .select-chevron {
+  transform: translateY(4px) rotate(-135deg);
+}
+
+.select-list {
+  position: absolute;
+  z-index: 30;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  max-height: min(320px, 50vh);
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  background: #fbfaf8;
+  border: 1px solid rgba(42, 30, 52, 0.2);
+  border-radius: 3px;
+  box-shadow: 0 10px 30px rgba(42, 30, 52, 0.12);
+  outline: none;
+  animation: list-in 0.18s var(--ease);
+}
+
+.select.upward .select-list {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.select-list[hidden] {
+  display: none;
+}
+
+@keyframes list-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.select-option {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px 11px 18px;
+  font-size: 15px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.select-option.active {
+  background: rgba(107, 63, 160, 0.08);
+}
+
+.select-option[aria-selected="true"] {
+  font-weight: 500;
+}
+
+.select-option[aria-selected="true"]::before {
   content: "";
   position: absolute;
-  left: 12px;
-  bottom: 5px;
-  width: 18px;
-  height: 2px;
+  left: 6px;
+  top: 50%;
+  width: 3px;
+  height: 14px;
+  margin-top: -7px;
   background: var(--accent);
 }
 
-.tier-item.unavailable {
+.select-option.disabled {
   color: var(--ink-faint);
   text-decoration: line-through;
-  text-decoration-color: rgba(42, 30, 52, 0.25);
+  cursor: default;
 }
 
-.tier-item:active {
-  transform: translateY(1px);
+.select-option-hint {
+  font-size: 12px;
+  color: var(--ink-dim);
 }
 
 .home-footer {
@@ -458,10 +645,13 @@ body,
 }
 
 .play-cta-what {
+  max-width: min(70vw, 520px);
   font-family: var(--mono);
   font-size: 12px;
   color: var(--ink-dim);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 @media (hover: hover) {
