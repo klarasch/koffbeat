@@ -25,6 +25,19 @@ describe("eventQuarters", () => {
     expect(eventQuarters(note("h", 1))).toBe(3);
   });
 
+  it("scales triplet events to two thirds of their written value", () => {
+    const t = (value: RhythmEvent["value"]): RhythmEvent => ({ value, dots: 0, rest: false, tuplet: 3 });
+    expect(eventQuarters(t("8"))).toBeCloseTo(1 / 3, 9);
+    expect(eventQuarters(t("q"))).toBeCloseTo(2 / 3, 9);
+    const bar = [t("8"), t("8"), t("8"), t("q"), t("8"), note("q"), note("q")];
+    expect(validateLevel({ id: "t", title: "t", meter: { beats: 4, beatUnit: 4 }, bpm: 80, bars: [bar] })).toEqual([]);
+  });
+
+  it("fills 3/4 and 6/8 bars with three quarters", () => {
+    expect(barQuarters({ beats: 3, beatUnit: 4 })).toBe(3);
+    expect(barQuarters({ beats: 6, beatUnit: 8 })).toBe(3);
+  });
+
   it("treats rests the same as notes of the same value", () => {
     expect(eventQuarters(rest("q"))).toBe(1);
   });

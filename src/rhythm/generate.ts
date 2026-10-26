@@ -2,7 +2,7 @@
 // concerns here — just picks beat-aligned rhythmic "cells" per tier and arranges them into
 // 4-bar phrases that read like something a teacher would actually write.
 
-import type { Level, RhythmEvent } from "../types";
+import type { Level, Meter, RhythmEvent } from "../types";
 
 /** Short human-readable description of what each tier adds, index 0 = tier 1. */
 export const TIER_NAMES: string[] = [
@@ -13,20 +13,44 @@ export const TIER_NAMES: string[] = [
   "Dotted rhythms",
   "Ties",
   "Sixteenths",
+  "Syncopation",
+  "Dotted eighth & sixteenth",
+  "Off-beat rests",
+  "Triplets",
+  "3/4 & 6/8",
 ];
 
-const METER = { beats: 4, beatUnit: 4 } as const;
+/** Meter families the generator writes in. Tiers 1–11 are all 4/4; tier 12 picks 3/4 or 6/8. */
+type MeterKind = "4/4" | "3/4" | "6/8";
+
+const METERS: Record<MeterKind, Meter> = {
+  "4/4": { beats: 4, beatUnit: 4 },
+  "3/4": { beats: 3, beatUnit: 4 },
+  "6/8": { beats: 6, beatUnit: 8 },
+};
+
+/** Bar length in quarter notes. */
+const BAR_QUARTERS: Record<MeterKind, number> = { "4/4": 4, "3/4": 3, "6/8": 3 };
+
+/** The tier that introduces 3/4 and 6/8. */
+const METER_TIER = 12;
+
+/** Meters the pre-tier-12 simple-time cells fit in. */
+const SIMPLE: MeterKind[] = ["4/4", "3/4"];
 const DEFAULT_BPM = 80;
 const EPSILON = 1e-6;
 
-function note(value: RhythmEvent["value"], opts: { dots?: 0 | 1; tie?: boolean } = {}): RhythmEvent {
+function note(value: RhythmEvent["value"], opts: { dots?: 0 | 1; tie?: boolean; tuplet?: 3 } = {}): RhythmEvent {
   const event: RhythmEvent = { value, dots: opts.dots ?? 0, rest: false };
   if (opts.tie) event.tie = true;
+  if (opts.tuplet) event.tuplet = opts.tuplet;
   return event;
 }
 
-function rest(value: RhythmEvent["value"]): RhythmEvent {
-  return { value, dots: 0, rest: true };
+function rest(value: RhythmEvent["value"], opts: { dots?: 0 | 1; tuplet?: 3 } = {}): RhythmEvent {
+  const event: RhythmEvent = { value, dots: opts.dots ?? 0, rest: true };
+  if (opts.tuplet) event.tuplet = opts.tuplet;
+  return event;
 }
 
 /** A seeded PRNG returning floats in [0, 1). */
@@ -46,10 +70,14 @@ function mulberry32(seed: number): Rng {
 interface Cell {
   /** Tier this cell is introduced in. */
   tier: number;
-  /** Length in quarter notes: 1, 2, or 4. */
+  /** Meters the cell can be written in; defaults to the simple meters, 4/4 and 3/4. */
+  meters?: MeterKind[];
+  /** Length in quarter notes: 1, 2 or 4 in simple time; 1.5 or 3 in 6/8. */
   quarters: number;
-  /** Two- and four-beat cells may only start on beat 1 or beat 3 (0-based: position 0 or 2). */
+  /** In 4/4, two-beat cells may only start on beat 1 or beat 3 (0-based: position 0 or 2). */
   beatAligned?: boolean;
+  /** Fills a whole bar: only offered at the start of an otherwise empty bar. */
+  wholeBar?: boolean;
   /** Quarter notes of rest at the start of the cell, before any note onset. */
   restRun: number;
   /** Whether the whole cell is rest (so a following rest cell would extend the same run). */
@@ -62,7 +90,9 @@ const CELLS: Cell[] = [
   { tier: 1, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("q")] },
   // Tier 2
   { tier: 2, quarters: 2, beatAligned: true, restRun: 0, endsWithRest: false, make: () => [note("h")] },
-  { tier: 2, quarters: 4, restRun: 0, endsWithRest: false, make: () => [note("w")] },
+  { tier: 2, meters: ["4/4"], quarters: 4, wholeBar: true, restRun: 0, endsWithRest: false, make: () => [note("w")] },
+  // Dotted half: the whole bar in 3/4
+  { tier: 2, meters: ["3/4"], quarters: 3, wholeBar: true, restRun: 0, endsWithRest: false, make: () => [note("h", { dots: 1 })] },
   // Tier 3
   { tier: 3, quarters: 1, restRun: 1, endsWithRest: true, make: () => [rest("q")] },
   { tier: 3, quarters: 2, beatAligned: true, restRun: 2, endsWithRest: true, make: () => [rest("h")] },
@@ -77,6 +107,31 @@ const CELLS: Cell[] = [
   { tier: 7, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("16"), note("16"), note("16"), note("16")] },
   { tier: 7, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("8"), note("16"), note("16")] },
   { tier: 7, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("16"), note("16"), note("8")] },
+  // Tier 8: syncopation — a quarter in the middle of two eighths, and an eighth tied over the beat
+  { tier: 8, quarters: 2, restRun: 0, endsWithRest: false, make: () => [note("8"), note("q"), note("8")] },
+  { tier: 8, quarters: 2, restRun: 0, endsWithRest: false, make: () => [note("8"), note("8", { tie: true }), note("8"), note("8")] },
+  { tier: 8, quarters: 2, restRun: 0, endsWithRest: false, make: () => [note("8"), note("8", { tie: true }), note("q")] },
+  // Tier 9: dotted eighth + sixteenth, and the reverse
+  { tier: 9, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("8", { dots: 1 }), note("16")] },
+  { tier: 9, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("16"), note("8", { dots: 1 })] },
+  // Tier 10: eighth and sixteenth rests off the beat
+  { tier: 10, quarters: 1, restRun: 0, endsWithRest: true, make: () => [note("8"), rest("8")] },
+  { tier: 10, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("8"), rest("16"), note("16")] },
+  { tier: 10, quarters: 1, restRun: 0.25, endsWithRest: false, make: () => [rest("16"), note("16"), note("8")] },
+  { tier: 10, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("16"), rest("16"), note("16"), note("16")] },
+  { tier: 10, quarters: 1, restRun: 0.25, endsWithRest: false, make: () => [rest("16"), note("16"), note("16"), note("16")] },
+  // Tier 11: eighth-note triplets, and a triplet quarter + eighth
+  { tier: 11, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("8", { tuplet: 3 }), note("8", { tuplet: 3 }), note("8", { tuplet: 3 })] },
+  { tier: 11, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("q", { tuplet: 3 }), note("8", { tuplet: 3 })] },
+  // Tier 12: compound time (6/8). Positions are multiples of a dotted quarter.
+  { tier: 12, meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("q", { dots: 1 })] },
+  { tier: 12, meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("8"), note("8"), note("8")] },
+  { tier: 12, meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("q"), note("8")] },
+  { tier: 12, meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("8"), note("q")] },
+  { tier: 12, meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("8"), note("16"), note("16"), note("8")] },
+  { tier: 12, meters: ["6/8"], quarters: 1.5, restRun: 0.5, endsWithRest: false, make: () => [rest("8"), note("8"), note("8")] },
+  { tier: 12, meters: ["6/8"], quarters: 1.5, restRun: 1.5, endsWithRest: true, make: () => [rest("q", { dots: 1 })] },
+  { tier: 12, meters: ["6/8"], quarters: 3, wholeBar: true, restRun: 0, endsWithRest: false, make: () => [note("h", { dots: 1 })] },
 ];
 
 /** Below tier 5, never let rests run longer than 2 beats in a row. */
@@ -93,13 +148,22 @@ const REST_TIER_NEW_PROBABILITY = 0.4;
 /** Relative pick weight of an all-rest cell versus a note cell. */
 const REST_WEIGHT = 0.4;
 
-function pickCell(rng: Rng, tier: number, remaining: number, beatPos: number, consecutiveRest: number, disallowRest: boolean): Cell {
+function pickCell(
+  rng: Rng,
+  tier: number,
+  kind: MeterKind,
+  remaining: number,
+  beatPos: number,
+  consecutiveRest: number,
+  disallowRest: boolean,
+): Cell {
   const enforceRestLimit = tier < REST_LIMIT_TIER;
   const eligible = CELLS.filter((cell) => {
     if (cell.tier > tier) return false;
+    if (!(cell.meters ?? SIMPLE).includes(kind)) return false;
     if (cell.quarters > remaining + EPSILON) return false;
-    if (cell.beatAligned && beatPos % 2 !== 0) return false;
-    if (cell.quarters === 4 && (beatPos !== 0 || Math.abs(remaining - 4) > EPSILON)) return false;
+    if (cell.beatAligned && kind === "4/4" && beatPos % 2 !== 0) return false;
+    if (cell.wholeBar && (beatPos !== 0 || Math.abs(remaining - BAR_QUARTERS[kind]) > EPSILON)) return false;
     if (disallowRest && cell.restRun > 0) return false;
     if (enforceRestLimit && consecutiveRest + cell.restRun > MAX_REST_RUN + EPSILON) return false;
     return true;
@@ -139,18 +203,22 @@ function isRestCell(cell: Cell): boolean {
 }
 
 interface BarOptions {
+  /** Meter family the bar is written in. */
+  kind: MeterKind;
   /** Forbid a rest as the very first event of the bar (used for the exercise's first bar). */
   disallowLeadingRest?: boolean;
   /** Bar starts with a plain quarter that is the tied-into continuation of the previous bar's half. */
   forceLeadingTieContinuation?: boolean;
   /** Bar ends with a half note tied into the next bar's first quarter. */
   forceTrailingTiedHalf?: boolean;
-  /** Bar ends with a plain (untied) half note — used for cadences. */
+  /** Bar ends with a plain (untied) long note — a half, or a dotted quarter in 6/8 — used for cadences. */
   forceTrailingHalf?: boolean;
 }
 
-function buildBarEvents(rng: Rng, tier: number, options: BarOptions = {}): RhythmEvent[] {
-  const totalBeats = METER.beats;
+function buildBarEvents(rng: Rng, tier: number, options: BarOptions): RhythmEvent[] {
+  const { kind } = options;
+  const totalBeats = BAR_QUARTERS[kind];
+  const cadenceLength = kind === "6/8" ? 1.5 : 2;
   const events: RhythmEvent[] = [];
   let beatPos = 0;
   let consecutiveRest = 0;
@@ -161,12 +229,12 @@ function buildBarEvents(rng: Rng, tier: number, options: BarOptions = {}): Rhyth
   }
 
   const trailingLongNote = options.forceTrailingTiedHalf || options.forceTrailingHalf;
-  const targetBeats = trailingLongNote ? totalBeats - 2 : totalBeats;
+  const targetBeats = trailingLongNote ? totalBeats - cadenceLength : totalBeats;
 
   while (beatPos < targetBeats - EPSILON) {
     const remaining = targetBeats - beatPos;
     const disallowRest = !!options.disallowLeadingRest && events.length === 0;
-    const cell = pickCell(rng, tier, remaining, beatPos, consecutiveRest, disallowRest);
+    const cell = pickCell(rng, tier, kind, remaining, beatPos, consecutiveRest, disallowRest);
     events.push(...cell.make());
     beatPos += cell.quarters;
     consecutiveRest = cell.endsWithRest ? consecutiveRest + cell.restRun : 0;
@@ -175,7 +243,7 @@ function buildBarEvents(rng: Rng, tier: number, options: BarOptions = {}): Rhyth
   if (options.forceTrailingTiedHalf) {
     events.push(note("h", { tie: true }));
   } else if (options.forceTrailingHalf) {
-    events.push(note("h"));
+    events.push(kind === "6/8" ? note("q", { dots: 1 }) : note("h"));
   }
 
   return events;
@@ -184,9 +252,9 @@ function buildBarEvents(rng: Rng, tier: number, options: BarOptions = {}): Rhyth
 /** Probability a phrase's cadence bar is a whole note instead of a plain half note. */
 const CADENCE_WHOLE_PROBABILITY = 0.25;
 
-function buildCadenceBar(rng: Rng, tier: number): RhythmEvent[] {
-  if (rng() < CADENCE_WHOLE_PROBABILITY) return [note("w")];
-  return buildBarEvents(rng, tier, { forceTrailingHalf: true });
+function buildCadenceBar(rng: Rng, tier: number, kind: MeterKind): RhythmEvent[] {
+  if (rng() < CADENCE_WHOLE_PROBABILITY) return [kind === "4/4" ? note("w") : note("h", { dots: 1 })];
+  return buildBarEvents(rng, tier, { kind, forceTrailingHalf: true });
 }
 
 function cloneBar(bar: RhythmEvent[]): RhythmEvent[] {
@@ -200,12 +268,14 @@ const REPEAT_BAR3_PROBABILITY = 0.35;
 const CROSS_BAR_TIE_PROBABILITY = 0.18;
 
 /** Builds one 4-bar phrase: A, A' (or fresh), B (or a variation of A), then a cadence bar. */
-function buildPhrase(rng: Rng, tier: number, exerciseStartsHere: boolean): RhythmEvent[][] {
-  const allowCrossBarTies = tier >= 6;
+function buildPhrase(rng: Rng, tier: number, kind: MeterKind, exerciseStartsHere: boolean): RhythmEvent[][] {
+  // The tied-half-into-quarter cross-bar tie is written for 4/4 only.
+  const allowCrossBarTies = tier >= 6 && kind === "4/4";
   const tieAfterBar1 = allowCrossBarTies && rng() < CROSS_BAR_TIE_PROBABILITY;
   const tieAfterBar2 = allowCrossBarTies && !tieAfterBar1 && rng() < CROSS_BAR_TIE_PROBABILITY;
 
   const bar1 = buildBarEvents(rng, tier, {
+    kind,
     disallowLeadingRest: exerciseStartsHere,
     forceTrailingTiedHalf: tieAfterBar1,
   });
@@ -215,6 +285,7 @@ function buildPhrase(rng: Rng, tier: number, exerciseStartsHere: boolean): Rhyth
     bar2 = cloneBar(bar1);
   } else {
     bar2 = buildBarEvents(rng, tier, {
+      kind,
       forceLeadingTieContinuation: tieAfterBar1,
       forceTrailingTiedHalf: tieAfterBar2,
     });
@@ -224,17 +295,17 @@ function buildPhrase(rng: Rng, tier: number, exerciseStartsHere: boolean): Rhyth
   if (!tieAfterBar1 && !tieAfterBar2 && rng() < REPEAT_BAR3_PROBABILITY) {
     bar3 = cloneBar(bar1);
   } else {
-    bar3 = buildBarEvents(rng, tier, { forceLeadingTieContinuation: tieAfterBar2 });
+    bar3 = buildBarEvents(rng, tier, { kind, forceLeadingTieContinuation: tieAfterBar2 });
   }
 
-  const bar4 = buildCadenceBar(rng, tier);
+  const bar4 = buildCadenceBar(rng, tier, kind);
 
   return [bar1, bar2, bar3, bar4];
 }
 
 /** Options for {@link generateLevel}. */
 export interface GenerateOptions {
-  /** How advanced a rhythmic vocabulary to draw from (1–7, see {@link TIER_NAMES}). */
+  /** How advanced a rhythmic vocabulary to draw from (1–12, see {@link TIER_NAMES}). */
   tier: number;
   /** Exercise length in bars. */
   bars: 4 | 8 | 16;
@@ -244,22 +315,23 @@ export interface GenerateOptions {
   seed?: number;
 }
 
-/** Generates a randomized, musically sensible reading exercise in 4/4. */
+/** Generates a randomized, musically sensible reading exercise: in 4/4, or in 3/4 or 6/8 at tier 12. */
 export function generateLevel(opts: GenerateOptions): Level {
   const seed = opts.seed ?? Math.floor(Math.random() * 0xffffffff);
   const rng = mulberry32(seed);
   const { tier } = opts;
+  const kind: MeterKind = tier >= METER_TIER ? (rng() < 0.5 ? "3/4" : "6/8") : "4/4";
 
   const bars: RhythmEvent[][] = [];
   const phraseCount = opts.bars / 4;
   for (let phrase = 0; phrase < phraseCount; phrase++) {
-    bars.push(...buildPhrase(rng, tier, phrase === 0));
+    bars.push(...buildPhrase(rng, tier, kind, phrase === 0));
   }
 
   return {
     id: `gen-t${tier}-${seed}`,
     title: `Reading · tier ${tier} · ${opts.bars} bars`,
-    meter: METER,
+    meter: METERS[kind],
     bpm: opts.bpm ?? DEFAULT_BPM,
     bars,
   };

@@ -82,3 +82,12 @@ describe("restSpans", () => {
     expect(restSpans(level([[note("q"), note("q"), note("q"), note("q")]]))).toEqual([]);
   });
 });
+
+describe("levelOnsets with triplets", () => {
+  it("places three triplet eighths at thirds of a beat", () => {
+    const t = (): RhythmEvent => note("8", { tuplet: 3 });
+    const onsets = levelOnsets(level([[t(), t(), t(), note("q"), note("h")]]));
+    expect(onsets.map((o) => o.beat)).toEqual([0, 1 / 3, 2 / 3, 1, 2].map((b) => expect.closeTo(b, 9)));
+    expect(onsets[0]?.quarters).toBeCloseTo(1 / 3, 9);
+  });
+});

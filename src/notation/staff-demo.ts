@@ -1,10 +1,13 @@
 // Standalone dev page for eyeballing the staff renderer. Not part of the game bundle.
 import { renderStaff, type StaffView } from "./staff";
+import { eventQuarters } from "../rhythm/durations";
+import { generateLevel } from "../rhythm/generate";
 import type { Grade, Level, NoteValue, RhythmEvent } from "../types";
 
-function ev(value: NoteValue, opts?: { dots?: 0 | 1; rest?: boolean; tie?: boolean }): RhythmEvent {
-  return { value, dots: opts?.dots ?? 0, rest: opts?.rest ?? false, tie: opts?.tie };
+function ev(value: NoteValue, opts?: { dots?: 0 | 1; rest?: boolean; tie?: boolean; tuplet?: 3 }): RhythmEvent {
+  return { value, dots: opts?.dots ?? 0, rest: opts?.rest ?? false, tie: opts?.tie, tuplet: opts?.tuplet };
 }
+const t8 = () => ev("8", { tuplet: 3 });
 
 const levels: Level[] = [
   {
@@ -96,18 +99,70 @@ const levels: Level[] = [
       [ev("q"), ev("q"), ev("h")],
     ],
   },
+  {
+    id: "syncopation",
+    title: "Syncopation: 8-q-8, eighth tied over the beat",
+    meter: { beats: 4, beatUnit: 4 },
+    bpm: 88,
+    bars: [
+      [ev("8"), ev("q"), ev("8"), ev("8"), ev("8", { tie: true }), ev("8"), ev("8")],
+      [ev("8"), ev("8", { tie: true }), ev("q"), ev("q"), ev("q")],
+    ],
+  },
+  {
+    id: "dotted-eighth-sixteenth",
+    title: "Dotted eighth + sixteenth",
+    meter: { beats: 4, beatUnit: 4 },
+    bpm: 88,
+    bars: [[ev("8", { dots: 1 }), ev("16"), ev("16"), ev("8", { dots: 1 }), ev("q"), ev("q")]],
+  },
+  {
+    id: "offbeat-rests",
+    title: "Off-beat rests",
+    meter: { beats: 4, beatUnit: 4 },
+    bpm: 88,
+    bars: [[ev("8"), ev("8", { rest: true }), ev("16", { rest: true }), ev("16"), ev("8"), ev("16"), ev("16", { rest: true }), ev("16"), ev("16"), ev("q")]],
+  },
+  {
+    id: "triplets",
+    title: "Eighth-note triplets",
+    meter: { beats: 4, beatUnit: 4 },
+    bpm: 80,
+    bars: [
+      [t8(), t8(), t8(), ev("q"), ev("q", { tuplet: 3 }), ev("8", { tuplet: 3 }), ev("q")],
+      [ev("q"), t8(), t8(), t8(), t8(), t8(), t8(), ev("q")],
+    ],
+  },
+  {
+    id: "three-four",
+    title: "3/4",
+    meter: { beats: 3, beatUnit: 4 },
+    bpm: 96,
+    bars: [
+      [ev("q"), ev("8"), ev("8"), ev("q")],
+      [ev("q"), ev("h")],
+      [ev("h", { dots: 1 })],
+    ],
+  },
+  {
+    id: "six-eight",
+    title: "6/8 (beamed by dotted quarter)",
+    meter: { beats: 6, beatUnit: 8 },
+    bpm: 96,
+    bars: [
+      [ev("8"), ev("8"), ev("8"), ev("8"), ev("8"), ev("8")],
+      [ev("q", { dots: 1 }), ev("8"), ev("8"), ev("8")],
+      [ev("q"), ev("8"), ev("8"), ev("q")],
+      [ev("8", { rest: true }), ev("8"), ev("8"), ev("q", { dots: 1, rest: true })],
+      [ev("h", { dots: 1 })],
+    ],
+  },
+  ...[8, 9, 10, 11, 12].map((tier) => generateLevel({ tier, bars: 4, seed: 7 })),
 ];
-
-const BASE_QUARTERS: Record<NoteValue, number> = { w: 4, h: 2, q: 1, "8": 0.5, "16": 0.25 };
-
-function quarters(e: RhythmEvent): number {
-  const base = BASE_QUARTERS[e.value];
-  return e.dots ? base * 1.5 : base;
-}
 
 function totalQuarters(level: Level): number {
   let total = 0;
-  for (const bar of level.bars) for (const e of bar) total += quarters(e);
+  for (const bar of level.bars) for (const e of bar) total += eventQuarters(e);
   return total;
 }
 

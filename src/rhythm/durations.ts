@@ -10,10 +10,11 @@ const BASE_QUARTERS: Record<RhythmEvent["value"], number> = {
   "16": 0.25,
 };
 
-/** Duration of a single event in quarter notes, dots included. */
+/** Duration of a single event in quarter notes, dots and triplet scaling included. */
 export function eventQuarters(e: RhythmEvent): number {
   const base = BASE_QUARTERS[e.value];
-  return e.dots === 1 ? base * 1.5 : base;
+  const dotted = e.dots === 1 ? base * 1.5 : base;
+  return e.tuplet === 3 ? (dotted * 2) / 3 : dotted;
 }
 
 /** Total duration of one bar in a given meter, in quarter notes (beats * 4/beatUnit). */

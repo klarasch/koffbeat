@@ -1,8 +1,9 @@
 // Renders a single-line percussion rhythm staff with VexFlow 5 and exposes a small
 // runtime API for cursor sweeps and per-note grading marks. See AGENTS/spec for the contract.
 
-import { BarlineType, Beam, Dot, Formatter, Fraction, type RenderContext, Renderer, Stave, StaveNote, StaveTie, Stem, Voice } from "vexflow";
-import type { Grade, Level, NoteValue, RhythmEvent } from "../types";
+import { BarlineType, Beam, Dot, Formatter, Fraction, type RenderContext, Renderer, Stave, StaveNote, StaveTie, Stem, Tuplet, Voice } from "vexflow";
+import { eventQuarters } from "../rhythm/durations";
+import type { Grade, Level, RhythmEvent } from "../types";
 
 /**
  * Karaoke-style note state: "upcoming" is the default ink (nothing has happened yet), "next" is
@@ -105,27 +106,6 @@ const REVEAL_LEAD = 10;
 // a conventional key that VexFlow accepts for any clef.
 const PERCUSSION_KEY = "b/4";
 
-/** quarters per written value (before dots). A separate parallel module owns the public version of this. */
-function baseQuarters(value: NoteValue): number {
-  switch (value) {
-    case "w":
-      return 4;
-    case "h":
-      return 2;
-    case "q":
-      return 1;
-    case "8":
-      return 0.5;
-    case "16":
-      return 0.25;
-  }
-}
-
-function eventQuarters(ev: RhythmEvent): number {
-  const base = baseQuarters(ev.value);
-  return ev.dots ? base * 1.5 : base;
-}
-
 interface EventMeta {
   note: StaveNote;
   x: number;
@@ -147,9 +127,18 @@ interface BarMeta {
   anchors: Anchor[];
 }
 
-/** Builds a fresh, unformatted note per event (dots attached), ready to be voiced and formatted. */
-function buildBarNotes(barEvents: RhythmEvent[]): StaveNote[] {
-  return barEvents.map((ev) => {
+interface BarNotes {
+  notes: StaveNote[];
+  tuplets: Tuplet[];
+}
+
+/**
+ * Builds a fresh, unformatted note per event (dots attached), ready to be voiced and formatted.
+ * Consecutive triplet events are bracketed together, one tuplet per beat's worth (3 in the time
+ * of 2). Tuplets are created here, before beaming, because attaching one rescales the notes' ticks.
+ */
+function buildBarNotes(barEvents: RhythmEvent[]): BarNotes {
+  const notes = barEvents.map((ev) => {
     const note = new StaveNote({
       keys: [PERCUSSION_KEY],
       duration: ev.value,
@@ -161,6 +150,22 @@ function buildBarNotes(barEvents: RhythmEvent[]): StaveNote[] {
     if (ev.dots) Dot.buildAndAttach([note]);
     return note;
   });
+
+  const tuplets: Tuplet[] = [];
+  let group: StaveNote[] = [];
+  let groupQuarters = 0;
+  barEvents.forEach((ev, i) => {
+    const note = notes[i];
+    if (!note || ev.tuplet !== 3) return;
+    group.push(note);
+    groupQuarters += eventQuarters(ev);
+    if (Math.abs(groupQuarters - 1) < 1e-6) {
+      tuplets.push(new Tuplet(group, { numNotes: 3, notesOccupied: 2, bracketed: true, ratioed: false }));
+      group = [];
+      groupQuarters = 0;
+    }
+  });
+  return { notes, tuplets };
 }
 
 /**
@@ -170,8 +175,10 @@ function buildBarNotes(barEvents: RhythmEvent[]): StaveNote[] {
  * measured (and spaced) as if it still carried its own flag, wildly overestimating bar width.
  */
 function beamNotes(notes: StaveNote[], level: Level): Beam[] {
+  // Compound time (6/8) beams by the dotted quarter, three eighths to a group.
+  const compound = level.meter.beatUnit === 8 && level.meter.beats % 3 === 0;
   return Beam.generateBeams(notes, {
-    groups: [new Fraction(1, level.meter.beatUnit)],
+    groups: [compound ? new Fraction(3, 8) : new Fraction(1, level.meter.beatUnit)],
     beamRests: false,
     stemDirection: Stem.UP,
   });
@@ -189,7 +196,7 @@ function voiceFor(notes: StaveNote[], level: Level): Voice {
  * {@link packSystems} give each bar only the room its own content needs.
  */
 function measureBarContentWidth(barEvents: RhythmEvent[], level: Level): number {
-  const notes = buildBarNotes(barEvents);
+  const { notes } = buildBarNotes(barEvents);
   beamNotes(notes, level);
   const voice = voiceFor(notes, level);
   const formatter = new Formatter();
@@ -408,13 +415,14 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
 
         const barEvents = level.bars[globalBarIndex] ?? [];
         const barStartBeat = globalBeat;
-        const notes = buildBarNotes(barEvents);
+        const { notes, tuplets } = buildBarNotes(barEvents);
         const beams = beamNotes(notes, level);
         const voice = voiceFor(notes, level);
         new Formatter().joinVoices([voice]).formatToStave([voice], stave);
 
         voice.draw(ctx, stave);
         beams.forEach((beam) => beam.setContext(ctx).draw());
+        tuplets.forEach((tuplet) => tuplet.setContext(ctx).draw());
 
         // A barline at this bar's trailing edge (never a leading one — see the NONE begin type
         // above): single between bars, final/double at the very end of the piece.

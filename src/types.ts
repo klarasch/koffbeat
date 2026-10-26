@@ -16,6 +16,8 @@ export interface RhythmEvent {
   rest: boolean;
   /** Tied to the next event: the next event is sounded as a continuation, not a new onset. */
   tie?: boolean;
+  /** Part of a triplet: three of these fill the time of two (a note's written value × 2/3). */
+  tuplet?: 3;
 }
 
 /** A playable exercise. Phase A uses a single rhythm line. */
