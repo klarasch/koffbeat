@@ -49,7 +49,7 @@ export interface StaffView {
    * length of the whole tied chain starting at `eventIndex`.
    */
   setHold(eventIndex: number, quarters: number, progress: number | null, state?: "filling" | "ready" | "over"): void;
-  /** Live play: state changes animate (press pop, pulse when right, shake when wrong). */
+  /** Live play: a graded note sends out a small pulse in its grade's colour. */
   setAnimate(on: boolean): void;
   /** Softly highlights one bar (0-based), or none with null: where the music is right now. */
   setBarHighlight(barIndex: number | null): void;
@@ -353,17 +353,23 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   let barBandEl: HTMLDivElement | null = null;
   let highlightedBar: number | null = null;
   let animate = false;
-  /** Note element → the group it moves with (its beamed group), when it has one. */
-  let motionUnit = new Map<SVGElement, SVGGElement>();
 
-  /** Restarts a one-shot CSS animation class on a note's SVG group. */
-  function playMotion(noteEl: SVGElement, cls: "note-press" | "note-pulse" | "note-shake"): void {
-    const el: SVGElement = motionUnit.get(noteEl) ?? noteEl;
-    el.classList.remove("note-press", "note-pulse", "note-shake");
-    void el.getBoundingClientRect();
-    el.classList.add(cls);
-    el.addEventListener("animationend", () => el.classList.remove(cls), { once: true });
+  /**
+   * A small ring in the grade's colour blooms out of the notehead and fades. It lives in its
+   * own layer over the staff, so the notation itself never moves.
+   */
+  function pulseAt(eventIndex: number, color: string, strong: boolean): void {
+    const meta = eventMeta[eventIndex];
+    if (!meta) return;
+    const ring = document.createElement("span");
+    ring.className = strong ? "note-pulse-ring strong" : "note-pulse-ring";
+    ring.style.left = `${meta.x}px`;
+    ring.style.top = `${meta.staveY + 40}px`;
+    ring.style.setProperty("--pulse-color", color);
+    container.appendChild(ring);
+    ring.addEventListener("animationend", () => ring.remove(), { once: true });
   }
+
   /** Floor shadow ellipse per note event (rests cast none). */
   let shadows: (SVGEllipseElement | undefined)[] = [];
   /** Every non-default note state, re-applied after a rebuild (resize) so marks survive it. */
@@ -445,7 +451,6 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     ctx.setStrokeStyle(ink);
 
     const newEventMeta: EventMeta[] = [];
-    const drawnBeams: Beam[] = [];
     const newBars: BarMeta[] = [];
     const noteByEvent: StaveNote[] = [];
     /** Next event index to assign, per hand. */
@@ -510,10 +515,7 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
           const stave = staves[hand];
           if (!stave) return;
           bar.voice.draw(ctx, stave);
-          bar.beams.forEach((beam) => {
-            beam.setContext(ctx).draw();
-            drawnBeams.push(beam);
-          });
+          bar.beams.forEach((beam) => beam.setContext(ctx).draw());
           bar.tuplets.forEach((tuplet) => tuplet.setContext(ctx).draw());
 
           const events = handLines[hand]?.[globalBarIndex] ?? [];
@@ -592,24 +594,6 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
         }
       }
     });
-
-    // Motion units: a beamed group moves as one (its notes and the beam together), so a note
-    // never pulls away from its beam; an unbeamed note moves on its own.
-    motionUnit = new Map();
-    for (const beam of drawnBeams) {
-      const beamEl = beam.getSVGElement();
-      const noteEls = beam.getNotes().map((n) => n.getSVGElement()).filter((el): el is SVGElement => !!el);
-      const first = noteEls[0];
-      if (!beamEl || !first?.parentNode) continue;
-      const unit = document.createElementNS("http://www.w3.org/2000/svg", "g");
-      unit.setAttribute("class", "motion-unit");
-      first.parentNode.insertBefore(unit, first);
-      for (const el of noteEls) {
-        unit.appendChild(el);
-        motionUnit.set(el, unit);
-      }
-      unit.appendChild(beamEl);
-    }
 
     // VexFlow hard-codes stroke/fill="black" on some groups (stems, flags), overriding the
     // context's ink colour — invisible on the dark background.
@@ -888,10 +872,8 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
           el.style.opacity = "1";
           break;
       }
-      if (animate && previous !== state) {
-        if (state === "active") playMotion(el, "note-press");
-        else if (state === "perfect" || state === "good") playMotion(el, "note-pulse");
-        else if (state === "ok" || state === "miss") playMotion(el, "note-shake");
+      if (animate && previous !== state && state !== "upcoming" && state !== "next" && state !== "active" && state !== "done") {
+        pulseAt(eventIndex, GRADE_COLORS[state], state === "perfect");
       }
     },
     layout() {

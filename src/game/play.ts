@@ -180,7 +180,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     const rect = plateSlot.getBoundingClientRect();
     const framed = Math.max(40, Math.min(rect.width * 0.42, rect.height * 1.05));
     const radius = immersive ? Math.max(window.innerWidth * 0.62, framed * 1.6) : framed;
-    scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height * (immersive ? 0.38 : 0.5), radius);
+    scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height * (immersive ? 0.52 : 0.5), radius);
   }
   const plateObserver = new ResizeObserver(placePlate);
   plateObserver.observe(plateSlot);
@@ -210,12 +210,20 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     // exactly `lines` lines fit in lines × systemHeight + LEAD, with nothing of the next one.
     const LEAD = 10;
     const lines = Math.max(1, Math.floor((window.innerHeight * staffShare) / systemHeight));
-    const height = Math.min(total - (top - LEAD), lines * systemHeight + LEAD);
+    // The last line's bottom breathing room is left out: the next line's upward stems and
+    // brackets reach into it, and their tips would show at the bottom edge.
+    const TAIL = 26;
+    const height = Math.min(total - (top - LEAD), lines * systemHeight + LEAD - TAIL);
     staffArea.style.height = `${height + 8}px`;
     staffArea.style.maxHeight = "none";
     staffArea.style.flexShrink = "0";
+    // Room below the music, so even the last line can scroll to the top of the window (without
+    // it the scroll stops short and the view sits between two lines).
+    staffContainer.style.paddingBottom = `${height}px`;
+    staffContainer.style.boxSizing = "border-box";
+    const current = timeline[Math.min(nextPointer, timeline.length - 1)];
+    if (current) staff.revealEvent(primaryEventIndex(current));
   }
-  fitStaffArea();
   window.addEventListener("resize", fitStaffArea);
   const onsets = levelOnsets(level);
   const rests = restSpans(level);
@@ -315,6 +323,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       staff.revealEvent(primaryEventIndex(first));
     }
   }
+  fitStaffArea();
 
   const lastBeat = onsets.reduce((end, o) => Math.max(end, o.beat + o.quarters), 0);
   const endMarginQuarters = mode === "countIn" ? END_MARGIN_QUARTERS_COUNT_IN : END_MARGIN_QUARTERS;
