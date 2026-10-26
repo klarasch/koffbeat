@@ -234,7 +234,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   play.innerHTML = `<span class="play-cta-word">Play</span><span class="play-cta-arrow" aria-hidden="true">→</span><span class="play-cta-what"></span>`;
   const playWhat = play.lastChild as HTMLElement;
 
-  const defaultBpm = () => (hands === 2 ? 72 : 80);
+  const defaultBpm = () => 65;
   const effectiveTier = () => (hands === 2 ? Math.min(tier, MAX_TWO_HAND_TIER) : tier);
 
   function paint(): void {

@@ -37,7 +37,8 @@ const METER_TIER = 12;
 
 /** Meters the pre-tier-12 simple-time cells fit in. */
 const SIMPLE: MeterKind[] = ["4/4", "3/4"];
-const DEFAULT_BPM = 80;
+/** A calm default tempo for sight-reading; players can change it on the home screen. */
+const DEFAULT_BPM = 65;
 const EPSILON = 1e-6;
 
 export function note(value: RhythmEvent["value"], opts: { dots?: 0 | 1; tie?: boolean; tuplet?: 3 } = {}): RhythmEvent {

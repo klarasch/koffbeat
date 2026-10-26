@@ -248,12 +248,10 @@ body,
 
 .home-dock {
   width: 100%;
-  max-width: 980px;
-  margin: 0 auto;
-  padding: 0 clamp(14px, 4vw, 40px) clamp(14px, 3vh, 32px);
+  padding: 0 clamp(18px, 5vw, 56px) clamp(18px, 4vh, 44px);
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: clamp(24px, 3.6vh, 40px);
   animation: rise 1.2s 0.2s var(--ease) both;
 }
 
@@ -306,28 +304,24 @@ body,
 
 
 
-/* The one container on the home screen: a light, flat panel with a hairline edge. */
+/* The choices float in the space, edge to edge: no panel, just a steady vertical rhythm. */
 .home-panel {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 16px 20px 18px;
-  background: rgba(255, 255, 255, 0.55);
-  border: 1px solid rgba(42, 30, 52, 0.08);
-  border-radius: 6px;
+  gap: clamp(18px, 2.6vh, 28px);
 }
 
 .panel-section {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .panel-row {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 12px 36px;
+  gap: clamp(16px, 2.4vh, 24px) 44px;
 }
 
 .option-group[hidden] {
@@ -335,7 +329,7 @@ body,
 }
 
 .panel-note {
-  margin: -4px 0 0;
+  margin: -6px 0 0;
   font-size: 12px;
   color: var(--ink-dim);
 }
@@ -346,9 +340,9 @@ body,
   gap: 4px;
   overflow-x: auto;
   scrollbar-width: none;
-  margin: 0 -8px;
-  padding: 2px 8px 4px;
-  scroll-padding: 0 8px;
+  margin: 0 calc(-1 * clamp(18px, 5vw, 56px));
+  padding: 2px clamp(6px, calc(5vw - 12px), 44px) 4px;
+  scroll-padding: 0 clamp(18px, 5vw, 56px);
 }
 
 .tier-ladder::-webkit-scrollbar {
@@ -388,13 +382,11 @@ body,
 
 @media (hover: hover) {
   .tier-item:hover {
-    background: rgba(42, 30, 52, 0.04);
     color: var(--ink);
   }
 }
 
 .tier-item.active {
-  background: rgba(107, 63, 160, 0.08);
   color: var(--ink);
 }
 
@@ -592,7 +584,7 @@ body,
   position: relative;
   z-index: 2;
   width: min(420px, 72vw);
-  margin: 18px auto 0;
+  margin: clamp(18px, 3vh, 28px) auto clamp(22px, 4vh, 40px);
   height: 30px;
   display: flex;
   justify-content: space-between;
@@ -710,67 +702,60 @@ body,
     width 0.25s var(--ease);
 }
 
-/* Note motion (staff.ts playMotion): a small pop on the tap, a soft pulse when the note lands
-   well, a short shake when it doesn't. */
+/* Note motion (staff.ts playMotion), on the whole note or its whole beamed group: a slight
+   give on the tap, a soft lift when it lands well, a small sway when it doesn't. */
 .staff-container svg .note-press,
 .staff-container svg .note-pulse,
 .staff-container svg .note-shake {
   transform-box: fill-box;
-  transform-origin: 50% 70%;
+  transform-origin: 50% 100%;
 }
 
 .note-press {
-  animation: note-press 0.18s var(--ease);
+  animation: note-press 0.22s cubic-bezier(0.3, 0.7, 0.4, 1);
 }
 
 .note-pulse {
-  animation: note-pulse 0.55s var(--ease);
+  animation: note-pulse 0.7s cubic-bezier(0.25, 0.8, 0.3, 1);
 }
 
 .note-shake {
-  animation: note-shake 0.42s ease-out;
+  animation: note-shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97);
 }
 
 @keyframes note-press {
-  0% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.12);
-  }
+  0%,
   100% {
-    transform: scale(1);
+    transform: none;
+  }
+  45% {
+    transform: translateY(1px) scale(0.985);
   }
 }
 
 @keyframes note-pulse {
-  0% {
-    transform: scale(1);
-  }
-  35% {
-    transform: scale(1.22);
-  }
+  0%,
   100% {
-    transform: scale(1);
+    transform: none;
+  }
+  30% {
+    transform: translateY(-2px) scale(1.035);
   }
 }
 
 @keyframes note-shake {
   0%,
   100% {
-    transform: translateX(0);
+    transform: none;
   }
-  20% {
-    transform: translateX(-3px) rotate(-3deg);
+  25% {
+    transform: translateX(-1.5px);
   }
-  40% {
-    transform: translateX(3px) rotate(2deg);
+  50% {
+    transform: translateX(1.5px);
   }
-  60% {
-    transform: translateX(-2px);
-  }
-  80% {
-    transform: translateX(1px);
+  75% {
+    transform: translateX(-0.75px);
   }
 }
 
@@ -894,7 +879,7 @@ body,
   position: relative;
   z-index: 3;
   flex: 0 0 auto;
-  max-height: 52%;
+  max-height: 62%;
   min-height: 0;
   display: flex;
   align-items: flex-end;
@@ -907,21 +892,17 @@ body,
 }
 
 .results-panel {
-  width: min(100% - 2 * clamp(14px, 4vw, 40px), 940px);
-  margin: 0 auto calc(clamp(12px, 3vh, 28px) + env(safe-area-inset-bottom));
-  padding: 18px 22px 18px;
+  width: 100%;
+  padding: clamp(12px, 2vh, 20px) clamp(18px, 5vw, 56px) calc(clamp(18px, 4vh, 44px) + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  background: rgba(255, 255, 255, 0.55);
-  border: 1px solid rgba(42, 30, 52, 0.08);
-  border-radius: 6px;
+  gap: clamp(18px, 2.8vh, 28px);
 }
 
 .results-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
-  gap: 18px 40px;
+  gap: clamp(20px, 3vh, 32px) clamp(32px, 6vw, 72px);
   align-items: start;
 }
 
@@ -934,22 +915,13 @@ body,
 .results-numbers {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
 }
 
 .results-advice {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding-left: 22px;
-  border-left: 1px solid rgba(42, 30, 52, 0.08);
-}
-
-@media (max-width: 640px) {
-  .results-advice {
-    padding-left: 0;
-    border-left: none;
-  }
+  gap: 10px;
 }
 
 .grade-tally {

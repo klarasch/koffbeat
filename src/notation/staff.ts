@@ -353,9 +353,12 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   let barBandEl: HTMLDivElement | null = null;
   let highlightedBar: number | null = null;
   let animate = false;
+  /** Note element → the group it moves with (its beamed group), when it has one. */
+  let motionUnit = new Map<SVGElement, SVGGElement>();
 
   /** Restarts a one-shot CSS animation class on a note's SVG group. */
-  function playMotion(el: SVGElement, cls: "note-press" | "note-pulse" | "note-shake"): void {
+  function playMotion(noteEl: SVGElement, cls: "note-press" | "note-pulse" | "note-shake"): void {
+    const el: SVGElement = motionUnit.get(noteEl) ?? noteEl;
     el.classList.remove("note-press", "note-pulse", "note-shake");
     void el.getBoundingClientRect();
     el.classList.add(cls);
@@ -442,6 +445,7 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     ctx.setStrokeStyle(ink);
 
     const newEventMeta: EventMeta[] = [];
+    const drawnBeams: Beam[] = [];
     const newBars: BarMeta[] = [];
     const noteByEvent: StaveNote[] = [];
     /** Next event index to assign, per hand. */
@@ -506,7 +510,10 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
           const stave = staves[hand];
           if (!stave) return;
           bar.voice.draw(ctx, stave);
-          bar.beams.forEach((beam) => beam.setContext(ctx).draw());
+          bar.beams.forEach((beam) => {
+            beam.setContext(ctx).draw();
+            drawnBeams.push(beam);
+          });
           bar.tuplets.forEach((tuplet) => tuplet.setContext(ctx).draw());
 
           const events = handLines[hand]?.[globalBarIndex] ?? [];
@@ -585,6 +592,24 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
         }
       }
     });
+
+    // Motion units: a beamed group moves as one (its notes and the beam together), so a note
+    // never pulls away from its beam; an unbeamed note moves on its own.
+    motionUnit = new Map();
+    for (const beam of drawnBeams) {
+      const beamEl = beam.getSVGElement();
+      const noteEls = beam.getNotes().map((n) => n.getSVGElement()).filter((el): el is SVGElement => !!el);
+      const first = noteEls[0];
+      if (!beamEl || !first?.parentNode) continue;
+      const unit = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      unit.setAttribute("class", "motion-unit");
+      first.parentNode.insertBefore(unit, first);
+      for (const el of noteEls) {
+        unit.appendChild(el);
+        motionUnit.set(el, unit);
+      }
+      unit.appendChild(beamEl);
+    }
 
     // VexFlow hard-codes stroke/fill="black" on some groups (stems, flags), overriding the
     // context's ink colour — invisible on the dark background.

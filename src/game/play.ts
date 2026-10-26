@@ -202,12 +202,14 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   // The notes area shows whole lines only, as many as fit in about 40% of the screen (at least
   // one), so a line is never sliced through — two-hand lines, with two staves each, are tall.
   // A short piece gets exactly its own height.
+  /** Share of the screen height the notes may take: less once the results need the room. */
+  let staffShare = 0.4;
   function fitStaffArea(): void {
     const { top, systemHeight, total } = staff.layout();
     // The view scrolls so the current line starts LEAD px from the top (staff.revealEvent), so
     // exactly `lines` lines fit in lines × systemHeight + LEAD, with nothing of the next one.
     const LEAD = 10;
-    const lines = Math.max(1, Math.floor((window.innerHeight * 0.4) / systemHeight));
+    const lines = Math.max(1, Math.floor((window.innerHeight * staffShare) / systemHeight));
     const height = Math.min(total - (top - LEAD), lines * systemHeight + LEAD);
     staffArea.style.height = `${height + 8}px`;
     staffArea.style.maxHeight = "none";
@@ -830,6 +832,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     tapArea.hidden = true;
     screen.classList.add("finished");
     immersive = false;
+    staffShare = 0.28;
+    fitStaffArea();
     placePlate();
 
     const panelCallbacks = {

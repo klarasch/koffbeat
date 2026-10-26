@@ -10,7 +10,7 @@ import { buildBarEvents, buildPhrase, cloneBar, mulberry32, note, type Rng, rest
 export const TWO_HAND_STAGES: string[] = ["Call and response", "Unison", "Independence", "3 against 2"];
 
 const METER = { beats: 4, beatUnit: 4 } as const;
-const DEFAULT_BPM = 72;
+const DEFAULT_BPM = 65;
 
 /** Default rhythm vocabulary: quarters, halves, rests and eighth pairs. */
 const DEFAULT_TIER = 4;
