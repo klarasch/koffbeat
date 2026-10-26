@@ -98,6 +98,44 @@ describe("judgeRun", () => {
     expect(result.judgements.filter((j) => j.grade === "miss")).toHaveLength(0);
   });
 
+  describe("sequential attempts (catching on after getting lost)", () => {
+    it("matches a player who counted through two silent notes and came back in on time", () => {
+      const judge = createLiveJudge(onsets, startTime, bpm);
+      const at = (i: number) => startTime + (onsets[i]?.beat ?? 0) * secPerQuarter;
+      judge.judgeHit({ time: at(0), zone: 0 });
+      judge.judgeHit({ time: at(1), zone: 0 });
+      // Notes 2 and 3 pass in silence; the clock settles them as missed.
+      judge.markMissed(2);
+      judge.markMissed(3);
+      const back = judge.judgeHit({ time: at(4) + 0.01, zone: 0 });
+      expect(back.onsetIndex).toBe(4);
+      expect(back.grade).toBe("perfect");
+    });
+
+    it("counts a tap as an attempt at the next note even when it's late, and says how late", () => {
+      const judge = createLiveJudge(onsets, startTime, bpm);
+      const at = (i: number) => startTime + (onsets[i]?.beat ?? 0) * secPerQuarter;
+      judge.judgeHit({ time: at(0), zone: 0 });
+      const late = judge.judgeHit({ time: at(1) + 0.3, zone: 0 });
+      expect(late.onsetIndex).toBe(1);
+      expect(late.errorMs ?? 0).toBeGreaterThan(250);
+    });
+
+    it("treats a tap far earlier than the next note as a stray, not an attempt", () => {
+      const judge = createLiveJudge(onsets, startTime, bpm);
+      const at = (i: number) => startTime + (onsets[i]?.beat ?? 0) * secPerQuarter;
+      judge.judgeHit({ time: at(0), zone: 0 });
+      const stray = judge.judgeHit({ time: at(0) + 0.1, zone: 0 });
+      expect(stray.onsetIndex).toBeNull();
+    });
+
+    it("keeps its clock running at the player's tempo while they are silent", () => {
+      const judge = createLiveJudge(onsets, startTime, bpm);
+      judge.judgeHit({ time: startTime, zone: 0 });
+      expect(judge.beatAt(startTime + 3 * secPerQuarter)).toBeCloseTo(3, 1);
+    });
+  });
+
   describe("grid mode (practice, metronome running)", () => {
     it("does not forgive drifting: a player 6% slow ends up missing the later notes", () => {
       const pulse = judgeRun(onsets, rests, startTime, bpm, hitsAtTempo(onsets, 1.06), [], {});

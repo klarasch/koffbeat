@@ -700,7 +700,8 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     const ease = 1 - Math.exp(-dt * 6);
     plate.cx += (plateTarget.cx - plate.cx) * ease;
     plate.cy += (plateTarget.cy - plate.cy) * ease;
-    plate.r += (plateTarget.r - plate.r) * ease;
+    // The zoom between the framed view and edge-to-edge play glides more slowly than moves.
+    plate.r += (plateTarget.r - plate.r) * (1 - Math.exp(-dt * 2.2));
     dimU.value += (dimTarget - dimU.value) * ease;
     reveal += (revealTarget - reveal) * (1 - Math.exp(-dt * 1.2));
     revealU.value = reveal;

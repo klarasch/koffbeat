@@ -11,7 +11,7 @@ import { combineGrades, createLiveJudge, judgeRun, releaseWindowMs, SUSTAINED_MI
 import type { HoldState, Scene } from "../scene/resonance";
 import { levelOnsets, restSpans } from "../rhythm/onsets";
 import type { Grade, Hit, Level, Mode, Release, RunResult } from "../types";
-import { buildEndedEarlyPanel, buildResultsPanel, describeNoteJudgement, describeRestJudgement } from "./results";
+import { attackWords, buildEndedEarlyPanel, buildResultsPanel, describeNoteJudgement, describeRestJudgement, releaseWords } from "./results";
 
 export interface PlayCallbacks {
   onHome: () => void;
@@ -28,8 +28,8 @@ const LEAD_IN_SEC = 0.3;
 const GRADE_FLASH_MS = 420;
 /** "Too obviously lost": this many notes missed in a row ends the run. */
 const LOST_MISSED_NOTES = 4;
-/** In practice mode the music keeps going without you, so allow longer to jump back on. */
-const LOST_MISSED_NOTES_PRACTICE = 8;
+/** The music (or your own pulse) keeps going without you, so allow time to jump back on. */
+const LOST_MISSED_NOTES_CLOCKED = 8;
 /** …or this many taps in a row that match no note. */
 const LOST_STRAY_TAPS = 5;
 /** …or this many bars of silence past the note that was due. */
@@ -121,10 +121,17 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     dots.push(dot);
     dotsRow.appendChild(dot);
   }
-  // Practice mode: which bar the music is in, next to the beat squares.
+  // A hairline under the beat bars with a dot gliding across each bar, in time.
+  const sweep = document.createElement("div");
+  sweep.className = "beat-sweep";
+  const sweepDot = document.createElement("span");
+  sweep.appendChild(sweepDot);
+  dotsRow.appendChild(sweep);
+
+  // Which bar the music is in, next to the beat meter.
   const barCounter = document.createElement("span");
   barCounter.className = "bar-counter";
-  if (mode === "practice") dotsRow.appendChild(barCounter);
+  dotsRow.appendChild(barCounter);
   screen.appendChild(dotsRow);
 
   const staffArea = document.createElement("div");
@@ -170,10 +177,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
 
   container.appendChild(screen);
 
+  /** While playing, the sand runs edge to edge; when the run ends it pulls back into view. */
+  let immersive = true;
   function placePlate(): void {
     const rect = plateSlot.getBoundingClientRect();
-    const radius = Math.max(40, Math.min(rect.width * 0.42, rect.height * 1.05));
-    scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height / 2, radius);
+    const framed = Math.max(40, Math.min(rect.width * 0.42, rect.height * 1.05));
+    const radius = immersive ? Math.max(window.innerWidth * 0.62, framed * 1.6) : framed;
+    scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height * (immersive ? 0.38 : 0.5), radius);
   }
   const plateObserver = new ResizeObserver(placePlate);
   plateObserver.observe(plateSlot);
@@ -230,10 +240,15 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   /** The sounding tap note per zone, released with the finger or key. */
   const soundingByZone = new Map<0 | 1, number>();
   engine.setAmbience(0.35, 1.5);
-  // Practice mode runs on the metronome's clock: taps are judged against the click (drifting is
-  // never forgiven), and the karaoke marker and bar highlight follow the music, not the player.
-  const clockDriven = mode === "practice";
-  const liveJudge = createLiveJudge(onsets, startTime, level.bpm, { grid: clockDriven });
+  // Both modes run on a clock. Practice: the metronome's (taps judged against the click, so
+  // drifting is never forgiven). Count-in: the player's own pulse, projected forward while they
+  // are silent, so they can keep counting and catch on again. The karaoke marker and bar
+  // highlight follow that clock, and every tap is an attempt at the next open note.
+  const clockDriven = true;
+  const grid = mode === "practice";
+  const liveJudge = createLiveJudge(onsets, startTime, level.bpm, { grid });
+  /** Live pairing of onset → hit index, handed to the final judgement. */
+  const liveMatches = new Map<number, number>();
   const hits: Hit[] = [];
   const releases: Release[] = [];
   let matchedCount = 0;
@@ -289,8 +304,9 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     scene.setHold(null);
   }
 
-  function showGradeFlash(grade: Grade): void {
-    gradeFlash.textContent = grade;
+  /** Says what just happened, the way a teacher would: "a touch early", "held too long"… */
+  function showGradeFlash(grade: Grade, text: string = grade): void {
+    gradeFlash.textContent = text;
     gradeFlash.className = `grade-flash grade-${grade} show`;
     if (flashTimeout) clearTimeout(flashTimeout);
     flashTimeout = setTimeout(() => {
@@ -354,7 +370,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     if (!clockDriven) setNext(afterIndex);
   }
 
-  function finalizeRelease(onsetIndex: number, combinedGrade: Grade | null, releaseGrade: Grade | null): void {
+  function finalizeRelease(onsetIndex: number, combinedGrade: Grade | null, releaseGrade: Grade | null, releaseErrorMs: number | null = null): void {
+    if (releaseGrade !== null && releaseGrade !== "perfect" && releaseErrorMs !== null) showGradeFlash(releaseGrade, releaseWords(releaseErrorMs));
     if (holding && holding.onsetIndex === onsetIndex) scene.release(releaseGrade ?? "neutral");
     endHold(onsetIndex);
     if (releaseGrade !== null) {
@@ -376,7 +393,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     // A held note in this zone with no explicit release yet (typically a keyboard key still
     // down) is implicitly released the moment a new press happens.
     const implicit = liveJudge.implicitRelease(hit.zone, hit.time);
-    if (implicit.onsetIndex !== null) finalizeRelease(implicit.onsetIndex, implicit.combinedGrade, implicit.releaseGrade);
+    if (implicit.onsetIndex !== null) finalizeRelease(implicit.onsetIndex, implicit.combinedGrade, implicit.releaseGrade, implicit.releaseErrorMs);
 
     const judged = liveJudge.judgeHit(hit);
     const previousNote = soundingByZone.get(hit.zone);
@@ -387,6 +404,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       // An unmatched press while a rest is the current target means the rest wasn't silent.
       const current = timeline[nextPointer];
       if (current && current.kind === "rest") spoilRest(current);
+      showGradeFlash("miss", current?.kind === "rest" ? "that's a rest" : "extra tap");
       coherence *= 0.8;
       scene.setCoherence(coherence);
       scene.strike("miss", lastPress.x, lastPress.y);
@@ -397,6 +415,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     strayInARow = 0;
 
     matchedCount++;
+    liveMatches.set(judged.onsetIndex, hits.length - 1);
     coherence = coherence * 0.7 + GRADE_VALUE[judged.grade] * 0.3;
     scene.setCoherence(coherence);
     const onset = onsets[judged.onsetIndex];
@@ -443,7 +462,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
         if (item) staff.revealEvent(primaryEventIndex(item));
       }
     }
-    showGradeFlash(judged.grade);
+    showGradeFlash(judged.grade, attackWords(judged.grade, judged.errorMs ?? 0));
   }
 
   function handleRelease(release: Release): void {
@@ -454,7 +473,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       soundingByZone.delete(release.zone);
     }
     const result = liveJudge.judgeRelease(release);
-    if (result.onsetIndex !== null) finalizeRelease(result.onsetIndex, result.combinedGrade, result.releaseGrade);
+    if (result.onsetIndex !== null) finalizeRelease(result.onsetIndex, result.combinedGrade, result.releaseGrade, result.releaseErrorMs);
   }
 
   const detachInput = attachInput(tapArea, engine, handleHit, () => offsetSec, handleRelease, {
@@ -481,21 +500,29 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
    */
   function updateBeatDots(): void {
     const t = audibleTime();
+    const barSec = beatsPerBar * secPerQuarter;
     if (t < startTime) {
       for (let i = 0; i < dots.length; i++) {
-        dots[i]?.classList.toggle("lit", t >= firstClickTime + i * secPerQuarter);
-        dots[i]?.classList.remove("beat");
+        const clickAt = firstClickTime + i * secPerQuarter;
+        dots[i]?.classList.toggle("lit", t >= clickAt && t < clickAt + secPerQuarter * 0.35);
+        dots[i]?.classList.toggle("beat", t >= clickAt);
       }
+      dotsRow.classList.toggle("running", t >= firstClickTime);
+      sweepDot.style.transform = `translateX(${Math.max(0, Math.min(1, (t - firstClickTime) / barSec)) * 100}cqw)`;
       return;
     }
+    // Practice: the meter keeps pulsing with the metronome. Count-in: silence is the point, so
+    // the meter rests and the player keeps the pulse alone.
     const pulsing = mode === "practice" && t < metronomeEnd;
+    dotsRow.classList.toggle("running", pulsing);
     const beat = Math.floor((t - startTime) / secPerQuarter);
     const phase = (t - startTime) / secPerQuarter - beat;
     for (let i = 0; i < dots.length; i++) {
       const on = pulsing && beat % beatsPerBar === i;
-      dots[i]?.classList.toggle("lit", on && phase < 0.5);
+      dots[i]?.classList.toggle("lit", on && phase < 0.35);
       dots[i]?.classList.toggle("beat", on);
     }
+    if (pulsing) sweepDot.style.transform = `translateX(${(((t - startTime) % barSec) / barSec) * 100}cqw)`;
   }
 
   let lostReason: string | null = null;
@@ -509,7 +536,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     if (ended) return;
     const current = timeline[nextPointer];
     const where = current ? ` in bar ${barOf(current.beat)}` : "";
-    if (missedInARow >= (clockDriven ? LOST_MISSED_NOTES_PRACTICE : LOST_MISSED_NOTES)) lostReason = `${missedInARow} notes in a row were missed${where}.`;
+    if (missedInARow >= (clockDriven ? LOST_MISSED_NOTES_CLOCKED : LOST_MISSED_NOTES)) lostReason = `${missedInARow} notes in a row were missed${where}.`;
     else if (strayInARow >= LOST_STRAY_TAPS) lostReason = `${strayInARow} taps in a row didn't match a note${where}.`;
     if (lostReason) finish("lost");
   }
@@ -540,7 +567,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
    */
   function updateClock(): void {
     const heard = audibleTime();
-    const beatNow = (heard - startTime) / secPerQuarter;
+    const beatNow = heard < startTime ? -1 : liveJudge.beatAt(heard - offsetSec);
     if (beatNow < 0) return;
 
     while (settledUpTo < timeline.length) {
@@ -548,6 +575,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       if (!item || beatNow < item.beat + closesAfterBeats(settledUpTo)) break;
       if (item.kind === "note" && !matchedTimeline.has(settledUpTo)) {
         setTimelineState(item, "miss");
+        liveJudge.markMissed(item.onsetIndex);
         missedInARow++;
       } else if (item.kind === "rest") {
         setTimelineState(item, spoiledRests.has(item.restIndex) ? "miss" : "done");
@@ -705,7 +733,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     for (const dot of dots) dot.classList.remove("lit", "beat");
     staff.setBarHighlight(null);
 
-    const result = judgeRun(onsets, rests, startTime, level.bpm, hits, releases, { grid: clockDriven });
+    const result = judgeRun(onsets, rests, startTime, level.bpm, hits, releases, { grid, matches: liveMatches });
     lastResult = result;
     logDebugTable(result);
 
@@ -729,6 +757,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     // overlaying the whole screen, so the staff with its final grade marks stays fully visible.
     tapArea.hidden = true;
     screen.classList.add("finished");
+    immersive = false;
+    placePlate();
 
     const panelCallbacks = {
       onRetry: () => leave(callbacks.onRetry),

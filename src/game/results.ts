@@ -51,6 +51,87 @@ export function timingVsClickWords(judgements: OnsetJudgement[]): string {
   return `You play ${meanMs} ms ${mean > 0 ? "behind" : "ahead of"} the click, ±${spreadMs} ms`;
 }
 
+/** A teacher's word for an attack: how early or late, in proportion to the grade. */
+export function attackWords(grade: Grade, errorMs: number): string {
+  if (grade === "perfect") return "on time";
+  const early = errorMs < 0;
+  if (grade === "good") return early ? "a touch early" : "a touch late";
+  if (grade === "ok") return early ? "early" : "late";
+  return early ? "too soon" : "too late";
+}
+
+/** A teacher's word for letting go of a long note. */
+export function releaseWords(errorMs: number): string {
+  return errorMs < 0 ? "let go too soon" : "held too long";
+}
+
+const VALUE_NAMES: [number, string][] = [
+  [0.25, "sixteenths"],
+  [0.5, "eighth notes"],
+  [0.75, "dotted eighths"],
+  [1, "quarter notes"],
+  [1.5, "dotted quarters"],
+  [2, "half notes"],
+  [3, "dotted halves"],
+  [4, "whole notes"],
+];
+
+function valueName(quarters: number): string {
+  let best = VALUE_NAMES[0]!;
+  for (const entry of VALUE_NAMES) if (Math.abs(entry[0] - quarters) < Math.abs(best[0] - quarters)) best = entry;
+  return best[1];
+}
+
+/** How far off on average (ms, either way) before a habit is worth a teacher's note. */
+const HABIT_MS = 35;
+const HOLD_HABIT_MS = 150;
+
+/**
+ * Up to three short notes a teacher would give after this run: rushing or dragging a note
+ * value, cutting long notes short or holding them over, playing into rests, missed notes, and
+ * (without a metronome) speeding up or slowing down.
+ */
+export function teacherNotes(result: RunResult, mode: Mode): string[] {
+  const notes: string[] = [];
+  const played = result.judgements.filter((j) => j.relativeErrorMs !== null);
+
+  // Rushing / dragging, by the note value it shows up on most.
+  const byValue = new Map<string, number[]>();
+  for (const j of played) {
+    const name = valueName(j.onset.quarters);
+    const list = byValue.get(name) ?? [];
+    list.push(j.relativeErrorMs ?? 0);
+    byValue.set(name, list);
+  }
+  let habit: { name: string; mean: number } | null = null;
+  for (const [name, errors] of byValue) {
+    if (errors.length < 3) continue;
+    const mean = errors.reduce((a, b) => a + b, 0) / errors.length;
+    if (Math.abs(mean) >= HABIT_MS && (!habit || Math.abs(mean) > Math.abs(habit.mean))) habit = { name, mean };
+  }
+  if (habit) notes.push(habit.mean < 0 ? `You rush the ${habit.name}: let them come a little later.` : `You drag the ${habit.name}: move them on a little sooner.`);
+
+  const holds = result.judgements.filter((j) => j.releaseErrorMs !== null && j.releaseGrade !== null);
+  if (holds.length >= 2) {
+    const mean = holds.reduce((a, j) => a + (j.releaseErrorMs ?? 0), 0) / holds.length;
+    if (mean <= -HOLD_HABIT_MS) notes.push("You let the long notes go too soon: hold them for their full length.");
+    else if (mean >= HOLD_HABIT_MS) notes.push("You hold the long notes too long: let go as the next beat arrives.");
+  }
+
+  const spoiledRests = result.restJudgements.filter((r) => r.grade === "miss").length;
+  if (spoiledRests > 0) notes.push(spoiledRests === 1 ? "One rest wasn't silent: keep your hands still through it." : `${spoiledRests} rests weren't silent: keep your hands still through them.`);
+
+  const missed = result.judgements.filter((j) => j.hitTime === null).length;
+  if (missed > 0 && notes.length < 3) notes.push(missed === 1 ? "One note was missed." : `${missed} notes were missed: if you lose your place, keep counting and come back in.`);
+
+  if (mode !== "practice" && Math.abs(result.driftPercent) >= 3 && notes.length < 3) {
+    notes.push(result.driftPercent > 0 ? `You sped up ${Math.round(result.driftPercent)}% over the piece: keep the count steady.` : `You slowed down ${Math.round(-result.driftPercent)}% over the piece: keep the count steady.`);
+  }
+
+  if (notes.length === 0) notes.push(result.accuracy >= 95 ? "Clean playing. Try it a little faster." : "Good. Play it again and aim for every note on the beat.");
+  return notes.slice(0, 3);
+}
+
 function capitalize(text: string): string {
   return text.slice(0, 1).toUpperCase() + text.slice(1);
 }
@@ -126,6 +207,15 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
       ? `Played ${playedBpm} bpm — ${tempoVsTargetWords(result.playedBpm, targetBpm)}.`
       : `Played ${playedBpm} bpm — ${tempoVsTargetWords(result.playedBpm, targetBpm)}. ${capitalize(driftWords(result.driftPercent))}.`;
   panel.appendChild(detail);
+
+  const advice = document.createElement("ul");
+  advice.className = "teacher-notes";
+  for (const line of teacherNotes(result, mode)) {
+    const li = document.createElement("li");
+    li.textContent = line;
+    advice.appendChild(li);
+  }
+  panel.appendChild(advice);
 
   panel.appendChild(buildButtons(callbacks));
   return panel;

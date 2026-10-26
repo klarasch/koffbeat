@@ -153,6 +153,12 @@ class PulseEstimator {
     return this.secPerQuarter;
   }
 
+  /** Inverse of predict: where in the music (in beats) a given time falls on this pulse. */
+  beatAt(time: number): number {
+    if (this.grid) return (time - this.startTime - this.gridOffset) / this.secPerQuarter;
+    return this.anchorBeat + (time - this.anchorTime) / this.secPerQuarter;
+  }
+
   update(beat: number, time: number): void {
     if (this.grid) {
       const error = time - (this.startTime + beat * this.secPerQuarter);
@@ -230,6 +236,12 @@ export interface LiveJudge {
   predictTime(beat: number): number;
   /** The player's current pulse, in seconds per quarter note. */
   secPerQuarter(): number;
+  /** Where in the music (beats) `time` falls on the current pulse: the clock that keeps going
+   * at the player's own tempo even while they are silent. */
+  beatAt(time: number): number;
+  /** The note's moment has passed unplayed: stop expecting it, so a later tap attempts the
+   * notes that follow instead. */
+  markMissed(onsetIndex: number): void;
 }
 
 function durationMsFor(onset: Onset, secPerQuarter: number): number {
@@ -264,6 +276,9 @@ function gradeRelease(releaseTime: number, predictedEnd: number, durationMs: num
 export interface JudgeOptions {
   /** Judge against the fixed metronome grid instead of the player's own pulse (practice mode). */
   grid?: boolean;
+  /** The live judge's own pairing of onsets to hits (onset index → hit index). When given, the
+   * offline judgement grades exactly the attempts the player saw graded during play. */
+  matches?: Map<number, number>;
 }
 
 export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number, options: JudgeOptions = {}): LiveJudge {
@@ -273,6 +288,32 @@ export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number,
   const matchedOnsets = new Set<number>();
   const heldByZone = new Map<0 | 1, number>();
   const onsetGradeByIndex = new Map<number, Grade>();
+  const missedOnsets = new Set<number>();
+
+  function nextOpen(from: number): number {
+    for (let i = from; i < onsets.length; i++) if (!matchedOnsets.has(i) && !missedOnsets.has(i)) return i;
+    return -1;
+  }
+
+  /**
+   * Sequential matching: a tap is an attempt at the next note still open, however early or
+   * late, unless it lands clearly closer to the note after that one (the player kept counting
+   * and caught on further along). A tap far earlier than the open note is a stray.
+   */
+  function matchSequential(hitTime: number): MatchResult | null {
+    const open = nextOpen(0);
+    if (open === -1) return null;
+    const errorFor = (i: number) => (hitTime - estimator.predict(onsets[i]?.beat ?? 0)) * 1000;
+    const openError = errorFor(open);
+    const after = nextOpen(open + 1);
+    if (after !== -1) {
+      const afterError = errorFor(after);
+      if (Math.abs(afterError) < Math.abs(openError)) return { index: after, errorMs: afterError };
+    }
+    const gapBeforeMs = gapQuartersBefore(onsets, open) * estimator.currentSecPerQuarter() * 1000;
+    if (openError < -Math.max(MATCH_WINDOW_MS, 0.6 * gapBeforeMs)) return null;
+    return { index: open, errorMs: openError };
+  }
 
   function releaseHeld(zone: 0 | 1, time: number): LiveReleaseJudgement {
     const onsetIndex = heldByZone.get(zone);
@@ -295,7 +336,7 @@ export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number,
 
   return {
     judgeHit(hit: Hit): LiveHitJudgement {
-      const match = findBestMatch(onsets, matchedOnsets, estimator, hit.time);
+      const match = matchSequential(hit.time);
       if (!match) return { onsetIndex: null, errorMs: null, grade: null };
 
       matchedOnsets.add(match.index);
@@ -323,6 +364,12 @@ export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number,
     },
     secPerQuarter(): number {
       return estimator.currentSecPerQuarter();
+    },
+    beatAt(time: number): number {
+      return estimator.beatAt(time);
+    },
+    markMissed(onsetIndex: number): void {
+      if (!matchedOnsets.has(onsetIndex)) missedOnsets.add(onsetIndex);
     },
   };
 }
@@ -630,7 +677,9 @@ function judgeRests(
 export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: number, bpm: number, hits: Hit[], releases: Release[], options: JudgeOptions = {}): RunResult {
   const nominal = nominalSecPerQuarter(bpm);
   const grid = options.grid === true;
-  const { onsetToHit, extraHitIndices } = matchHitsToOnsets(onsets, hits, startTime, bpm, grid);
+  const { onsetToHit, extraHitIndices } = options.matches
+    ? { onsetToHit: options.matches, extraHitIndices: hits.map((_, i) => i).filter((i) => ![...options.matches!.values()].includes(i)) }
+    : matchHitsToOnsets(onsets, hits, startTime, bpm, grid);
 
   const matchedPoints: MatchedPoint[] = [];
   for (const [onsetIndex, hitIndex] of onsetToHit) {
