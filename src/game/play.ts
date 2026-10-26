@@ -9,8 +9,9 @@ import { attachInput } from "../input/input";
 import { type NoteState, renderStaff } from "../notation/staff";
 import { combineGrades, createLiveJudge, judgeRun, releaseWindowMs, SUSTAINED_MIN_QUARTERS } from "../rhythm/judge";
 import type { HoldState, Scene } from "../scene/resonance";
-import { levelOnsets, restSpans } from "../rhythm/onsets";
-import type { Grade, Hit, Level, Mode, Release, RunResult } from "../types";
+import { levelLines } from "../rhythm/durations";
+import { levelOnsets, restSpans, tieFlags as levelTieFlags } from "../rhythm/onsets";
+import type { Grade, Hand, Hit, Level, Mode, Release, RunResult } from "../types";
 import { attackWords, buildEndedEarlyPanel, buildResultsPanel, describeNoteJudgement, describeRestJudgement, releaseWords } from "./results";
 
 export interface PlayCallbacks {
@@ -52,17 +53,6 @@ function figureSeed(id: string): number {
   return h % 12;
 }
 
-/** True when event `index` ties into the next event (continuation, not a new sound). */
-function flattenTieFlags(level: Level): boolean[] {
-  const flags: boolean[] = [];
-  for (const bar of level.bars) {
-    for (const event of bar) {
-      flags.push(event.tie === true && !event.rest);
-    }
-  }
-  return flags;
-}
-
 /** Every event index in the tied chain starting at `startIndex` (just itself, when not tied). */
 function tieChainIndices(tieFlags: boolean[], startIndex: number): number[] {
   const indices = [startIndex];
@@ -76,12 +66,14 @@ function tieChainIndices(tieFlags: boolean[], startIndex: number): number[] {
 
 interface TimelineNote {
   kind: "note";
+  hand: Hand;
   onsetIndex: number;
   beat: number;
   eventIndices: number[];
 }
 interface TimelineRest {
   kind: "rest";
+  hand: Hand;
   restIndex: number;
   beat: number;
   eventIndex: number;
@@ -105,6 +97,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   titleEl.className = "play-title";
   titleEl.innerHTML = `<span class="play-title-name"></span><span class="play-title-meta"></span>`;
   (titleEl.firstChild as HTMLElement).textContent = level.title;
+  const twoHands = levelLines(level).length > 1;
+  const hands: Hand[] = twoHands ? [0, 1] : [0];
   (titleEl.lastChild as HTMLElement).textContent = `${level.bpm} bpm · ${mode === "practice" ? "practice" : "count-in"}`;
   const escHint = document.createElement("span");
   escHint.className = "esc-hint";
@@ -155,13 +149,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   zoneLeft.className = "tap-zone tap-zone-left";
   const zoneLeftLabel = document.createElement("span");
   zoneLeftLabel.className = "tap-zone-label";
-  zoneLeftLabel.textContent = "tap · F";
+  zoneLeftLabel.textContent = twoHands ? "left hand · F" : "tap · F";
   zoneLeft.appendChild(zoneLeftLabel);
   const zoneRight = document.createElement("div");
   zoneRight.className = "tap-zone tap-zone-right";
   const zoneRightLabel = document.createElement("span");
   zoneRightLabel.className = "tap-zone-label";
-  zoneRightLabel.textContent = "tap · J";
+  zoneRightLabel.textContent = twoHands ? "right hand · J" : "tap · J";
   zoneRight.appendChild(zoneRightLabel);
   tapArea.append(zoneLeft, zoneRight);
   stage.appendChild(tapArea);
@@ -206,14 +200,23 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   if (staffSvg) staffArea.style.maxHeight = `${Math.ceil(staffSvg.getBoundingClientRect().height) + 12}px`;
   const onsets = levelOnsets(level);
   const rests = restSpans(level);
-  const tieFlags = flattenTieFlags(level);
+  const tieFlags = levelTieFlags(level);
 
   // The played sequence, in beat order: karaoke state (upcoming/next/active/graded) advances
   // through this list only when the player actually plays, never with the clock.
   const timeline: TimelineItem[] = [
-    ...onsets.map((onset, onsetIndex): TimelineNote => ({ kind: "note", onsetIndex, beat: onset.beat, eventIndices: tieChainIndices(tieFlags, onset.eventIndex) })),
-    ...rests.map((rest, restIndex): TimelineRest => ({ kind: "rest", restIndex, beat: rest.beat, eventIndex: rest.eventIndex })),
-  ].sort((a, b) => a.beat - b.beat);
+    ...onsets.map((onset, onsetIndex): TimelineNote => ({ kind: "note", hand: onset.line ?? 0, onsetIndex, beat: onset.beat, eventIndices: tieChainIndices(tieFlags, onset.eventIndex) })),
+    ...rests.map((rest, restIndex): TimelineRest => ({ kind: "rest", hand: rest.line ?? 0, restIndex, beat: rest.beat, eventIndex: rest.eventIndex })),
+  ].sort((a, b) => a.beat - b.beat || a.hand - b.hand);
+  /** Each hand's own sequence, as indices into the timeline. */
+  const timelineByHand: Record<Hand, number[]> = { 0: [], 1: [] };
+  timeline.forEach((item, i) => timelineByHand[item.hand].push(i));
+  /** The timeline index of the same hand's next item after `index`, or -1. */
+  function nextInHand(index: number): number {
+    const item = timeline[index];
+    if (!item) return -1;
+    return timelineByHand[item.hand].find((i) => i > index) ?? -1;
+  }
   const timelineIndexForOnset = new Map<number, number>();
   timeline.forEach((item, i) => {
     if (item.kind === "note") timelineIndexForOnset.set(item.onsetIndex, i);
@@ -257,8 +260,23 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   let flashTimeout: ReturnType<typeof setTimeout> | null = null;
   let lastResult: RunResult | null = null;
   let tooltipEl: HTMLDivElement | null = null;
-  /** The sustained note currently held, if any, for the hold bar and the plate's ring. */
-  let holding: { onsetIndex: number; eventIndex: number; quarters: number; startPerf: number; durationSec: number; earlyFrac: number; lateFrac: number } | null = null;
+  /** The sustained note each hand is holding, if any, for its hold bar and the plate's ring. */
+  interface Holding {
+    onsetIndex: number;
+    eventIndex: number;
+    quarters: number;
+    startPerf: number;
+    durationSec: number;
+    earlyFrac: number;
+    lateFrac: number;
+  }
+  const holdingByHand = new Map<Hand, Holding>();
+  /** The plate shows one ring: the hold started most recently. */
+  function latestHolding(): Holding | null {
+    let latest: Holding | null = null;
+    for (const h of holdingByHand.values()) if (!latest || h.startPerf > latest.startPerf) latest = h;
+    return latest;
+  }
   /** Screen position of the latest press, for the plate ripple. */
   let lastPress: { x: number | null; y: number | null } = { x: null, y: null };
   let allTappedAt: number | null = null;
@@ -266,42 +284,45 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   let strayInARow = 0;
 
   let nextPointer = 0;
-  if (timeline.length > 0) {
-    const first = timeline[0];
-    // Before the run starts, the staff is shown from its first system (revealEvent(0) is a
-    // no-op here since scrollTop already starts at 0, but this keeps the "position drives the
-    // view" invariant explicit rather than relying on the initial scroll position).
+  // Before the run starts, the staff is shown from its first system, each hand's first item
+  // marked as next (revealEvent is a no-op here since scrollTop already starts at 0, but this
+  // keeps the "position drives the view" invariant explicit).
+  for (const hand of hands) {
+    const first = timeline[timelineByHand[hand][0] ?? -1];
     if (first) {
       setTimelineState(first, "next");
       staff.revealEvent(primaryEventIndex(first));
     }
   }
 
-  const lastOnset = onsets[onsets.length - 1];
-  const lastBeat = lastOnset ? lastOnset.beat + lastOnset.quarters : 0;
+  const lastBeat = onsets.reduce((end, o) => Math.max(end, o.beat + o.quarters), 0);
   const endMarginQuarters = mode === "countIn" ? END_MARGIN_QUARTERS_COUNT_IN : END_MARGIN_QUARTERS;
   const endTime = startTime + lastBeat * secPerQuarter + endMarginQuarters * secPerQuarter;
 
-  function holdState(fraction: number): HoldState {
-    if (!holding) return "filling";
+  function holdState(holding: Holding, fraction: number): HoldState {
     if (fraction < 1 - holding.earlyFrac) return "filling";
     if (fraction <= 1 + holding.lateFrac) return "ready";
     return "over";
   }
 
   function updateHold(): void {
-    if (!holding) return;
-    const fraction = (performance.now() - holding.startPerf) / 1000 / holding.durationSec;
-    const state = holdState(fraction);
-    staff.setHold(holding.eventIndex, holding.quarters, Math.min(1, fraction), state);
-    scene.setHold({ progress: Math.min(1, fraction), state });
+    const latest = latestHolding();
+    for (const holding of holdingByHand.values()) {
+      const fraction = (performance.now() - holding.startPerf) / 1000 / holding.durationSec;
+      const state = holdState(holding, fraction);
+      staff.setHold(holding.eventIndex, holding.quarters, Math.min(1, fraction), state);
+      if (holding === latest) scene.setHold({ progress: Math.min(1, fraction), state });
+    }
   }
 
+  /** Ends the hold on `onsetIndex` (every hold, with null). */
   function endHold(onsetIndex: number | null): void {
-    if (!holding || (onsetIndex !== null && holding.onsetIndex !== onsetIndex)) return;
-    holding = null;
-    staff.setHold(0, 0, null);
-    scene.setHold(null);
+    for (const [hand, holding] of holdingByHand) {
+      if (onsetIndex !== null && holding.onsetIndex !== onsetIndex) continue;
+      holdingByHand.delete(hand);
+      staff.setHold(holding.eventIndex, 0, null);
+    }
+    if (holdingByHand.size === 0) scene.setHold(null);
   }
 
   /** Says what just happened, the way a teacher would: "a touch early", "held too long"… */
@@ -357,7 +378,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
 
   /** After a note (at `timelineIndex`) gets its final release grade, advance the "next" pointer past it. */
   function advanceAfterRelease(timelineIndex: number, releaseGrade: Grade | null): void {
-    const afterIndex = timelineIndex + 1;
+    const afterIndex = twoHands ? nextInHand(timelineIndex) : timelineIndex + 1;
     const afterItem = timeline[afterIndex];
     // The note bled well past its own release window into the rest that follows: the rest is
     // already spoiled, so grade and skip it immediately rather than waiting on the next press.
@@ -372,7 +393,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
 
   function finalizeRelease(onsetIndex: number, combinedGrade: Grade | null, releaseGrade: Grade | null, releaseErrorMs: number | null = null): void {
     if (releaseGrade !== null && releaseGrade !== "perfect" && releaseErrorMs !== null) showGradeFlash(releaseGrade, releaseWords(releaseErrorMs));
-    if (holding && holding.onsetIndex === onsetIndex) scene.release(releaseGrade ?? "neutral");
+    if ([...holdingByHand.values()].some((h) => h.onsetIndex === onsetIndex)) scene.release(releaseGrade ?? "neutral");
     endHold(onsetIndex);
     if (releaseGrade !== null) {
       // A sustained note's release lands like a second strike: a clean release keeps the figure.
@@ -385,6 +406,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     const item = timeline[timelineIndex];
     if (item) setTimelineState(item, combinedGrade ?? "miss");
     advanceAfterRelease(timelineIndex, releaseGrade);
+  }
+
+  /** A two-hand stray: the other hand has a note due right about now (the player swapped hands). */
+  function otherHandDue(hit: Hit): boolean {
+    if (!twoHands) return false;
+    const windowSec = 0.25;
+    return onsets.some((o, i) => (o.line ?? 0) !== hit.zone && !liveMatches.has(i) && Math.abs(liveJudge.predictTime(o.beat) - hit.time) < windowSec);
   }
 
   function handleHit(hit: Hit): void {
@@ -401,10 +429,11 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     // A matched tap rings the plate; a stray tap a soft, low one.
     soundingByZone.set(hit.zone, judged.onsetIndex === null ? engine.noteOn(146.83, 0.3) : engine.noteOn(ZONE_PITCH[hit.zone], 0.8));
     if (judged.onsetIndex === null || judged.grade === null) {
-      // An unmatched press while a rest is the current target means the rest wasn't silent.
-      const current = timeline[nextPointer];
-      if (current && current.kind === "rest") spoilRest(current);
-      showGradeFlash("miss", current?.kind === "rest" ? "that's a rest" : "extra tap");
+      // An unmatched press while a rest is this hand's current target means the rest wasn't silent.
+      const current = timeline[twoHands ? (nowByHand.get(hit.zone) ?? -1) : nextPointer];
+      const inOwnRest = current?.kind === "rest" && (!twoHands || current.hand === hit.zone);
+      if (current && inOwnRest) spoilRest(current);
+      showGradeFlash("miss", inOwnRest ? "that's a rest" : otherHandDue(hit) ? "other hand" : "extra tap");
       coherence *= 0.8;
       scene.setCoherence(coherence);
       scene.strike("miss", lastPress.x, lastPress.y);
@@ -431,7 +460,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       if (onset.quarters > SUSTAINED_MIN_QUARTERS) {
         const durationSec = Math.max(0.05, liveJudge.predictTime(onset.beat + onset.quarters) - hit.time);
         const window = releaseWindowMs(onset.quarters * liveJudge.secPerQuarter() * 1000);
-        holding = {
+        holdingByHand.set(hit.zone, {
           onsetIndex: judged.onsetIndex,
           eventIndex: onset.eventIndex,
           quarters: onset.quarters,
@@ -439,7 +468,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
           durationSec,
           earlyFrac: window.early / 1000 / durationSec,
           lateFrac: window.late / 1000 / durationSec,
-        };
+        });
         updateHold();
       }
     }
@@ -547,7 +576,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   let lastGoodHitTime = startTime;
   /** Every item before this index has been settled by the clock. */
   let settledUpTo = 0;
-  let nowIndex = -1;
+  /** Each hand's karaoke position: the timeline index of its item due now. */
+  const nowByHand = new Map<Hand, number>();
   let shownBar = -1;
 
   /** Beats after its onset at which a note's chance to be played has passed. */
@@ -555,7 +585,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     const item = timeline[index];
     if (!item) return 0;
     if (item.kind === "rest") return rests[item.restIndex]?.quarters ?? 1;
-    const next = timeline.slice(index + 1).find((t) => t.kind === "note");
+    const next = timeline.slice(index + 1).find((t) => t.kind === "note" && t.hand === item.hand);
     const gap = next ? next.beat - item.beat : 4;
     return Math.min(0.4 / secPerQuarter, 0.45 * gap);
   }
@@ -590,21 +620,29 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       return;
     }
 
-    let current = -1;
-    for (let i = 0; i < timeline.length; i++) {
-      const item = timeline[i];
-      if (item && item.beat <= beatNow + 0.02) current = i;
-      else break;
-    }
-    if (current !== nowIndex && current >= 0) {
+    // Each hand's marker sits on that hand's item due now.
+    let moved = false;
+    for (const hand of hands) {
+      let current = -1;
+      for (const i of timelineByHand[hand]) {
+        const item = timeline[i];
+        if (item && item.beat <= beatNow + 0.02) current = i;
+        else break;
+      }
+      const nowIndex = nowByHand.get(hand) ?? -1;
+      if (current === nowIndex || current < 0) continue;
       const previous = timeline[nowIndex];
       // The marker moves on; a note it leaves unplayed waits (upcoming ink) until it's settled.
       if (previous && nowIndex >= settledUpTo && !matchedTimeline.has(nowIndex)) setTimelineState(previous, "upcoming");
-      nowIndex = current;
-      nextPointer = current;
+      nowByHand.set(hand, current);
       const item = timeline[current];
       if (item && !matchedTimeline.has(current) && current >= settledUpTo) setTimelineState(item, "next");
-      scene.setRest(item?.kind === "rest");
+      moved = true;
+    }
+    if (moved) {
+      nextPointer = Math.max(...nowByHand.values());
+      // While the music rests (in every hand), the sand settles flat.
+      scene.setRest([...nowByHand.values()].every((i) => timeline[i]?.kind === "rest"));
     }
 
     const bar = Math.min(level.bars.length - 1, Math.floor(beatNow / beatsPerBar));
@@ -651,6 +689,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     // end), then a breath so the final strike can ring out, before showing the results.
     if (matchedCount >= onsets.length) {
       const nowPerf = performance.now();
+      const holding = latestHolding();
       if (holding) {
         const fraction = (nowPerf - holding.startPerf) / 1000 / holding.durationSec;
         if (fraction > 1 + holding.lateFrac + 0.15) {

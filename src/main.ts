@@ -8,6 +8,7 @@ import { leaveHome, renderHome } from "./game/home";
 import { createScene } from "./scene/resonance";
 import { startPlay } from "./game/play";
 import { generateLevel } from "./rhythm/generate";
+import { generateTwoHandLevel } from "./rhythm/twoHands";
 import { LEVELS } from "./rhythm/levels";
 import type { Level, Mode } from "./types";
 
@@ -148,6 +149,10 @@ function randomPick(tier: number, bars: 4 | 8 | 16): LevelPick {
   return { level: withTempo(generateLevel({ tier, bars })), next: () => randomPick(tier, bars) };
 }
 
+function twoHandPick(stage: number, bars: 4 | 8 | 16): LevelPick {
+  return { level: withTempo(generateTwoHandLevel({ stage, bars })), next: () => twoHandPick(stage, bars) };
+}
+
 function showHome(): void {
   renderHome(app as HTMLElement, {
     levels: LEVELS,
@@ -166,6 +171,7 @@ function showHome(): void {
     ],
     onPlay: (index, mode) => beginLevel(fixedPick(index), mode),
     onRandom: (tier, bars, mode) => beginLevel(randomPick(tier, bars), mode),
+    onTwoHands: (stage, bars, mode) => beginLevel(twoHandPick(stage, bars), mode),
   });
 }
 

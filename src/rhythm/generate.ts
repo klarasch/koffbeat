@@ -19,20 +19,20 @@ const METER = { beats: 4, beatUnit: 4 } as const;
 const DEFAULT_BPM = 80;
 const EPSILON = 1e-6;
 
-function note(value: RhythmEvent["value"], opts: { dots?: 0 | 1; tie?: boolean } = {}): RhythmEvent {
+export function note(value: RhythmEvent["value"], opts: { dots?: 0 | 1; tie?: boolean } = {}): RhythmEvent {
   const event: RhythmEvent = { value, dots: opts.dots ?? 0, rest: false };
   if (opts.tie) event.tie = true;
   return event;
 }
 
-function rest(value: RhythmEvent["value"]): RhythmEvent {
+export function rest(value: RhythmEvent["value"]): RhythmEvent {
   return { value, dots: 0, rest: true };
 }
 
 /** A seeded PRNG returning floats in [0, 1). */
-type Rng = () => number;
+export type Rng = () => number;
 
-function mulberry32(seed: number): Rng {
+export function mulberry32(seed: number): Rng {
   let a = seed >>> 0;
   return () => {
     a = (a + 0x6d2b79f5) | 0;
@@ -138,7 +138,7 @@ function isRestCell(cell: Cell): boolean {
   return cell.endsWithRest && cell.restRun >= cell.quarters;
 }
 
-interface BarOptions {
+export interface BarOptions {
   /** Forbid a rest as the very first event of the bar (used for the exercise's first bar). */
   disallowLeadingRest?: boolean;
   /** Bar starts with a plain quarter that is the tied-into continuation of the previous bar's half. */
@@ -149,7 +149,7 @@ interface BarOptions {
   forceTrailingHalf?: boolean;
 }
 
-function buildBarEvents(rng: Rng, tier: number, options: BarOptions = {}): RhythmEvent[] {
+export function buildBarEvents(rng: Rng, tier: number, options: BarOptions = {}): RhythmEvent[] {
   const totalBeats = METER.beats;
   const events: RhythmEvent[] = [];
   let beatPos = 0;
@@ -189,7 +189,7 @@ function buildCadenceBar(rng: Rng, tier: number): RhythmEvent[] {
   return buildBarEvents(rng, tier, { forceTrailingHalf: true });
 }
 
-function cloneBar(bar: RhythmEvent[]): RhythmEvent[] {
+export function cloneBar(bar: RhythmEvent[]): RhythmEvent[] {
   return bar.map((event) => ({ ...event }));
 }
 
@@ -200,7 +200,7 @@ const REPEAT_BAR3_PROBABILITY = 0.35;
 const CROSS_BAR_TIE_PROBABILITY = 0.18;
 
 /** Builds one 4-bar phrase: A, A' (or fresh), B (or a variation of A), then a cadence bar. */
-function buildPhrase(rng: Rng, tier: number, exerciseStartsHere: boolean): RhythmEvent[][] {
+export function buildPhrase(rng: Rng, tier: number, exerciseStartsHere: boolean): RhythmEvent[][] {
   const allowCrossBarTies = tier >= 6;
   const tieAfterBar1 = allowCrossBarTies && rng() < CROSS_BAR_TIE_PROBABILITY;
   const tieAfterBar2 = allowCrossBarTies && !tieAfterBar1 && rng() < CROSS_BAR_TIE_PROBABILITY;

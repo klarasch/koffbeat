@@ -2,7 +2,7 @@
 // offline (after a run), both judged against the player's own drifting pulse rather than a
 // fixed metronome grid — see doc comments below for the reasoning behind each constant.
 
-import type { Grade, Hit, Onset, Release, RestSpan, RunResult } from "../types";
+import type { Grade, Hand, Hit, Onset, Release, RestSpan, RunResult } from "../types";
 
 /** Base grade windows, as the absolute relative error in ms, for notes that follow closely on
  * the previous one (an interval of `WINDOW_REFERENCE_GAP_MS` or less). Human timing spread grows
@@ -39,6 +39,8 @@ const PHASE_CORRECTION = 0.5;
  */
 const GRID_OFFSET_RATE = 0.1;
 const GRID_OFFSET_MAX_SEC = 0.06;
+/** Online pulse tracking: the tempo is only re-estimated from notes at least this far apart (quarters). */
+const MIN_TEMPO_STEP_QUARTERS = 0.1;
 /** Online pulse tracking: estimate is clamped to nominal tempo ± this fraction. */
 const PULSE_CLAMP_FRACTION = 0.15;
 
@@ -70,10 +72,52 @@ function nominalSecPerQuarter(bpm: number): number {
   return 60 / bpm;
 }
 
-/** Gap from onset `index` back to the previous onset, in quarters (a quarter for the first). */
+/**
+ * Two-hand levels: each hand reads its own line, so "the previous note" and "the next note" of an
+ * onset are the neighbours on the same line, never the other hand's. For a one-line level they
+ * are simply the onsets either side. Cached per onset list.
+ */
+interface LineLinks {
+  twoLines: boolean;
+  prev: number[];
+  next: number[];
+}
+const linkCache = new WeakMap<Onset[], LineLinks>();
+
+function lineOf(onset: { line?: Hand } | undefined): Hand {
+  return onset?.line ?? 0;
+}
+
+function links(onsets: Onset[]): LineLinks {
+  const cached = linkCache.get(onsets);
+  if (cached) return cached;
+  const twoLines = onsets.some((o) => o.line !== undefined);
+  const prev: number[] = onsets.map(() => -1);
+  const next: number[] = onsets.map(() => -1);
+  const last: Record<Hand, number> = { 0: -1, 1: -1 };
+  onsets.forEach((onset, i) => {
+    const line = lineOf(onset);
+    const before = last[line];
+    if (before !== -1) {
+      prev[i] = before;
+      next[before] = i;
+    }
+    last[line] = i;
+  });
+  const result = { twoLines, prev, next };
+  linkCache.set(onsets, result);
+  return result;
+}
+
+/** Whether a press in `zone` may play `onset`: on a two-hand level, only its own hand's. */
+function zoneMayPlay(onsets: Onset[], onset: Onset | undefined, zone: Hand): boolean {
+  return !links(onsets).twoLines || lineOf(onset) === zone;
+}
+
+/** Gap from onset `index` back to the previous onset (on its own line), in quarters (a quarter for the first). */
 function gapQuartersBefore(onsets: Onset[], index: number): number {
   const onset = onsets[index];
-  const prev = onsets[index - 1];
+  const prev = onsets[links(onsets).prev[index] ?? -1];
   if (!onset || !prev) return 1;
   return Math.max(0.25, onset.beat - prev.beat);
 }
@@ -108,8 +152,9 @@ function matchWindowMs(onsets: Onset[], index: number, secPerQuarter: number): n
   const onset = onsets[index];
   if (!onset) return MATCH_WINDOW_MS;
   let minGapQuarters = Number.POSITIVE_INFINITY;
-  const prev = onsets[index - 1];
-  const next = onsets[index + 1];
+  const { prev: prevLinks, next: nextLinks } = links(onsets);
+  const prev = onsets[prevLinks[index] ?? -1];
+  const next = onsets[nextLinks[index] ?? -1];
   if (prev) minGapQuarters = Math.min(minGapQuarters, onset.beat - prev.beat);
   if (next) minGapQuarters = Math.min(minGapQuarters, next.beat - onset.beat);
   if (!Number.isFinite(minGapQuarters)) return MATCH_WINDOW_MS;
@@ -169,7 +214,9 @@ class PulseEstimator {
     const predicted = this.predict(beat);
     const corrected = this.hasHit ? predicted + PHASE_CORRECTION * (time - predicted) : time;
     this.hasHit = true;
-    if (beat > this.anchorBeat) {
+    // Tempo only from notes a real distance apart: two hands landing on the same beat (or a
+    // hair apart in floating point) say nothing about the tempo, only about the phase.
+    if (beat - this.anchorBeat >= MIN_TEMPO_STEP_QUARTERS) {
       const instantaneous = (time - this.anchorTime) / (beat - this.anchorBeat);
       const blended = this.secPerQuarter + PULSE_SMOOTHING * (instantaneous - this.secPerQuarter);
       this.secPerQuarter = Math.min(this.max, Math.max(this.min, blended));
@@ -184,15 +231,15 @@ interface MatchResult {
   errorMs: number;
 }
 
-/** Nearest unmatched onset to `hitTime`, within its match window, or null. */
-function findBestMatch(onsets: Onset[], matchedOnsets: ReadonlySet<number>, estimator: PulseEstimator, hitTime: number): MatchResult | null {
+/** Nearest unmatched onset to `hitTime` that this zone may play, within its match window, or null. */
+function findBestMatch(onsets: Onset[], matchedOnsets: ReadonlySet<number>, estimator: PulseEstimator, hitTime: number, zone: Hand): MatchResult | null {
   let bestIndex = -1;
   let bestErrorMs = 0;
   let bestAbsErrorMs = Number.POSITIVE_INFINITY;
   for (let i = 0; i < onsets.length; i++) {
     if (matchedOnsets.has(i)) continue;
     const onset = onsets[i];
-    if (!onset) continue;
+    if (!onset || !zoneMayPlay(onsets, onset, zone)) continue;
     const predicted = estimator.predict(onset.beat);
     const errorMs = (hitTime - predicted) * 1000;
     const absErrorMs = Math.abs(errorMs);
@@ -289,23 +336,29 @@ export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number,
   const heldByZone = new Map<0 | 1, number>();
   const onsetGradeByIndex = new Map<number, Grade>();
   const missedOnsets = new Set<number>();
+  const twoLines = links(onsets).twoLines;
 
-  function nextOpen(from: number): number {
-    for (let i = from; i < onsets.length; i++) if (!matchedOnsets.has(i) && !missedOnsets.has(i)) return i;
+  /** The first note still open from index `from` on that a press in `zone` may play. */
+  function nextOpen(from: number, zone: Hand): number {
+    for (let i = from; i < onsets.length; i++) {
+      if (!matchedOnsets.has(i) && !missedOnsets.has(i) && zoneMayPlay(onsets, onsets[i], zone)) return i;
+    }
     return -1;
   }
 
   /**
    * Sequential matching: a tap is an attempt at the next note still open, however early or
    * late, unless it lands clearly closer to the note after that one (the player kept counting
-   * and caught on further along). A tap far earlier than the open note is a stray.
+   * and caught on further along). A tap far earlier than the open note is a stray. On a
+   * two-hand level each hand works through its own line: a left-hand tap only ever attempts
+   * the left hand's notes.
    */
-  function matchSequential(hitTime: number): MatchResult | null {
-    const open = nextOpen(0);
+  function matchSequential(hitTime: number, zone: Hand): MatchResult | null {
+    const open = nextOpen(0, zone);
     if (open === -1) return null;
     const errorFor = (i: number) => (hitTime - estimator.predict(onsets[i]?.beat ?? 0)) * 1000;
     const openError = errorFor(open);
-    const after = nextOpen(open + 1);
+    const after = nextOpen(open + 1, zone);
     if (after !== -1) {
       const afterError = errorFor(after);
       if (Math.abs(afterError) < Math.abs(openError)) return { index: after, errorMs: afterError };
@@ -336,18 +389,20 @@ export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number,
 
   return {
     judgeHit(hit: Hit): LiveHitJudgement {
-      const match = matchSequential(hit.time);
+      const match = matchSequential(hit.time, hit.zone);
       if (!match) return { onsetIndex: null, errorMs: null, grade: null };
 
       matchedOnsets.add(match.index);
       const onset = onsets[match.index];
-      if (onset) estimator.update(onset.beat, hit.time);
-
       // The very first note has no pulse of the player's own to be judged against yet, only the
       // count-in (plus any calibration error), so it gets the widest windows.
       const isFirst = matchedOnsets.size === 1 && !grid;
       const gapMs = isFirst ? Number.POSITIVE_INFINITY : gapQuartersBefore(onsets, match.index) * estimator.currentSecPerQuarter() * 1000;
       const grade = gradeFor(Math.abs(match.errorMs), gapMs);
+      // Two hands share one pulse, so one hand's stumble must not knock the other hand's notes
+      // off: on a two-hand level only confident attacks (perfect or good) steer the pulse.
+      const steers = !twoLines || isFirst || grade === "perfect" || grade === "good";
+      if (onset && steers) estimator.update(onset.beat, hit.time);
       onsetGradeByIndex.set(match.index, grade);
       heldByZone.set(hit.zone, match.index);
 
@@ -378,6 +433,8 @@ interface MatchedPoint {
   onsetIndex: number;
   beat: number;
   time: number;
+  /** The line (hand) the note is on. */
+  line: Hand;
 }
 
 /** Same online-pulse matching as the live judge, run over a whole hit list at once. */
@@ -400,7 +457,7 @@ function matchHitsToOnsets(
   for (const hitIndex of order) {
     const hit = hits[hitIndex];
     if (!hit) continue;
-    const match = findBestMatch(onsets, matchedOnsets, estimator, hit.time);
+    const match = findBestMatch(onsets, matchedOnsets, estimator, hit.time, hit.zone);
     if (!match) {
       extraHitIndices.push(hitIndex);
       continue;
@@ -486,6 +543,9 @@ function clampedMedianOffset(points: MatchedPoint[], startTime: number, nominal:
   return Math.max(-GRID_OFFSET_MAX_SEC, Math.min(GRID_OFFSET_MAX_SEC, median));
 }
 
+/** Two-hand levels: a tap this far (ms) off its neighbours' pulse doesn't shape that pulse. */
+const PULSE_OUTLIER_MS = 2 * OK_MS;
+
 const GRADE_SCORE: Record<Grade, number> = { perfect: 1, good: 0.9, ok: 0.65, miss: 0 };
 const EXTRA_HIT_PENALTY = 3;
 /** Weight of onset (attack) timing vs hold/rest correctness in the blended accuracy score. */
@@ -556,15 +616,19 @@ function computeSteadiness(matchedPoints: MatchedPoint[], bpm: number, playedBpm
   const nominal = nominalSecPerQuarter(bpm);
   const deviationPercent = (Math.abs(playedBpm - bpm) / bpm) * 100;
 
-  const sorted = [...matchedPoints].sort((a, b) => a.beat - b.beat);
+  // Local tempo from consecutive notes of the same hand: across two hands, notes can be a
+  // fraction of a beat apart, which would magnify ordinary timing spread into "unsteadiness".
   const ratios: number[] = [];
-  for (let i = 1; i < sorted.length; i++) {
-    const prev = sorted[i - 1];
-    const cur = sorted[i];
-    if (!prev || !cur) continue;
-    const dBeat = cur.beat - prev.beat;
-    if (dBeat <= 0) continue;
-    ratios.push((cur.time - prev.time) / dBeat / nominal);
+  for (const line of [0, 1] as const) {
+    const sorted = matchedPoints.filter((p) => p.line === line).sort((a, b) => a.beat - b.beat);
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1];
+      const cur = sorted[i];
+      if (!prev || !cur) continue;
+      const dBeat = cur.beat - prev.beat;
+      if (dBeat <= 0) continue;
+      ratios.push((cur.time - prev.time) / dBeat / nominal);
+    }
   }
 
   let localVariancePercent = 0;
@@ -580,12 +644,14 @@ function computeSteadiness(matchedPoints: MatchedPoint[], bpm: number, playedBpm
 
 /**
  * For every matched onset, the release time: an explicit release (pointerup/keyup) in the same
- * zone, if one lands before the next press (any zone); otherwise the next press's time, since a
+ * zone, if one lands before the next press (any zone; on a two-hand level, the same zone, since
+ * the other hand playing doesn't let this one go); otherwise that next press's time, since a
  * held key/finger with no release event is implicitly let go the moment the next note is
  * pressed. Onsets with neither (typically the very last note, if never explicitly released) are
  * left unresolved (no entry).
  */
 function computeReleaseTimes(onsets: Onset[], onsetToHit: Map<number, number>, hits: Hit[], releases: Release[]): Map<number, number> {
+  const perZone = links(onsets).twoLines;
   const matches = [...onsetToHit.entries()]
     .map(([onsetIndex, hitIndex]) => {
       const onset = onsets[onsetIndex];
@@ -606,7 +672,8 @@ function computeReleaseTimes(onsets: Onset[], onsetToHit: Map<number, number>, h
   for (let i = 0; i < matches.length; i++) {
     const match = matches[i];
     if (!match) continue;
-    const nextPressTime = matches[i + 1]?.time ?? Number.POSITIVE_INFINITY;
+    const nextPress = perZone ? matches.slice(i + 1).find((m) => m.zone === match.zone) : matches[i + 1];
+    const nextPressTime = nextPress?.time ?? Number.POSITIVE_INFINITY;
 
     const zoneReleases = releasesByZone[match.zone];
     let idx = zoneReleaseIdx[match.zone];
@@ -640,24 +707,28 @@ function judgeRests(
   predict: (beat: number) => number,
   nominal: number,
 ): { eventIndex: number; grade: Grade; reason: string | null }[] {
+  const twoLines = links(onsets).twoLines;
   return restSpansList.map((rest) => {
+    // On a two-hand level a rest belongs to one hand: only that hand's notes and presses count.
+    const line = lineOf(rest);
+    const sameLine = (o: Onset) => !twoLines || lineOf(o) === line;
     // The onset immediately preceding this rest (by eventIndex order, the closest onset whose
     // eventIndex is less than the rest's).
     let prevOnsetIndex = -1;
     onsets.forEach((o, i) => {
-      if (o.eventIndex < rest.eventIndex && (prevOnsetIndex === -1 || o.eventIndex > (onsets[prevOnsetIndex]?.eventIndex ?? -1))) prevOnsetIndex = i;
+      if (sameLine(o) && o.eventIndex < rest.eventIndex && (prevOnsetIndex === -1 || o.eventIndex > (onsets[prevOnsetIndex]?.eventIndex ?? -1))) prevOnsetIndex = i;
     });
 
     const restStart = predict(rest.beat);
     const restEnd = predict(rest.beat + rest.quarters);
 
     // The next onset after the rest, whose own early-tap allowance overlaps the rest's tail.
-    const nextOnset = onsets.find((o) => o.beat >= rest.beat + rest.quarters);
+    const nextOnset = onsets.find((o) => sameLine(o) && o.beat >= rest.beat + rest.quarters - 1e-6);
     const nextOnsetIndex = nextOnset ? onsets.indexOf(nextOnset) : -1;
     const nextWindowMs = nextOnsetIndex === -1 ? 0 : matchWindowMs(onsets, nextOnsetIndex, nominal);
     const excludeAfter = nextOnset ? predict(nextOnset.beat) - nextWindowMs / 1000 : Number.POSITIVE_INFINITY;
 
-    const pressedDuringRest = hits.some((h) => h.time >= restStart && h.time < Math.min(restEnd, excludeAfter));
+    const pressedDuringRest = hits.some((h) => (!twoLines || h.zone === line) && h.time >= restStart && h.time < Math.min(restEnd, excludeAfter));
     if (pressedDuringRest) return { eventIndex: rest.eventIndex, grade: "miss" as Grade, reason: "you tapped during it" };
 
     const prevReleaseTime = prevOnsetIndex === -1 ? undefined : releaseTimes.get(prevOnsetIndex);
@@ -681,12 +752,19 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
     ? { onsetToHit: options.matches, extraHitIndices: hits.map((_, i) => i).filter((i) => ![...options.matches!.values()].includes(i)) }
     : matchHitsToOnsets(onsets, hits, startTime, bpm, grid);
 
-  const matchedPoints: MatchedPoint[] = [];
+  let matchedPoints: MatchedPoint[] = [];
   for (const [onsetIndex, hitIndex] of onsetToHit) {
     const onset = onsets[onsetIndex];
     const hit = hits[hitIndex];
     if (!onset || !hit) continue;
-    matchedPoints.push({ onsetIndex, beat: onset.beat, time: hit.time });
+    matchedPoints.push({ onsetIndex, beat: onset.beat, time: hit.time, line: lineOf(onset) });
+  }
+  // Two hands: the pulse is fitted through both hands' taps, so a wild attack in one hand would
+  // skew the other hand's grades. Points far off the fit through their neighbours are left out
+  // of the pulse (they are still graded, against it).
+  if (links(onsets).twoLines && !grid) {
+    const all = matchedPoints;
+    matchedPoints = all.filter((p) => Math.abs(p.time - predictTimeAt(all, p.beat, p.onsetIndex, startTime, nominal)) * 1000 <= PULSE_OUTLIER_MS);
   }
 
   // In grid mode every time is judged against the click, shifted only by the player's median
@@ -740,9 +818,22 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
   const onsetScore = computeOnsetScore(judgements);
   const holdRestScore = computeHoldRestScore(judgements, restJudgements);
   const accuracy = computeAccuracy(onsetScore, holdRestScore, extraHits.length);
+  let handAccuracy: [number, number] | undefined;
+  if (links(onsets).twoLines) {
+    const forHand = (hand: Hand): number => {
+      const handJudgements = judgements.filter((j) => lineOf(j.onset) === hand);
+      const restLine = new Map(restSpansList.map((r) => [r.eventIndex, lineOf(r)]));
+      const handRests = restJudgements.filter((r) => restLine.get(r.eventIndex) === hand);
+      const handExtras = extraHits.filter((h) => h.zone === hand).length;
+      return computeAccuracy(computeOnsetScore(handJudgements), computeHoldRestScore(handJudgements, handRests), handExtras);
+    };
+    handAccuracy = [forHand(0), forHand(1)];
+  }
   const playedBpm = computePlayedBpm(matchedPoints, bpm);
   const driftPercent = computeDriftPercent(onsets, matchedPoints);
   const steadiness = computeSteadiness(matchedPoints, bpm, playedBpm);
 
-  return { judgements, extraHits, restJudgements, accuracy, steadiness, playedBpm, driftPercent };
+  const result: RunResult = { judgements, extraHits, restJudgements, accuracy, steadiness, playedBpm, driftPercent };
+  if (handAccuracy) result.handAccuracy = handAccuracy;
+  return result;
 }

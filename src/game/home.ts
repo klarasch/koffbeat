@@ -4,6 +4,7 @@ import type { AudioEngine } from "../audio/engine";
 import type { Scene } from "../scene/resonance";
 import { runCalibration } from "../input/calibration";
 import { TIER_NAMES } from "../rhythm/generate";
+import { TWO_HAND_STAGES } from "../rhythm/twoHands";
 import type { Level, Mode } from "../types";
 
 export interface HomeOptions {
@@ -11,6 +12,8 @@ export interface HomeOptions {
   engine: AudioEngine;
   onPlay: (levelIndex: number, mode: Mode) => void;
   onRandom: (tier: number, bars: 4 | 8 | 16, mode: Mode) => void;
+  /** A generated two-hand exercise at `stage` (see TWO_HAND_STAGES). */
+  onTwoHands: (stage: number, bars: 4 | 8 | 16, mode: Mode) => void;
   scene: Scene;
   sounds: { label: string; isOn: () => boolean; set: (on: boolean) => void }[];
   /** Practice tempo override (null = each level's own tempo). */
@@ -168,13 +171,14 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
 
   // Level picker: the fixed levels plus "Random", as a line of words.
   const prefs = loadRandomPrefs();
-  let picked: number | "random" = loadPicked(opts.levels.length);
+  const handPrefs = loadHandPrefs();
+  let picked: Picked = loadPicked(opts.levels.length);
   const picker = document.createElement("div");
   picker.className = "level-picker";
   picker.setAttribute("role", "listbox");
   picker.setAttribute("aria-label", "Level");
   const items: HTMLButtonElement[] = [];
-  const addItem = (key: number | "random", num: string, name: string) => {
+  const addItem = (key: Picked, num: string, name: string) => {
     const item = document.createElement("button");
     item.type = "button";
     item.className = "picker-item";
@@ -193,6 +197,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   };
   opts.levels.forEach((level, i) => addItem(i, String(i + 1).padStart(2, "0"), level.title));
   addItem("random", "∞", "Random");
+  addItem("hands", "‖", "Two hands");
 
   // Random exercise options, shown only when Random is picked.
   const randomLine = document.createElement("div");
@@ -223,6 +228,35 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   );
   randomLine.append(tierGroup, barsGroup);
 
+  // Two-hand options, shown only when Two hands is picked: the stage, and the same length choice.
+  const handsLine = document.createElement("div");
+  handsLine.className = "settings-line random-line";
+  const stageGroup = document.createElement("label");
+  stageGroup.className = "option-group";
+  const stageLabel = document.createElement("span");
+  stageLabel.className = "option-label";
+  stageLabel.textContent = "Stage";
+  const stageSelect = document.createElement("select");
+  stageSelect.className = "text-select";
+  TWO_HAND_STAGES.forEach((name, i) => {
+    const option = document.createElement("option");
+    option.value = String(i + 1);
+    option.textContent = `${i + 1} · ${name}`;
+    stageSelect.appendChild(option);
+  });
+  stageSelect.value = String(handPrefs.stage);
+  stageGroup.append(stageLabel, stageSelect);
+  let handBars = handPrefs.bars;
+  const handBarsGroup = optionGroup(
+    "Length",
+    BAR_OPTIONS.map((b) => ({ key: String(b), label: `${b} bars`, title: `${b} bars` })),
+    String(handBars),
+    (key) => {
+      handBars = Number(key) as 4 | 8 | 16;
+    },
+  );
+  handsLine.append(stageGroup, handBarsGroup);
+
   const play = document.createElement("button");
   play.type = "button";
   play.className = "play-cta";
@@ -230,6 +264,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   const playWhat = play.lastChild as HTMLElement;
 
   function levelBpm(): number {
+    if (picked === "hands") return 72;
     return picked === "random" ? 80 : (opts.levels[picked]?.bpm ?? 80);
   }
 
@@ -240,7 +275,8 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
       item.setAttribute("aria-selected", String(active));
     }
     randomLine.hidden = picked !== "random";
-    playWhat.textContent = picked === "random" ? "Random exercise" : (opts.levels[picked]?.title ?? "");
+    handsLine.hidden = picked !== "hands";
+    playWhat.textContent = picked === "random" ? "Random exercise" : picked === "hands" ? "Two-hand exercise" : (opts.levels[picked]?.title ?? "");
     const override = opts.tempo.get();
     tempoValue.textContent = `${override ?? levelBpm()} bpm`;
     tempoValue.classList.toggle("custom", override !== null);
@@ -266,6 +302,10 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
       const tier = Number(tierSelect.value);
       saveRandomPrefs({ tier, bars });
       opts.onRandom(tier, bars, mode);
+    } else if (picked === "hands") {
+      const stage = Number(stageSelect.value);
+      saveHandPrefs({ stage, bars: handBars });
+      opts.onTwoHands(stage, handBars, mode);
     } else {
       opts.onPlay(picked, mode);
     }
@@ -301,7 +341,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   footer.className = "home-footer";
   // Play sits at the end of the reading path, bottom right; the quiet link takes the left.
   footer.append(calibrateLink, play);
-  dock.append(settings, picker, randomLine, footer);
+  dock.append(settings, picker, randomLine, handsLine, footer);
   root.appendChild(dock);
 
   container.appendChild(root);
@@ -360,10 +400,13 @@ function textButton(text: string, label: string): HTMLButtonElement {
 
 const PICKED_KEY = "resonance.picked";
 
-function loadPicked(levelCount: number): number | "random" {
+/** A fixed level's index, a random one-line exercise, or a two-hand exercise. */
+type Picked = number | "random" | "hands";
+
+function loadPicked(levelCount: number): Picked {
   try {
     const raw = localStorage.getItem(PICKED_KEY);
-    if (raw === "random") return "random";
+    if (raw === "random" || raw === "hands") return raw;
     const n = Number(raw);
     if (raw !== null && Number.isInteger(n) && n >= 0 && n < levelCount) return n;
   } catch {
@@ -372,7 +415,7 @@ function loadPicked(levelCount: number): number | "random" {
   return 0;
 }
 
-function savePicked(key: number | "random"): void {
+function savePicked(key: Picked): void {
   try {
     localStorage.setItem(PICKED_KEY, String(key));
   } catch {
@@ -405,3 +448,27 @@ function saveRandomPrefs(prefs: { tier: number; bars: 4 | 8 | 16 }): void {
   }
 }
 
+
+const HAND_PREFS_KEY = "resonance.handPrefs";
+
+function loadHandPrefs(): { stage: number; bars: 4 | 8 | 16 } {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(HAND_PREFS_KEY) ?? "null");
+    if (parsed && typeof parsed === "object" && "stage" in parsed && "bars" in parsed) {
+      const stage = Number(parsed.stage);
+      const bars = BAR_OPTIONS.find((b) => b === Number(parsed.bars));
+      if (stage >= 1 && stage <= TWO_HAND_STAGES.length && bars) return { stage, bars };
+    }
+  } catch {
+    // Storage unavailable or corrupt — fall back to defaults.
+  }
+  return { stage: 1, bars: 4 };
+}
+
+function saveHandPrefs(prefs: { stage: number; bars: 4 | 8 | 16 }): void {
+  try {
+    localStorage.setItem(HAND_PREFS_KEY, JSON.stringify(prefs));
+  } catch {
+    // Not persisted; harmless.
+  }
+}

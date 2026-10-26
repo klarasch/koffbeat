@@ -16,23 +16,40 @@ export interface RhythmEvent {
   rest: boolean;
   /** Tied to the next event: the next event is sounded as a continuation, not a new onset. */
   tie?: boolean;
+  /**
+   * Part of a triplet: three of these fill the time of two of the same written value (so a
+   * quarter-note triplet lasts 2/3 of a quarter). Triplet events come in groups of three.
+   */
+  tuplet?: 3;
 }
 
-/** A playable exercise. Phase A uses a single rhythm line. */
+/** Which hand plays a line: 0 = left (zone 0: F, left half), 1 = right (zone 1: J, right half). */
+export type Hand = 0 | 1;
+
+/** A playable exercise: one rhythm line, or two independent lines (one per hand). */
 export interface Level {
   id: string;
   title: string;
   meter: Meter;
   /** Tempo in quarter notes per minute. */
   bpm: number;
-  /** Events grouped by bar; each bar must fill the meter exactly. */
+  /** Events grouped by bar; each bar must fill the meter exactly. For a two-hand level, the
+   * left hand's line (the same as `lines[0]`). */
   bars: RhythmEvent[][];
+  /**
+   * Two-hand levels only: `lines[0]` is the left hand's bars, `lines[1]` the right hand's, each
+   * with the same number of bars. Absent for a one-line level; read through `levelLines()`.
+   */
+  lines?: RhythmEvent[][][];
 }
 
 /** A moment the player must tap, derived from a Level. */
 export interface Onset {
-  /** Index into the flattened event list (bar by bar) of the note that starts here. */
+  /** Index into the flattened event list (bar by bar; on a two-hand level, the left hand's line
+   * first, then the right hand's) of the note that starts here. */
   eventIndex: number;
+  /** Which line (and so which hand/zone) plays it. Absent means line 0 of a one-line level. */
+  line?: Hand;
   /** Position from the start of bar 1, in quarter notes. */
   beat: number;
   /** Sounding length, in quarter notes. A tied chain counts as one note with the summed length. */
@@ -43,6 +60,8 @@ export interface Onset {
 export interface RestSpan {
   /** Index into the flattened event list of the rest symbol. */
   eventIndex: number;
+  /** Which line the rest is on. Absent means line 0 of a one-line level. */
+  line?: Hand;
   /** Position from the start of bar 1, in quarter notes. */
   beat: number;
   /** Length, in quarter notes. */
@@ -92,6 +111,8 @@ export interface RunResult {
    * the player's own pulse. See judge.ts's computeAccuracy for the exact blend.
    */
   accuracy: number;
+  /** Two-hand levels only: the same accuracy blend per hand, [left, right]. */
+  handAccuracy?: [number, number];
   /** 0–100: how steady the player's pulse stayed relative to the count-in tempo. */
   steadiness: number;
   /** Player's average tempo in quarter-note BPM, estimated from their hits. */
