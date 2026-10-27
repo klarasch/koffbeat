@@ -151,7 +151,7 @@ function capitalize(text: string): string {
 const NOTEWORTHY_ERROR_MS = 15;
 
 /**
- * Plain-language detail for a note's tooltip, e.g. "Tapped 180 ms late · held 300 ms short".
+ * Plain-language detail for a note's tooltip, e.g. "Tapped 180 ms late, held 300 ms short".
  * Hold is only ever mentioned for a sustained note (releaseGrade is null for a quarter note or
  * shorter — those are "played" the instant they're tapped, so there's nothing to say about it).
  */
@@ -167,7 +167,7 @@ export function describeNoteJudgement(j: OnsetJudgement): string {
     parts.push(releaseErr < 0 ? `held ${Math.round(Math.abs(releaseErr))} ms short` : `held ${Math.round(Math.abs(releaseErr))} ms long`);
   }
 
-  return capitalize(parts.join(" · "));
+  return capitalize(parts.join(", "));
 }
 
 /** Plain-language detail for a rest's tooltip, e.g. "Rest: you tapped during it". */
@@ -215,7 +215,7 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
   if (result.handAccuracy) {
     const handsLine = document.createElement("p");
     handsLine.className = "results-detail";
-    handsLine.textContent = `Left hand ${Math.round(result.handAccuracy[0])} · right hand ${Math.round(result.handAccuracy[1])}`;
+    handsLine.textContent = `Left hand ${Math.round(result.handAccuracy[0])}, right hand ${Math.round(result.handAccuracy[1])}`;
     numbers.appendChild(handsLine);
   }
 
@@ -247,7 +247,7 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
   return panel;
 }
 
-/** "14 clean · 3 good · 1 close · 0 missed", each count in its grade colour. */
+/** "14 clean, 3 good, 1 close, 0 missed", each count in its grade colour. */
 function gradeTally(result: RunResult): HTMLElement {
   const tally = document.createElement("p");
   tally.className = "grade-tally";

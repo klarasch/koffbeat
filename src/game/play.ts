@@ -102,10 +102,10 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   (titleEl.firstChild as HTMLElement).textContent = level.title;
   const twoHands = levelLines(level).length > 1;
   const hands: Hand[] = twoHands ? [0, 1] : [0];
-  (titleEl.lastChild as HTMLElement).textContent = `${level.bpm} bpm · ${mode === "practice" ? "practice" : "count-in"}`;
+  (titleEl.lastChild as HTMLElement).textContent = `${level.bpm} bpm, ${mode === "practice" ? "practice" : "count-in"}`;
   const escHint = document.createElement("span");
   escHint.className = "esc-hint";
-  escHint.textContent = "Esc stop · R retry";
+  escHint.textContent = "Esc to stop, R to retry";
   topbar.append(homeButton, titleEl, escHint);
   screen.appendChild(topbar);
 
@@ -152,13 +152,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   zoneLeft.className = "tap-zone tap-zone-left";
   const zoneLeftLabel = document.createElement("span");
   zoneLeftLabel.className = "tap-zone-label";
-  zoneLeftLabel.textContent = twoHands ? "left hand · F" : "tap · F";
+  zoneLeftLabel.textContent = twoHands ? "left hand (F)" : "tap (F)";
   zoneLeft.appendChild(zoneLeftLabel);
   const zoneRight = document.createElement("div");
   zoneRight.className = "tap-zone tap-zone-right";
   const zoneRightLabel = document.createElement("span");
   zoneRightLabel.className = "tap-zone-label";
-  zoneRightLabel.textContent = twoHands ? "right hand · J" : "tap · J";
+  zoneRightLabel.textContent = twoHands ? "right hand (J)" : "tap (J)";
   zoneRight.appendChild(zoneRightLabel);
   tapArea.append(zoneLeft, zoneRight);
   stage.appendChild(tapArea);

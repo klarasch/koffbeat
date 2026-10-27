@@ -182,14 +182,30 @@ body,
     display: none;
   }
 
-  /* Play stays in reach at the bottom while the choices scroll above it. */
+  /* Play stays in reach at the bottom while the choices scroll above it: the summary on its
+     own line, then Play as one full-width row, the word on the left and the arrow on the right. */
   .home-footer {
     position: sticky;
     bottom: 0;
     z-index: 5;
     margin: 0 calc(-1 * clamp(18px, 5vw, 56px)) calc(-1 * clamp(18px, 4vh, 44px));
-    padding: 22px clamp(18px, 5vw, 56px) clamp(14px, 2.5vh, 24px);
-    background: linear-gradient(to top, var(--void) 72%, rgba(246, 244, 240, 0));
+    padding: 26px clamp(18px, 5vw, 56px) calc(clamp(12px, 2.5vh, 22px) + env(safe-area-inset-bottom));
+    background: linear-gradient(to top, var(--void) 76%, rgba(246, 244, 240, 0));
+  }
+
+  .home-footer .play-cta {
+    width: 100%;
+    grid-template-columns: 1fr auto;
+    justify-items: start;
+    text-align: left;
+  }
+
+  .home-footer .play-cta-arrow {
+    justify-self: end;
+  }
+
+  .home-footer .play-cta-what {
+    max-width: 100%;
   }
 
   .home-plate-slot {
@@ -599,9 +615,7 @@ body,
 
 .home-footer {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
+  justify-content: flex-end;
 }
 
 .play-cta {

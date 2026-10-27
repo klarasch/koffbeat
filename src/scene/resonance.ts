@@ -52,7 +52,7 @@ export interface Scene {
   readonly supported: boolean;
 }
 
-/** Chladni modes (n, m, sign) for f = cos(nπx)cos(mπz) + s·cos(mπx)cos(nπz), x, z in [-1, 1]. */
+/** Chladni modes (n, m, sign) for f = cos(nπx)cos(mπz) + s*cos(mπx)cos(nπz), x, z in [-1, 1]. */
 const MODES: [number, number, number][] = [
   [1, 3, -1],
   [2, 3, 1],

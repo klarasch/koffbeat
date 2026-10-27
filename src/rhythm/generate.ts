@@ -331,7 +331,7 @@ export function generateLevel(opts: GenerateOptions): Level {
 
   return {
     id: `gen-t${tier}-${seed}`,
-    title: `Reading · tier ${tier} · ${opts.bars} bars`,
+    title: `${TIER_NAMES[tier - 1] ?? `Tier ${tier}`}, ${opts.bars} bars`,
     meter: METERS[kind],
     bpm: opts.bpm ?? DEFAULT_BPM,
     bars,

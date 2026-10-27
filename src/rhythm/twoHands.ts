@@ -125,7 +125,7 @@ export function generateTwoHandLevel(opts: TwoHandOptions): Level {
   const [left, right] = build(rng, opts.bars, tier);
   return {
     id: `gen-2h-s${stage}-t${tier}-${seed}`,
-    title: `Two hands · ${TWO_HAND_STAGES[stage - 1]?.toLowerCase()} · ${TIER_NAMES[tier - 1]?.toLowerCase()}`,
+    title: `Two hands: ${TWO_HAND_STAGES[stage - 1]?.toLowerCase()}, ${TIER_NAMES[tier - 1]?.toLowerCase()}`,
     meter: METER,
     bpm: opts.bpm ?? DEFAULT_BPM,
     bars: left,

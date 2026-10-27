@@ -148,7 +148,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   let { tier, hands, stage, bars, mode } = prefs;
 
   const tierSelect = select(
-    TIER_NAMES.map((name, i) => ({ value: String(i + 1), label: `${i + 1} · ${name}` })),
+    TIER_NAMES.map((name, i) => ({ value: String(i + 1), label: `${i + 1}. ${name}` })),
     String(tier),
     (value) => {
       tier = Number(value);
@@ -232,8 +232,8 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     note.textContent = mode === "practice" ? "The metronome keeps going: play on the click." : "One bar of clicks, then keep the pulse yourself.";
     const override = opts.tempo.get();
     tempoControl.setText(`${override ?? defaultBpm()} bpm`, override !== null);
-    const what = `${TIER_NAMES[effectiveTier() - 1] ?? ""} · ${bars} bars`;
-    playWhat.textContent = hands === 2 ? `Two hands, ${TWO_HAND_STAGES[stage - 1]?.toLowerCase()} · ${what}` : what;
+    const what = `${TIER_NAMES[effectiveTier() - 1] ?? ""}, ${bars} bars`;
+    playWhat.textContent = hands === 2 ? `Two hands, ${TWO_HAND_STAGES[stage - 1]?.toLowerCase()}, ${what.toLowerCase()}` : what;
     saveHomePrefs({ tier, hands, stage, bars, mode });
   }
 
@@ -281,7 +281,10 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
 
   const footer = document.createElement("div");
   footer.className = "home-footer";
-  footer.append(calibrateLink, play);
+  footer.append(play);
+  // Calibration is a setting, not part of choosing what to play: it sits with the sound switches.
+  calibrateLink.className = "text-toggle calibrate-link";
+  toggles.appendChild(calibrateLink);
   dock.append(panel, footer);
   root.appendChild(dock);
 
