@@ -12,12 +12,28 @@ import type { HoldState, Scene } from "../scene/resonance";
 import { levelLines } from "../rhythm/durations";
 import { levelOnsets, restSpans, tieFlags as levelTieFlags } from "../rhythm/onsets";
 import type { Grade, Hand, Hit, Level, Mode, Release, RunResult } from "../types";
-import { attackWords, buildEndedEarlyPanel, buildResultsPanel, describeNoteJudgement, describeRestJudgement, releaseWords } from "./results";
+import { attackWords, buildEndedEarlyPanel, buildListenedPanel, buildResultsPanel, describeNoteJudgement, describeRestJudgement, releaseWords } from "./results";
 
 export interface PlayCallbacks {
   onHome: () => void;
-  onRetry: () => void;
+  /** Play the same exercise again, at `bpm` when given (the player changed the tempo). */
+  onRetry: (bpm?: number) => void;
   onNext: () => void;
+  /** Hear the same exercise played correctly. */
+  onListen: () => void;
+  /** A run reached its end (not stopped or lost), with its accuracy. */
+  onComplete?: (accuracy: number) => void;
+}
+
+export interface PlayOptions {
+  /** Two-hand levels: practise one hand; the other is played for you and isn't judged. */
+  solo?: Hand;
+  /** Play the exercise back correctly instead of judging the player. */
+  demo?: boolean;
+  /** Where this run sits in a sequence of steps (e.g. right hand, left hand, together). */
+  steps?: { labels: string[]; current: number };
+  /** Label of the results' main "next" action (default "Next level"). */
+  nextLabel?: string;
 }
 
 /** How long after the count-in's last click ends do we still accept hits, in quarter notes. */
@@ -83,7 +99,8 @@ interface TimelineRest {
 }
 type TimelineItem = TimelineNote | TimelineRest;
 
-export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Scene, level: Level, mode: Mode, callbacks: PlayCallbacks): void {
+export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Scene, level: Level, mode: Mode, callbacks: PlayCallbacks, options: PlayOptions = {}): void {
+  const { solo, demo = false } = options;
   container.innerHTML = "";
 
   const screen = document.createElement("div");
@@ -101,12 +118,27 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   titleEl.innerHTML = `<span class="play-title-name"></span><span class="play-title-meta"></span>`;
   (titleEl.firstChild as HTMLElement).textContent = level.title;
   const twoHands = levelLines(level).length > 1;
-  const hands: Hand[] = twoHands ? [0, 1] : [0];
-  (titleEl.lastChild as HTMLElement).textContent = `${level.bpm} bpm, ${mode === "practice" ? "practice" : "count-in"}`;
+  // Hands the player plays: both on a two-hand level, unless practising one of them.
+  const hands: Hand[] = solo !== undefined && twoHands ? [solo] : twoHands ? [0, 1] : [0];
+  (titleEl.lastChild as HTMLElement).textContent = `${level.bpm} bpm, ${demo ? "listening" : mode === "practice" ? "practice" : "count-in"}`;
   const escHint = document.createElement("span");
   escHint.className = "esc-hint";
-  escHint.textContent = "Esc to stop, R to retry";
-  topbar.append(homeButton, titleEl, escHint);
+  escHint.textContent = demo ? "Esc to stop" : "Esc to stop, R to retry";
+  topbar.append(homeButton, titleEl);
+  if (options.steps) {
+    const steps = document.createElement("ol");
+    steps.className = "step-indicator";
+    steps.setAttribute("aria-label", "Steps");
+    options.steps.labels.forEach((label, i) => {
+      const li = document.createElement("li");
+      li.textContent = label;
+      if (i === options.steps?.current) li.setAttribute("aria-current", "step");
+      if (i < (options.steps?.current ?? 0)) li.classList.add("done");
+      steps.appendChild(li);
+    });
+    topbar.appendChild(steps);
+  }
+  topbar.appendChild(escHint);
   screen.appendChild(topbar);
 
   const dotsRow = document.createElement("div");
@@ -152,13 +184,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   zoneLeft.className = "tap-zone tap-zone-left";
   const zoneLeftLabel = document.createElement("span");
   zoneLeftLabel.className = "tap-zone-label";
-  zoneLeftLabel.textContent = twoHands ? "left hand (F)" : "tap (F)";
+  zoneLeftLabel.textContent = demo ? "" : twoHands ? (solo === 1 ? "" : "left hand (F)") : "tap (F)";
   zoneLeft.appendChild(zoneLeftLabel);
   const zoneRight = document.createElement("div");
   zoneRight.className = "tap-zone tap-zone-right";
   const zoneRightLabel = document.createElement("span");
   zoneRightLabel.className = "tap-zone-label";
-  zoneRightLabel.textContent = twoHands ? "right hand (J)" : "tap (J)";
+  zoneRightLabel.textContent = demo ? "" : twoHands ? (solo === 0 ? "" : "right hand (J)") : "tap (J)";
   zoneRight.appendChild(zoneRightLabel);
   tapArea.append(zoneLeft, zoneRight);
   stage.appendChild(tapArea);
@@ -225,8 +257,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     if (current) staff.revealEvent(primaryEventIndex(current));
   }
   window.addEventListener("resize", fitStaffArea);
-  const onsets = levelOnsets(level);
-  const rests = restSpans(level);
+  const allOnsets = levelOnsets(level);
+  const allRests = restSpans(level);
+  // Practising one hand: only its notes and rests are played and judged; the other hand's line
+  // stays on the staff, faded, and is played for you.
+  const inPlayedHands = (line: number | undefined) => hands.includes((line ?? 0) as Hand);
+  const onsets = allOnsets.filter((o) => inPlayedHands(o.line));
+  const rests = allRests.filter((r) => inPlayedHands(r.line));
   const tieFlags = levelTieFlags(level);
 
   // The played sequence, in beat order: karaoke state (upcoming/next/active/graded) advances
@@ -262,8 +299,16 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   const startTime = engine.now() + beatsPerBar * secPerQuarter + LEAD_IN_SEC;
   const firstClickTime = engine.scheduleCountIn(startTime, beatsPerBar, secPerQuarter);
 
-  if (mode === "practice") {
+  if (mode === "practice" || demo) {
     engine.startMetronome(startTime, secPerQuarter, level.meter.beats, level.bars.length);
+  }
+  // Notes the game plays itself, on the felt piano: every note when listening, otherwise the
+  // other hand's line when practising one hand. stopAll cancels them with the metronome.
+  for (const o of allOnsets) {
+    const line = (o.line ?? 0) as Hand;
+    const playedByGame = demo || !hands.includes(line);
+    if (!playedByGame) continue;
+    engine.scheduleNote(ZONE_PITCH[line], demo ? 0.75 : 0.45, startTime + o.beat * secPerQuarter, o.quarters * secPerQuarter * 0.92);
   }
 
   const offsetSec = loadOffset();
@@ -325,7 +370,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   }
   fitStaffArea();
 
-  const lastBeat = onsets.reduce((end, o) => Math.max(end, o.beat + o.quarters), 0);
+  const lastBeat = allOnsets.reduce((end, o) => Math.max(end, o.beat + o.quarters), 0);
   const endMarginQuarters = mode === "countIn" ? END_MARGIN_QUARTERS_COUNT_IN : END_MARGIN_QUARTERS;
   const endTime = startTime + lastBeat * secPerQuarter + endMarginQuarters * secPerQuarter;
 
@@ -547,12 +592,15 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     if (result.onsetIndex !== null) finalizeRelease(result.onsetIndex, result.combinedGrade, result.releaseGrade, result.releaseErrorMs);
   }
 
-  const detachInput = attachInput(tapArea, engine, handleHit, () => offsetSec, handleRelease, {
-    ripple: !scene.supported,
-    onPress: (_zone, x, y) => {
-      lastPress = { x, y };
-    },
-  });
+  // Listening takes no input: the game plays everything itself.
+  const detachInput = demo
+    ? () => {}
+    : attachInput(tapArea, engine, handleHit, () => offsetSec, handleRelease, {
+        ripple: !scene.supported,
+        onPress: (_zone, x, y) => {
+          lastPress = { x, y };
+        },
+      });
 
   /** The audio-clock time being heard right now (scheduled time plus the output delay). */
   function audibleTime(): number {
@@ -645,7 +693,9 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     while (settledUpTo < timeline.length) {
       const item = timeline[settledUpTo];
       if (!item || beatNow < item.beat + closesAfterBeats(settledUpTo)) break;
-      if (item.kind === "note" && !matchedTimeline.has(settledUpTo)) {
+      if (item.kind === "note" && demo) {
+        setTimelineState(item, "done");
+      } else if (item.kind === "note" && !matchedTimeline.has(settledUpTo)) {
         setTimelineState(item, "miss");
         liveJudge.markMissed(item.onsetIndex);
         missedInARow++;
@@ -654,9 +704,9 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       }
       settledUpTo++;
     }
-    checkLost();
+    if (!demo) checkLost();
     if (ended) return;
-    if (missedInARow >= 3 && heard - lastGoodHitTime > LOST_SILENT_BARS * beatsPerBar * secPerQuarter) {
+    if (!demo && missedInARow >= 3 && heard - lastGoodHitTime > LOST_SILENT_BARS * beatsPerBar * secPerQuarter) {
       lostReason = `The playing stopped in bar ${barOf(beatNow)}.`;
       finish("lost");
       return;
@@ -678,7 +728,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       if (previous && nowIndex >= settledUpTo && !matchedTimeline.has(nowIndex)) setTimelineState(previous, "upcoming");
       nowByHand.set(hand, current);
       const item = timeline[current];
-      if (item && !matchedTimeline.has(current) && current >= settledUpTo) setTimelineState(item, "next");
+      if (item && !matchedTimeline.has(current) && current >= settledUpTo) setTimelineState(item, demo && item.kind === "note" ? "active" : "next");
+      // Listening: the sand answers every note as if it were played perfectly.
+      if (demo && item?.kind === "note") {
+        const onset = onsets[item.onsetIndex];
+        scene.setCoherence(1);
+        scene.strike("perfect", null, null, onset?.quarters ?? 1);
+      }
       moved = true;
     }
     if (moved) {
@@ -813,6 +869,10 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     teardown();
     for (const dot of dots) dot.classList.remove("lit", "beat");
     staff.setBarHighlight(null);
+    if (demo) {
+      finishListening(outcome);
+      return;
+    }
 
     const result = judgeRun(onsets, rests, startTime, level.bpm, hits, releases, { grid, matches: liveMatches });
     lastResult = result;
@@ -846,17 +906,20 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     placePlate();
 
     const panelCallbacks = {
-      onRetry: () => leave(callbacks.onRetry),
+      onRetry: (bpm?: number) => leave(() => callbacks.onRetry(bpm)),
       onNext: () => leave(callbacks.onNext),
       onHome: () => leave(callbacks.onHome),
+      onListen: () => leave(callbacks.onListen),
     };
+    const retryTempo = { bpm: level.bpm, nextLabel: options.nextLabel };
     resultsOverlay.innerHTML = "";
     if (outcome === "done") {
+      callbacks.onComplete?.(result.accuracy);
       const quality = result.judgements.some((j) => j.hitTime !== null) ? result.accuracy / 100 : 0;
       scene.reveal(quality);
       engine.setAmbience(0.8, 3);
       if (quality > 0) engine.chime(quality);
-      resultsOverlay.appendChild(buildResultsPanel(result, level.bpm, mode, panelCallbacks));
+      resultsOverlay.appendChild(buildResultsPanel(result, level.bpm, mode, panelCallbacks, retryTempo));
     } else {
       // No reveal: the sand just settles back into the void.
       scene.setCoherence(0.3);
@@ -865,8 +928,31 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       engine.setAmbience(0.5, 2);
       const title = outcome === "lost" ? "Lost the beat" : "Stopped";
       const detail = outcome === "lost" ? (lostReason ?? "") : "You stopped the exercise.";
-      resultsOverlay.appendChild(buildEndedEarlyPanel(title, detail, panelCallbacks));
+      resultsOverlay.appendChild(buildEndedEarlyPanel(title, detail, panelCallbacks, retryTempo));
     }
+    resultsOverlay.hidden = false;
+  }
+
+  /** After listening: the staff settles, and the player is invited to take their turn. */
+  function finishListening(outcome: "done" | "lost" | "stopped"): void {
+    staff.setAnimate(false);
+    gradeFlash.classList.remove("show");
+    tapArea.hidden = true;
+    screen.classList.add("finished");
+    immersive = false;
+    staffShare = 0.28;
+    fitStaffArea();
+    placePlate();
+    if (outcome === "done") scene.reveal(0.95);
+    engine.setAmbience(0.6, 2);
+    resultsOverlay.innerHTML = "";
+    resultsOverlay.appendChild(
+      buildListenedPanel({
+        onPlay: () => leave(() => callbacks.onRetry()),
+        onListen: () => leave(callbacks.onListen),
+        onHome: () => leave(callbacks.onHome),
+      }),
+    );
     resultsOverlay.hidden = false;
   }
 
@@ -892,10 +978,19 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       else leave(callbacks.onHome);
     } else if (key === "r") {
       event.preventDefault();
-      leave(callbacks.onRetry);
+      // On the results, Retry uses the tempo chosen there.
+      const chosen = Number(resultsOverlay.querySelector<HTMLElement>("[data-retry-bpm]")?.dataset.retryBpm);
+      leave(() => callbacks.onRetry(Number.isFinite(chosen) && chosen > 0 ? chosen : undefined));
+    } else if (key === "h") {
+      event.preventDefault();
+      leave(callbacks.onListen);
     } else if (key === "enter" && ended) {
       event.preventDefault();
-      leave(callbacks.onNext);
+      if (demo) leave(() => callbacks.onRetry());
+      else leave(callbacks.onNext);
+    } else if (ended && !demo && (key === "-" || key === "+" || key === "=")) {
+      event.preventDefault();
+      resultsOverlay.querySelector<HTMLButtonElement>(key === "-" ? ".retry-tempo .step:first-child" : ".retry-tempo .step:last-child")?.click();
     }
   }
   window.addEventListener("keydown", handleKey);

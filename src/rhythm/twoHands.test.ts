@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Hand, Hit, Level, Onset, Release, RhythmEvent } from "../types";
 import { eventQuarters, validateLevel } from "./durations";
-import { note, rest } from "./generate";
+import { type Ingredient, INGREDIENTS, mulberry32, note, rest } from "./generate";
 import { createLiveJudge, judgeRun } from "./judge";
 import { levelOnsets, restSpans } from "./onsets";
 import { generateTwoHandLevel, TWO_HAND_STAGES } from "./twoHands";
@@ -274,5 +274,46 @@ describe("generateTwoHandLevel", () => {
 
   it("is deterministic for a seed", () => {
     expect(generateTwoHandLevel({ stage: 3, bars: 8, seed: 42 })).toEqual(generateTwoHandLevel({ stage: 3, bars: 8, seed: 42 }));
+  });
+});
+
+describe("generateTwoHandLevel with ingredients", () => {
+  it("validates for every stage, random ingredient subsets, and every length", () => {
+    const rng = mulberry32(99);
+    const keys = INGREDIENTS.map((i) => i.key);
+    for (let n = 0; n < 240; n++) {
+      const ingredients = keys.filter(() => rng() < 0.45);
+      const stage = (n % 4) + 1;
+      const bars = ([4, 8, 16] as const)[Math.floor(n / 4) % 3] as 4 | 8 | 16;
+      const focus: Ingredient | undefined = n % 3 === 0 && ingredients.length > 0 ? (ingredients[0] as Ingredient) : undefined;
+      const level = generateTwoHandLevel({ stage, ingredients, focus, bars, seed: n });
+      const label = `stage ${stage} [${ingredients.join(",")}] ${bars} bars`;
+      expect(validateLevel(level), label).toEqual([]);
+      expect(level.meter).toEqual({ beats: 4, beatUnit: 4 });
+      expect(level.lines?.[0]).toHaveLength(bars);
+      expect(level.lines?.[1]).toHaveLength(bars);
+      expect(level.title).not.toContain("\u00b7");
+    }
+  });
+
+  it("stages 1-3 never use unselected ingredients; triplets only come from stage 4", () => {
+    for (let stage = 1; stage <= 3; stage++) {
+      for (let seed = 0; seed < 60; seed++) {
+        const level = generateTwoHandLevel({ stage, ingredients: ["rests", "eighths"], bars: 8, seed });
+        for (const e of level.lines!.flat(2)) {
+          expect(e.tuplet).toBeUndefined();
+          expect(e.tie).toBeFalsy();
+          expect(e.value).not.toBe("16");
+          expect(e.dots).toBe(0);
+        }
+      }
+    }
+    const poly = generateTwoHandLevel({ stage: 4, ingredients: ["eighths"], bars: 8, seed: 3 });
+    expect(poly.lines!.flat(2).some((e) => e.tuplet === 3)).toBe(true);
+  });
+
+  it("is deterministic for a seed", () => {
+    const opts = { stage: 3, ingredients: ["rests", "ties"] as Ingredient[], bars: 8 as const, seed: 42 };
+    expect(generateTwoHandLevel(opts)).toEqual(generateTwoHandLevel(opts));
   });
 });

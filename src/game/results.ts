@@ -2,11 +2,21 @@
 // Retry / Next level / Home actions. Pure DOM builder — timing and judging happen in play.ts.
 
 import type { Grade, Mode, OnsetJudgement, RunResult } from "../types";
+import { stepper } from "./controls";
 
 export interface ResultsCallbacks {
-  onRetry: () => void;
+  /** Play the same exercise again, at `bpm` when the player changed it here. */
+  onRetry: (bpm?: number) => void;
   onNext: () => void;
   onHome: () => void;
+  /** Hear the exercise played correctly. */
+  onListen: () => void;
+}
+
+/** The tempo the exercise was played at (Retry can change it) and the main action's label. */
+export interface RetryOptions {
+  bpm: number;
+  nextLabel?: string;
 }
 
 /**
@@ -187,7 +197,7 @@ function hitCount(result: RunResult): number {
  * mode without a running metronome) the player's own pulse is all there is to judge, so
  * steadiness and drift are kept.
  */
-export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mode, callbacks: ResultsCallbacks): HTMLElement {
+export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mode, callbacks: ResultsCallbacks, retry?: RetryOptions): HTMLElement {
   const panel = document.createElement("div");
   panel.className = "results-panel";
 
@@ -196,7 +206,7 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
     noTaps.className = "results-detail";
     noTaps.textContent = "No taps detected. Try again: tap the lower half of the screen, or press F / J.";
     panel.appendChild(noTaps);
-    panel.appendChild(buildButtons(callbacks));
+    panel.appendChild(buildButtons(callbacks, retry));
     return panel;
   }
 
@@ -243,7 +253,7 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
     mode === "practice"
       ? `Played ${playedBpm} bpm, ${tempoVsTargetWords(result.playedBpm, targetBpm)}.`
       : `Played ${playedBpm} bpm, ${tempoVsTargetWords(result.playedBpm, targetBpm)}. ${capitalize(driftWords(result.driftPercent))}.`;
-  panel.append(detail, buildButtons(callbacks));
+  panel.append(detail, buildButtons(callbacks, retry));
   return panel;
 }
 
@@ -271,7 +281,7 @@ function gradeTally(result: RunResult): HTMLElement {
 }
 
 /** Shown instead of scores when a run ended early: lost the beat, or stopped with Esc. */
-export function buildEndedEarlyPanel(title: string, detail: string, callbacks: ResultsCallbacks): HTMLElement {
+export function buildEndedEarlyPanel(title: string, detail: string, callbacks: ResultsCallbacks, retry?: RetryOptions): HTMLElement {
   const panel = document.createElement("div");
   panel.className = "results-panel ended-early";
   const heading = document.createElement("p");
@@ -279,8 +289,8 @@ export function buildEndedEarlyPanel(title: string, detail: string, callbacks: R
   heading.textContent = title;
   const text = document.createElement("p");
   text.className = "results-detail";
-  text.textContent = detail ? `${detail} Try it again, or slow the tempo down on the home screen.` : "";
-  panel.append(heading, text, buildButtons(callbacks));
+  text.textContent = detail ? `${detail} Try it again, maybe a little slower, or hear it played first.` : "";
+  panel.append(heading, text, buildButtons(callbacks, retry));
   return panel;
 }
 
@@ -310,7 +320,7 @@ function textCard(label: string, text: string): HTMLElement {
   return card;
 }
 
-function buildButtons(callbacks: ResultsCallbacks): HTMLElement {
+function buildButtons(callbacks: ResultsCallbacks, retry?: RetryOptions): HTMLElement {
   const row = document.createElement("div");
   row.className = "results-buttons";
   const make = (label: string, key: string, onClick: () => void, primary = false) => {
@@ -326,6 +336,62 @@ function buildButtons(callbacks: ResultsCallbacks): HTMLElement {
     button.addEventListener("click", onClick);
     return button;
   };
-  row.append(make("Retry", "R", callbacks.onRetry), make("Next level", "↵", callbacks.onNext, true), make("Home", "Esc", callbacks.onHome));
+
+  // Retry, with the tempo to retry at right next to it (the same exercise, faster or slower).
+  const retryGroup = document.createElement("div");
+  retryGroup.className = "retry-group";
+  let bpm = retry?.bpm ?? 0;
+  const retryButton = make("Retry", "R", () => callbacks.onRetry(retry ? bpm : undefined));
+  retryGroup.appendChild(retryButton);
+  if (retry) {
+    const original = retry.bpm;
+    const tempo = stepper(
+      (delta) => {
+        bpm = Math.max(40, Math.min(200, bpm + delta * 5));
+        paint();
+      },
+      () => {
+        bpm = original;
+        paint();
+      },
+      { less: "Retry slower", more: "Retry faster", reset: "Back to the tempo you played" },
+    );
+    tempo.el.classList.add("retry-tempo");
+    const paint = () => {
+      tempo.setText(`${bpm} bpm`, bpm !== original);
+      retryGroup.dataset.retryBpm = String(bpm);
+    };
+    paint();
+    retryGroup.appendChild(tempo.el);
+  }
+
+  row.append(retryGroup, make("Hear it", "H", callbacks.onListen), make(retry?.nextLabel ?? "Next level", "↵", callbacks.onNext, true), make("Home", "Esc", callbacks.onHome));
   return row;
+}
+
+/** After listening to the exercise: the player's turn next. */
+export function buildListenedPanel(callbacks: { onPlay: () => void; onListen: () => void; onHome: () => void }): HTMLElement {
+  const panel = document.createElement("div");
+  panel.className = "results-panel ended-early";
+  const heading = document.createElement("p");
+  heading.className = "ended-title";
+  heading.textContent = "Your turn";
+  const text = document.createElement("p");
+  text.className = "results-detail";
+  text.textContent = "That's how it goes. Now play it yourself, or hear it once more.";
+  const row = document.createElement("div");
+  row.className = "results-buttons";
+  const make = (label: string, key: string, onClick: () => void, primary = false) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = primary ? "results-button primary" : "results-button";
+    button.innerHTML = `<span></span><kbd class="kbd"></kbd>`;
+    (button.firstChild as HTMLElement).textContent = label;
+    (button.lastChild as HTMLElement).textContent = key;
+    button.addEventListener("click", onClick);
+    return button;
+  };
+  row.append(make("Play it", "↵", callbacks.onPlay, true), make("Hear again", "H", callbacks.onListen), make("Home", "Esc", callbacks.onHome));
+  panel.append(heading, text, row);
+  return panel;
 }

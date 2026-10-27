@@ -4,12 +4,13 @@
 import "./style.css";
 import { createAudioEngine } from "./audio/engine";
 import { runCalibration } from "./input/calibration";
-import { leaveHome, renderHome } from "./game/home";
+import { type FreeChoice, leaveHome, renderHome } from "./game/home";
+import { LESSONS, recordResult } from "./game/lessons";
 import { createScene } from "./scene/resonance";
 import { startPlay } from "./game/play";
 import { generateLevel } from "./rhythm/generate";
 import { generateTwoHandLevel } from "./rhythm/twoHands";
-import type { Level, Mode } from "./types";
+import type { Hand, Level, Mode } from "./types";
 
 const app = document.getElementById("app");
 if (!app) throw new Error("missing #app root");
@@ -114,6 +115,72 @@ function hasSavedOffset(): boolean {
 interface LevelPick {
   level: Level;
   next: () => LevelPick | null;
+  /** Two-hand steps: practise this hand alone (the other is played for you). */
+  solo?: Hand;
+  /** Where this pick sits in a sequence of steps, for the step indicator. */
+  steps?: { labels: string[]; current: number };
+  /** Label for the results' main "next" action. */
+  nextLabel?: string;
+  /** The mode this pick is played in, when it decides it (a lesson step does). */
+  mode?: Mode;
+  /** A lesson step: where its result is recorded. */
+  lesson?: { id: string; step: number };
+}
+
+function randomSeed(): number {
+  return Math.floor(Math.random() * 0x7fffffff);
+}
+
+/**
+ * A lesson step as a playable exercise. Reading lessons deal fresh music for each step;
+ * two-hand lessons keep the same exercise through right hand, left hand and together.
+ */
+function lessonPick(lessonIndex: number, stepIndex: number, seed: number = randomSeed()): LevelPick | null {
+  const lesson = LESSONS[lessonIndex];
+  if (!lesson) return null;
+  const step = lesson.steps[stepIndex];
+  if (!step) return lessonPick(lessonIndex + 1, 0);
+  const generated = lesson.stage
+    ? generateTwoHandLevel({ stage: lesson.stage, tier: lesson.tier, bars: step.bars, bpm: step.bpm, seed })
+    : generateLevel({ tier: lesson.tier, bars: step.bars, bpm: step.bpm, seed });
+  const level = { ...generated, title: `${lesson.title}: ${step.label.toLowerCase()}` };
+  const lastStep = stepIndex === lesson.steps.length - 1;
+  return {
+    level,
+    mode: step.mode,
+    solo: step.solo,
+    steps: { labels: lesson.steps.map((s) => s.label), current: stepIndex },
+    nextLabel: lastStep ? "Next lesson" : `Next: ${lesson.steps[stepIndex + 1]?.label.toLowerCase()}`,
+    lesson: { id: lesson.id, step: stepIndex },
+    next: () => (lastStep ? lessonPick(lessonIndex + 1, 0) : lessonPick(lessonIndex, stepIndex + 1, lesson.stage ? seed : undefined)),
+  };
+}
+
+/** Free practice: an exercise built from the chosen ingredients. */
+function freePick(choice: FreeChoice): LevelPick {
+  const again = () => freePick(choice);
+  if (choice.hands === 2) {
+    return twoHandSteps(withTempo(generateTwoHandLevel({ stage: choice.stage, ingredients: choice.ingredients, bars: choice.bars })), again);
+  }
+  return { level: withTempo(generateLevel({ tier: 1, ingredients: choice.ingredients, meter: choice.meter, bars: choice.bars })), next: again };
+}
+
+const HAND_STEPS = ["Right hand", "Left hand", "Together"];
+
+/**
+ * A two-hand exercise is learned the way a teacher would have you learn it: the right hand
+ * alone, then the left hand alone (the other hand played for you), then both together, all on
+ * the same exercise. `after` gives the next exercise once "together" is done.
+ */
+function twoHandSteps(level: Level, after: () => LevelPick | null): LevelPick {
+  const step = (i: number): LevelPick => ({
+    level,
+    solo: i === 0 ? 1 : i === 1 ? 0 : undefined,
+    steps: { labels: HAND_STEPS, current: i },
+    nextLabel: i < HAND_STEPS.length - 1 ? `Next: ${HAND_STEPS[i + 1]?.toLowerCase()}` : "Next exercise",
+    next: () => (i < HAND_STEPS.length - 1 ? step(i + 1) : after()),
+  });
+  return step(0);
 }
 
 // Practice tempo: null plays each level at its own tempo; a number overrides it.
@@ -139,13 +206,7 @@ function withTempo(level: Level): Level {
   return tempo === null ? level : { ...level, bpm: tempo };
 }
 
-function randomPick(tier: number, bars: 4 | 8 | 16): LevelPick {
-  return { level: withTempo(generateLevel({ tier, bars })), next: () => randomPick(tier, bars) };
-}
 
-function twoHandPick(stage: number, tier: number, bars: 4 | 8 | 16): LevelPick {
-  return { level: withTempo(generateTwoHandLevel({ stage, tier, bars })), next: () => twoHandPick(stage, tier, bars) };
-}
 
 function showHome(): void {
   renderHome(app as HTMLElement, {
@@ -162,17 +223,17 @@ function showHome(): void {
       { label: "Ambience", isOn: ambienceOn, set: setAmbienceOn },
       { label: "Tap sound", isOn: tapSoundOn, set: setTapSoundOn },
     ],
-    onRandom: (tier, bars, mode) => beginLevel(randomPick(tier, bars), mode),
-    onTwoHands: (stage, tier, bars, mode) => beginLevel(twoHandPick(stage, tier, bars), mode),
+    onLesson: (lessonIndex, stepIndex) => beginLevel(lessonPick(lessonIndex, stepIndex), "practice"),
+    onFree: (choice) => beginLevel(freePick(choice), choice.mode),
   });
 }
 
-function beginLevel(pick: LevelPick | null, mode: Mode): void {
+function beginLevel(pick: LevelPick | null, mode: Mode, listen = false): void {
   // engine.unlock() must run synchronously inside the click gesture that reaches this function.
-  if (pick) void doBeginLevel(pick, mode);
+  if (pick) void doBeginLevel(pick, pick.mode ?? mode, listen);
 }
 
-async function doBeginLevel(pick: LevelPick, mode: Mode): Promise<void> {
+async function doBeginLevel(pick: LevelPick, mode: Mode, listen: boolean): Promise<void> {
   leaveHome();
   await engine.unlock();
 
@@ -190,11 +251,29 @@ async function doBeginLevel(pick: LevelPick, mode: Mode): Promise<void> {
 
   // Dev-only: the level being played, for scripted test runs.
   if (import.meta.env.DEV) (window as unknown as { __resonance: Record<string, unknown> }).__resonance.level = pick.level;
-  startPlay(app as HTMLElement, engine, scene, pick.level, mode, {
-    onHome: showHome,
-    onRetry: () => beginLevel(pick, mode),
-    onNext: () => beginLevel(pick.next(), mode),
-  });
+  startPlay(
+    app as HTMLElement,
+    engine,
+    scene,
+    pick.level,
+    mode,
+    {
+      onHome: showHome,
+      // Retry is the same exercise, at the tempo chosen on the results when there is one.
+      onRetry: (bpm) => beginLevel(bpm ? { ...pick, level: { ...pick.level, bpm } } : pick, mode),
+      onNext: () => {
+        const next = pick.next();
+        // The next step of the same exercise keeps the tempo it's being practised at.
+        if (next && next.level.id === pick.level.id) next.level = { ...next.level, bpm: pick.level.bpm };
+        beginLevel(next, mode);
+      },
+      onListen: () => beginLevel(pick, mode, true),
+      onComplete: (accuracy) => {
+        if (pick.lesson) recordResult(pick.lesson.id, pick.lesson.step, accuracy);
+      },
+    },
+    { solo: pick.solo, demo: listen, steps: pick.steps, nextLabel: pick.nextLabel },
+  );
 }
 
 showHome();

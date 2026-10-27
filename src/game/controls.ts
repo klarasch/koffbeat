@@ -280,3 +280,53 @@ export function stepper(onStep: (delta: number) => void, onReset: () => void, la
     },
   };
 }
+
+export interface Chips {
+  el: HTMLElement;
+  set(values: string[]): void;
+}
+
+/**
+ * A wrap of rectangular toggle chips, any number selected. `locked` values are always on (and
+ * can't be switched off).
+ */
+export function chips(choices: Choice[], initial: string[], onChange: (values: string[]) => void, locked: string[] = []): Chips {
+  const el = document.createElement("div");
+  el.className = "chips";
+  el.setAttribute("role", "group");
+  let selected = new Set([...initial, ...locked]);
+  const buttons = choices.map((choice) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "chip";
+    button.textContent = choice.label;
+    if (locked.includes(choice.value)) {
+      button.disabled = true;
+      button.title = "Always included";
+    }
+    button.addEventListener("click", () => {
+      if (locked.includes(choice.value)) return;
+      if (selected.has(choice.value)) selected.delete(choice.value);
+      else selected.add(choice.value);
+      paint();
+      onChange(choices.map((c) => c.value).filter((v) => selected.has(v)));
+    });
+    el.appendChild(button);
+    return button;
+  });
+  function paint(): void {
+    choices.forEach((choice, i) => {
+      const on = selected.has(choice.value);
+      buttons[i]!.classList.toggle("selected", on);
+      buttons[i]!.setAttribute("aria-pressed", String(on));
+    });
+  }
+  paint();
+  return {
+    el,
+    set(values: string[]) {
+      selected = new Set([...values, ...locked]);
+      paint();
+    },
+  };
+}

@@ -20,8 +20,87 @@ export const TIER_NAMES: string[] = [
   "3/4 & 6/8",
 ];
 
+/** One independent rhythmic ingredient the player can switch on (Free practice mode). */
+export type Ingredient =
+  | "quarters"
+  | "halves"
+  | "rests"
+  | "eighths"
+  | "dotted"
+  | "ties"
+  | "sixteenths"
+  | "syncopation"
+  | "dottedEighths"
+  | "offbeatRests"
+  | "triplets";
+
+/** For the UI: one entry per ingredient, in curriculum order. `tier` is the tier that introduces it. */
+export const INGREDIENTS: { key: Ingredient; label: string; tier: number }[] = [
+  { key: "quarters", label: "Quarters", tier: 1 },
+  { key: "halves", label: "Halves", tier: 2 },
+  { key: "rests", label: "Rests", tier: 3 },
+  { key: "eighths", label: "Eighths", tier: 4 },
+  { key: "dotted", label: "Dotted notes", tier: 5 },
+  { key: "ties", label: "Ties", tier: 6 },
+  { key: "sixteenths", label: "Sixteenths", tier: 7 },
+  { key: "syncopation", label: "Syncopation", tier: 8 },
+  { key: "dottedEighths", label: "Dotted eighths", tier: 9 },
+  { key: "offbeatRests", label: "Off-beat rests", tier: 10 },
+  { key: "triplets", label: "Triplets", tier: 11 },
+];
+
+const INGREDIENT_TIER: Record<Ingredient, number> = Object.fromEntries(INGREDIENTS.map((i) => [i.key, i.tier])) as Record<Ingredient, number>;
+
+/** The cumulative ingredient set a tier stands for (tier 12 = all of tier 11; meters are separate). */
+export function ingredientsForTier(tier: number): Ingredient[] {
+  return INGREDIENTS.filter((i) => i.tier <= tier).map((i) => i.key);
+}
+
+export type MeterChoice = "4/4" | "3/4" | "6/8";
+
 /** Meter families the generator writes in. Tiers 1–11 are all 4/4; tier 12 picks 3/4 or 6/8. */
-type MeterKind = "4/4" | "3/4" | "6/8";
+type MeterKind = MeterChoice;
+
+/**
+ * What the builders draw from: the allowed ingredients and the one to practise most. A bare tier
+ * number is accepted wherever a palette is, and means the classic cumulative tier.
+ */
+export interface Palette {
+  ingredients: ReadonlySet<Ingredient>;
+  focus: Ingredient;
+  /** Set for tier palettes: the legacy "newly introduced at this tier" logic is then used for the focus. */
+  tier?: number;
+}
+
+export function tierPalette(tier: number): Palette {
+  return { ingredients: new Set(ingredientsForTier(tier)), focus: "quarters", tier };
+}
+
+/** Builds a palette from a list: "quarters" is always in; focus defaults to the highest-tier ingredient. */
+export function ingredientPalette(list: readonly Ingredient[], focus?: Ingredient): Palette {
+  const set = new Set<Ingredient>(list);
+  set.add("quarters");
+  if (focus) set.add(focus);
+  const top = [...set].reduce((best, key) => (INGREDIENT_TIER[key] > INGREDIENT_TIER[best] ? key : best), "quarters" as Ingredient);
+  return { ingredients: set, focus: focus ?? top };
+}
+
+function toPalette(p: Palette | number): Palette {
+  return typeof p === "number" ? tierPalette(p) : p;
+}
+
+/** Ingredients in curriculum order, from a palette's set. */
+function orderedIngredients(set: ReadonlySet<Ingredient>): Ingredient[] {
+  return INGREDIENTS.filter((i) => set.has(i.key)).map((i) => i.key);
+}
+
+/** "Eighths, rests and ties": plain words, sentence case; quarters are left out unless alone. */
+export function describeIngredients(set: ReadonlySet<Ingredient>): string {
+  const keys = orderedIngredients(set).filter((k) => k !== "quarters");
+  const labels = (keys.length > 0 ? keys : (["quarters"] as Ingredient[])).map((k) => INGREDIENTS.find((i) => i.key === k)?.label.toLowerCase() ?? k);
+  const text = labels.length > 1 ? `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}` : (labels[0] ?? "");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
 
 const METERS: Record<MeterKind, Meter> = {
   "4/4": { beats: 4, beatUnit: 4 },
@@ -71,6 +150,14 @@ export function mulberry32(seed: number): Rng {
 interface Cell {
   /** Tier this cell is introduced in. */
   tier: number;
+  /**
+   * Ingredients the cell needs switched on (quarters are always on). It may also contain plainer
+   * values than these, e.g. the syncopation cells contain eighths, but never anything from an
+   * ingredient that is both off and checkable: ties, sixteenths, rests, tuplets, 4/4 dots.
+   */
+  needs: Ingredient[];
+  /** Only offered in ingredient mode (fills gaps where a lone ingredient has too few cells). */
+  ingredientOnly?: boolean;
   /** Meters the cell can be written in; defaults to the simple meters, 4/4 and 3/4. */
   meters?: MeterKind[];
   /** Length in quarter notes: 1, 2 or 4 in simple time; 1.5 or 3 in 6/8. */
@@ -88,79 +175,102 @@ interface Cell {
 
 const CELLS: Cell[] = [
   // Tier 1
-  { tier: 1, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("q")] },
+  { tier: 1, needs: [], quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("q")] },
   // Tier 2
-  { tier: 2, quarters: 2, beatAligned: true, restRun: 0, endsWithRest: false, make: () => [note("h")] },
-  { tier: 2, meters: ["4/4"], quarters: 4, wholeBar: true, restRun: 0, endsWithRest: false, make: () => [note("w")] },
+  { tier: 2, needs: ["halves"], quarters: 2, beatAligned: true, restRun: 0, endsWithRest: false, make: () => [note("h")] },
+  { tier: 2, needs: ["halves"], meters: ["4/4"], quarters: 4, wholeBar: true, restRun: 0, endsWithRest: false, make: () => [note("w")] },
   // Dotted half: the whole bar in 3/4
-  { tier: 2, meters: ["3/4"], quarters: 3, wholeBar: true, restRun: 0, endsWithRest: false, make: () => [note("h", { dots: 1 })] },
+  { tier: 2, needs: ["halves"], meters: ["3/4"], quarters: 3, wholeBar: true, restRun: 0, endsWithRest: false, make: () => [note("h", { dots: 1 })] },
   // Tier 3
-  { tier: 3, quarters: 1, restRun: 1, endsWithRest: true, make: () => [rest("q")] },
-  { tier: 3, quarters: 2, beatAligned: true, restRun: 2, endsWithRest: true, make: () => [rest("h")] },
+  { tier: 3, needs: ["rests"], quarters: 1, restRun: 1, endsWithRest: true, make: () => [rest("q")] },
+  { tier: 3, needs: ["rests"], quarters: 2, beatAligned: true, restRun: 2, endsWithRest: true, make: () => [rest("h")] },
   // Tier 4
-  { tier: 4, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("8"), note("8")] },
+  { tier: 4, needs: ["eighths"], quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("8"), note("8")] },
   // Tier 5
-  { tier: 5, quarters: 2, beatAligned: true, restRun: 0, endsWithRest: false, make: () => [note("q", { dots: 1 }), note("8")] },
-  { tier: 5, quarters: 1, restRun: 0.5, endsWithRest: false, make: () => [rest("8"), note("8")] },
+  { tier: 5, needs: ["dotted"], quarters: 2, beatAligned: true, restRun: 0, endsWithRest: false, make: () => [note("q", { dots: 1 }), note("8")] },
+  { tier: 5, needs: ["rests", "eighths"], quarters: 1, restRun: 0.5, endsWithRest: false, make: () => [rest("8"), note("8")] },
+  // Ingredient mode only: dotted half with a quarter, so "dotted" works without leaning on eighths
+  { tier: 5, needs: ["dotted"], ingredientOnly: true, meters: ["4/4"], quarters: 4, wholeBar: true, restRun: 0, endsWithRest: false, make: () => [note("h", { dots: 1 }), note("q")] },
+  { tier: 5, needs: ["dotted"], ingredientOnly: true, meters: ["4/4"], quarters: 4, wholeBar: true, restRun: 0, endsWithRest: false, make: () => [note("q"), note("h", { dots: 1 })] },
+  { tier: 5, needs: ["dotted"], ingredientOnly: true, meters: ["3/4"], quarters: 3, wholeBar: true, restRun: 0, endsWithRest: false, make: () => [note("h", { dots: 1 })] },
   // Tier 6 (quarter tied across the beat into an eighth pair's first note)
-  { tier: 6, quarters: 2, beatAligned: true, restRun: 0, endsWithRest: false, make: () => [note("q", { tie: true }), note("8"), note("8")] },
+  { tier: 6, needs: ["ties"], quarters: 2, beatAligned: true, restRun: 0, endsWithRest: false, make: () => [note("q", { tie: true }), note("8"), note("8")] },
+  // Ingredient mode only: a quarter tied to a quarter
+  { tier: 6, needs: ["ties"], ingredientOnly: true, quarters: 2, beatAligned: true, restRun: 0, endsWithRest: false, make: () => [note("q", { tie: true }), note("q")] },
   // Tier 7
-  { tier: 7, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("16"), note("16"), note("16"), note("16")] },
-  { tier: 7, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("8"), note("16"), note("16")] },
-  { tier: 7, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("16"), note("16"), note("8")] },
+  { tier: 7, needs: ["sixteenths"], quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("16"), note("16"), note("16"), note("16")] },
+  { tier: 7, needs: ["sixteenths"], quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("8"), note("16"), note("16")] },
+  { tier: 7, needs: ["sixteenths"], quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("16"), note("16"), note("8")] },
   // Tier 8: syncopation — a quarter in the middle of two eighths, and an eighth tied over the beat
-  { tier: 8, quarters: 2, restRun: 0, endsWithRest: false, make: () => [note("8"), note("q"), note("8")] },
-  { tier: 8, quarters: 2, restRun: 0, endsWithRest: false, make: () => [note("8"), note("8", { tie: true }), note("8"), note("8")] },
-  { tier: 8, quarters: 2, restRun: 0, endsWithRest: false, make: () => [note("8"), note("8", { tie: true }), note("q")] },
+  { tier: 8, needs: ["syncopation"], quarters: 2, restRun: 0, endsWithRest: false, make: () => [note("8"), note("q"), note("8")] },
+  { tier: 8, needs: ["syncopation", "ties"], quarters: 2, restRun: 0, endsWithRest: false, make: () => [note("8"), note("8", { tie: true }), note("8"), note("8")] },
+  { tier: 8, needs: ["syncopation", "ties"], quarters: 2, restRun: 0, endsWithRest: false, make: () => [note("8"), note("8", { tie: true }), note("q")] },
   // Tier 9: dotted eighth + sixteenth, and the reverse
-  { tier: 9, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("8", { dots: 1 }), note("16")] },
-  { tier: 9, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("16"), note("8", { dots: 1 })] },
+  { tier: 9, needs: ["dottedEighths"], quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("8", { dots: 1 }), note("16")] },
+  { tier: 9, needs: ["dottedEighths"], quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("16"), note("8", { dots: 1 })] },
   // Tier 10: eighth and sixteenth rests off the beat
-  { tier: 10, quarters: 1, restRun: 0, endsWithRest: true, make: () => [note("8"), rest("8")] },
-  { tier: 10, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("8"), rest("16"), note("16")] },
-  { tier: 10, quarters: 1, restRun: 0.25, endsWithRest: false, make: () => [rest("16"), note("16"), note("8")] },
-  { tier: 10, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("16"), rest("16"), note("16"), note("16")] },
-  { tier: 10, quarters: 1, restRun: 0.25, endsWithRest: false, make: () => [rest("16"), note("16"), note("16"), note("16")] },
+  { tier: 10, needs: ["offbeatRests"], quarters: 1, restRun: 0, endsWithRest: true, make: () => [note("8"), rest("8")] },
+  { tier: 10, needs: ["offbeatRests", "sixteenths"], quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("8"), rest("16"), note("16")] },
+  { tier: 10, needs: ["offbeatRests", "sixteenths"], quarters: 1, restRun: 0.25, endsWithRest: false, make: () => [rest("16"), note("16"), note("8")] },
+  { tier: 10, needs: ["offbeatRests", "sixteenths"], quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("16"), rest("16"), note("16"), note("16")] },
+  { tier: 10, needs: ["offbeatRests", "sixteenths"], quarters: 1, restRun: 0.25, endsWithRest: false, make: () => [rest("16"), note("16"), note("16"), note("16")] },
   // Tier 11: eighth-note triplets, and a triplet quarter + eighth
-  { tier: 11, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("8", { tuplet: 3 }), note("8", { tuplet: 3 }), note("8", { tuplet: 3 })] },
-  { tier: 11, quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("q", { tuplet: 3 }), note("8", { tuplet: 3 })] },
+  { tier: 11, needs: ["triplets"], quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("8", { tuplet: 3 }), note("8", { tuplet: 3 }), note("8", { tuplet: 3 })] },
+  { tier: 11, needs: ["triplets"], quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("q", { tuplet: 3 }), note("8", { tuplet: 3 })] },
   // Tier 12: compound time (6/8). Positions are multiples of a dotted quarter.
-  { tier: 12, meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("q", { dots: 1 })] },
-  { tier: 12, meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("8"), note("8"), note("8")] },
-  { tier: 12, meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("q"), note("8")] },
-  { tier: 12, meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("8"), note("q")] },
-  { tier: 12, meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("8"), note("16"), note("16"), note("8")] },
-  { tier: 12, meters: ["6/8"], quarters: 1.5, restRun: 0.5, endsWithRest: false, make: () => [rest("8"), note("8"), note("8")] },
-  { tier: 12, meters: ["6/8"], quarters: 1.5, restRun: 1.5, endsWithRest: true, make: () => [rest("q", { dots: 1 })] },
-  { tier: 12, meters: ["6/8"], quarters: 3, wholeBar: true, restRun: 0, endsWithRest: false, make: () => [note("h", { dots: 1 })] },
+  { tier: 12, needs: [], meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("q", { dots: 1 })] },
+  { tier: 12, needs: ["eighths"], meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("8"), note("8"), note("8")] },
+  { tier: 12, needs: ["eighths"], meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("q"), note("8")] },
+  { tier: 12, needs: ["eighths"], meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("8"), note("q")] },
+  { tier: 12, needs: ["sixteenths"], meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("8"), note("16"), note("16"), note("8")] },
+  { tier: 12, needs: ["rests", "eighths"], meters: ["6/8"], quarters: 1.5, restRun: 0.5, endsWithRest: false, make: () => [rest("8"), note("8"), note("8")] },
+  { tier: 12, needs: ["rests"], meters: ["6/8"], quarters: 1.5, restRun: 1.5, endsWithRest: true, make: () => [rest("q", { dots: 1 })] },
+  { tier: 12, needs: ["halves"], meters: ["6/8"], quarters: 3, wholeBar: true, restRun: 0, endsWithRest: false, make: () => [note("h", { dots: 1 })] },
 ];
 
-/** Below tier 5, never let rests run longer than 2 beats in a row. */
+/** Below tier 5 (or with no ingredient from tier 5 up), never let rests run longer than 2 beats in a row. */
 const REST_LIMIT_TIER = 5;
 const MAX_REST_RUN = 2;
 
 /**
- * Probability a decision point picks a cell newly introduced at the current tier. Set well above
- * the ~40% "practise the new thing" target because forced cadence and cross-bar-tie events (which
- * dilute the measured per-beat new-tier fraction) never go through this decision at all.
+ * Probability a decision point picks a cell that practises the focus (the newly introduced cells,
+ * in tier mode). Set well above the ~40% "practise the new thing" target because forced cadence
+ * and cross-bar-tie events (which dilute the measured per-beat fraction) never go through this
+ * decision at all.
  */
 const NEW_CELL_PROBABILITY = 0.6;
 const REST_TIER_NEW_PROBABILITY = 0.4;
 /** Relative pick weight of an all-rest cell versus a note cell. */
 const REST_WEIGHT = 0.4;
 
+function cellAllowed(cell: Cell, palette: Palette): boolean {
+  if (palette.tier !== undefined) return cell.tier <= palette.tier && !cell.ingredientOnly;
+  return cell.needs.every((n) => palette.ingredients.has(n));
+}
+
+function cellIsFocus(cell: Cell, palette: Palette): boolean {
+  if (palette.tier !== undefined) return cell.tier === palette.tier;
+  if (palette.focus === "quarters") return cell.needs.length === 0;
+  return cell.needs.includes(palette.focus);
+}
+
+function restLimitApplies(palette: Palette): boolean {
+  if (palette.tier !== undefined) return palette.tier < REST_LIMIT_TIER;
+  return !INGREDIENTS.some((i) => i.tier >= REST_LIMIT_TIER && palette.ingredients.has(i.key));
+}
+
 function pickCell(
   rng: Rng,
-  tier: number,
+  palette: Palette,
   kind: MeterKind,
   remaining: number,
   beatPos: number,
   consecutiveRest: number,
   disallowRest: boolean,
 ): Cell {
-  const enforceRestLimit = tier < REST_LIMIT_TIER;
+  const enforceRestLimit = restLimitApplies(palette);
   const eligible = CELLS.filter((cell) => {
-    if (cell.tier > tier) return false;
+    if (!cellAllowed(cell, palette)) return false;
     if (!(cell.meters ?? SIMPLE).includes(kind)) return false;
     if (cell.quarters > remaining + EPSILON) return false;
     if (cell.beatAligned && kind === "4/4" && beatPos % 2 !== 0) return false;
@@ -170,8 +280,8 @@ function pickCell(
     return true;
   });
 
-  const newCells = eligible.filter((cell) => cell.tier === tier);
-  const oldCells = eligible.filter((cell) => cell.tier !== tier);
+  const newCells = eligible.filter((cell) => cellIsFocus(cell, palette));
+  const oldCells = eligible.filter((cell) => !cellIsFocus(cell, palette));
 
   // Rests are the one "new thing" that can swamp an exercise (h hr | hr q q | ...), so the rest
   // tier introduces them less aggressively and they're weighted down among notes everywhere.
@@ -216,7 +326,9 @@ export interface BarOptions {
   forceTrailingHalf?: boolean;
 }
 
-export function buildBarEvents(rng: Rng, tier: number, options: BarOptions): RhythmEvent[] {
+/** `palette` is a {@link Palette}, or a tier number meaning the classic cumulative tier. */
+export function buildBarEvents(rng: Rng, palette: Palette | number, options: BarOptions): RhythmEvent[] {
+  const pal = toPalette(palette);
   const { kind } = options;
   const totalBeats = BAR_QUARTERS[kind];
   const cadenceLength = kind === "6/8" ? 1.5 : 2;
@@ -235,7 +347,7 @@ export function buildBarEvents(rng: Rng, tier: number, options: BarOptions): Rhy
   while (beatPos < targetBeats - EPSILON) {
     const remaining = targetBeats - beatPos;
     const disallowRest = !!options.disallowLeadingRest && events.length === 0;
-    const cell = pickCell(rng, tier, kind, remaining, beatPos, consecutiveRest, disallowRest);
+    const cell = pickCell(rng, pal, kind, remaining, beatPos, consecutiveRest, disallowRest);
     events.push(...cell.make());
     beatPos += cell.quarters;
     consecutiveRest = cell.endsWithRest ? consecutiveRest + cell.restRun : 0;
@@ -253,9 +365,9 @@ export function buildBarEvents(rng: Rng, tier: number, options: BarOptions): Rhy
 /** Probability a phrase's cadence bar is a whole note instead of a plain half note. */
 const CADENCE_WHOLE_PROBABILITY = 0.25;
 
-function buildCadenceBar(rng: Rng, tier: number, kind: MeterKind): RhythmEvent[] {
+function buildCadenceBar(rng: Rng, palette: Palette, kind: MeterKind): RhythmEvent[] {
   if (rng() < CADENCE_WHOLE_PROBABILITY) return [kind === "4/4" ? note("w") : note("h", { dots: 1 })];
-  return buildBarEvents(rng, tier, { kind, forceTrailingHalf: true });
+  return buildBarEvents(rng, palette, { kind, forceTrailingHalf: true });
 }
 
 export function cloneBar(bar: RhythmEvent[]): RhythmEvent[] {
@@ -265,17 +377,18 @@ export function cloneBar(bar: RhythmEvent[]): RhythmEvent[] {
 /** Probability of the given repeat/variation choice at each junction. */
 const REPEAT_BAR2_PROBABILITY = 0.4;
 const REPEAT_BAR3_PROBABILITY = 0.35;
-/** Probability of a tier-6 cross-bar tie at an eligible phrase junction. */
+/** Probability of a cross-bar tie at an eligible phrase junction. */
 const CROSS_BAR_TIE_PROBABILITY = 0.18;
 
 /** Builds one 4-bar phrase: A, A' (or fresh), B (or a variation of A), then a cadence bar. */
-export function buildPhrase(rng: Rng, tier: number, kind: MeterKind, exerciseStartsHere: boolean): RhythmEvent[][] {
+export function buildPhrase(rng: Rng, palette: Palette | number, kind: MeterKind, exerciseStartsHere: boolean): RhythmEvent[][] {
+  const pal = toPalette(palette);
   // The tied-half-into-quarter cross-bar tie is written for 4/4 only.
-  const allowCrossBarTies = tier >= 6 && kind === "4/4";
+  const allowCrossBarTies = pal.ingredients.has("ties") && kind === "4/4";
   const tieAfterBar1 = allowCrossBarTies && rng() < CROSS_BAR_TIE_PROBABILITY;
   const tieAfterBar2 = allowCrossBarTies && !tieAfterBar1 && rng() < CROSS_BAR_TIE_PROBABILITY;
 
-  const bar1 = buildBarEvents(rng, tier, {
+  const bar1 = buildBarEvents(rng, pal, {
     kind,
     disallowLeadingRest: exerciseStartsHere,
     forceTrailingTiedHalf: tieAfterBar1,
@@ -285,7 +398,7 @@ export function buildPhrase(rng: Rng, tier: number, kind: MeterKind, exerciseSta
   if (!tieAfterBar1 && rng() < REPEAT_BAR2_PROBABILITY) {
     bar2 = cloneBar(bar1);
   } else {
-    bar2 = buildBarEvents(rng, tier, {
+    bar2 = buildBarEvents(rng, pal, {
       kind,
       forceLeadingTieContinuation: tieAfterBar1,
       forceTrailingTiedHalf: tieAfterBar2,
@@ -296,44 +409,60 @@ export function buildPhrase(rng: Rng, tier: number, kind: MeterKind, exerciseSta
   if (!tieAfterBar1 && !tieAfterBar2 && rng() < REPEAT_BAR3_PROBABILITY) {
     bar3 = cloneBar(bar1);
   } else {
-    bar3 = buildBarEvents(rng, tier, { kind, forceLeadingTieContinuation: tieAfterBar2 });
+    bar3 = buildBarEvents(rng, pal, { kind, forceLeadingTieContinuation: tieAfterBar2 });
   }
 
-  const bar4 = buildCadenceBar(rng, tier, kind);
+  const bar4 = buildCadenceBar(rng, pal, kind);
 
   return [bar1, bar2, bar3, bar4];
 }
 
 /** Options for {@link generateLevel}. */
 export interface GenerateOptions {
-  /** How advanced a rhythmic vocabulary to draw from (1–12, see {@link TIER_NAMES}). */
+  /** How advanced a rhythmic vocabulary to draw from (1–12, see {@link TIER_NAMES}). Ignored when `ingredients` is given. */
   tier: number;
+  /** Free practice: the exact ingredients to draw from ("quarters" is always included). */
+  ingredients?: Ingredient[];
+  /** Ingredient mode: the meter to write in. Defaults to 4/4. */
+  meter?: MeterChoice;
+  /** Ingredient mode: the ingredient to practise most. Defaults to the selected one with the highest tier. */
+  focus?: Ingredient;
   /** Exercise length in bars. */
   bars: 4 | 8 | 16;
-  /** Tempo in quarter notes per minute. Defaults to 80. */
+  /** Tempo in quarter notes per minute. Defaults to 65. */
   bpm?: number;
   /** PRNG seed; same seed (and options) always produces the same exercise. */
   seed?: number;
 }
 
-/** Generates a randomized, musically sensible reading exercise: in 4/4, or in 3/4 or 6/8 at tier 12. */
+/** Generates a randomized, musically sensible reading exercise: in 4/4, or in 3/4 or 6/8 at tier 12 or by choice. */
 export function generateLevel(opts: GenerateOptions): Level {
   const seed = opts.seed ?? Math.floor(Math.random() * 0xffffffff);
   const rng = mulberry32(seed);
-  const { tier } = opts;
-  const kind: MeterKind = tier >= METER_TIER ? (rng() < 0.5 ? "3/4" : "6/8") : "4/4";
+
+  let palette: Palette;
+  let kind: MeterKind;
+  let id: string;
+  let title: string;
+  if (opts.ingredients) {
+    palette = ingredientPalette(opts.ingredients, opts.focus);
+    kind = opts.meter ?? "4/4";
+    const code = orderedIngredients(palette.ingredients).map((k) => INGREDIENT_TIER[k].toString(36)).join("");
+    id = `gen-i${code}-${kind.replace("/", "")}-${seed}`;
+    title = `${describeIngredients(palette.ingredients)}${kind === "4/4" ? "" : ` in ${kind}`}, ${opts.bars} bars`;
+  } else {
+    const { tier } = opts;
+    palette = tierPalette(tier);
+    kind = tier >= METER_TIER ? (rng() < 0.5 ? "3/4" : "6/8") : "4/4";
+    id = `gen-t${tier}-${seed}`;
+    title = `${TIER_NAMES[tier - 1] ?? `Tier ${tier}`}, ${opts.bars} bars`;
+  }
 
   const bars: RhythmEvent[][] = [];
   const phraseCount = opts.bars / 4;
   for (let phrase = 0; phrase < phraseCount; phrase++) {
-    bars.push(...buildPhrase(rng, tier, kind, phrase === 0));
+    bars.push(...buildPhrase(rng, palette, kind, phrase === 0));
   }
 
-  return {
-    id: `gen-t${tier}-${seed}`,
-    title: `${TIER_NAMES[tier - 1] ?? `Tier ${tier}`}, ${opts.bars} bars`,
-    meter: METERS[kind],
-    bpm: opts.bpm ?? DEFAULT_BPM,
-    bars,
-  };
+  return { id, title, meter: METERS[kind], bpm: opts.bpm ?? DEFAULT_BPM, bars };
 }

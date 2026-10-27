@@ -1394,3 +1394,115 @@ body,
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- Lessons and free practice (home.ts) ---------- */
+
+.track-switch {
+  max-width: 360px;
+}
+
+.wide-field {
+  grid-column: 1 / -1;
+}
+
+.home-fields[hidden] {
+  display: none;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(42, 30, 52, 0.2);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink-dim);
+  font-size: 14px;
+  white-space: nowrap;
+  transition:
+    background 0.2s var(--ease),
+    border-color 0.2s var(--ease),
+    color 0.2s var(--ease);
+}
+
+@media (hover: hover) {
+  .chip:not(:disabled):hover {
+    background: #fff;
+    border-color: rgba(42, 30, 52, 0.4);
+    color: var(--ink);
+  }
+}
+
+.chip.selected {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--void);
+}
+
+.chip:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Right hand, Left hand, Together: where this exercise sits in its lesson. */
+.step-indicator {
+  display: flex;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.step-indicator li.done {
+  color: var(--ink-dim);
+}
+
+.step-indicator li[aria-current="step"] {
+  color: var(--ink);
+  box-shadow: inset 0 -1.5px 0 var(--accent);
+  padding-bottom: 2px;
+}
+
+@media (max-width: 560px) {
+  .step-indicator li:not([aria-current="step"]) {
+    display: none;
+  }
+}
+
+.results-buttons {
+  flex-wrap: wrap;
+  row-gap: 14px;
+}
+
+.retry-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.retry-tempo {
+  width: 200px;
+}
+
+.retry-tempo .segment {
+  height: 36px;
+}
+
+.retry-tempo .step {
+  flex-basis: 40px;
+}

@@ -35,12 +35,17 @@ export interface AudioEngine {
    * it can sit under the clicks without pulling the player's timing. Not affected by stopAll.
    */
   setAmbience(level: number, rampSec?: number): void;
-  /** A soft resonant-plate chord for the end of a run; fuller for higher `quality` (0..1). */
+  /** A soft felt-piano chord for the end of a run; fuller for higher `quality` (0..1). */
   chime(quality: number): void;
-  /** Starts a sustained resonant-plate tone now; returns an id for noteOff. */
+  /** Starts a sustained felt-piano tone now (or at `when`); returns an id for noteOff. */
   noteOn(freq: number, velocity?: number): number;
   /** Releases a note started with noteOn (a short natural fade). */
   noteOff(id: number): void;
+  /**
+   * Schedules a whole felt-piano note at an exact audio time and length (for playing an
+   * exercise back). Cancelled by stopAll, like the metronome.
+   */
+  scheduleNote(freq: number, velocity: number, when: number, duration: number): void;
 }
 
 /** How far ahead of "now" the look-ahead scheduler schedules audio nodes, in seconds. */
@@ -308,80 +313,76 @@ export function createAudioEngine(): AudioEngine {
   function chime(quality: number): void {
     const t = ctx.currentTime + 0.05;
     const q = Math.max(0, Math.min(1, quality));
-    // D major add9, opened upward with quality, struck softly on the plate.
+    // D major add9, opened upward with quality, played softly.
     const partials = [293.66, 440, 587.33, 659.25, 880, 1174.66].slice(0, 3 + Math.round(q * 3));
     partials.forEach((freq, i) => {
-      const id = startPlate(freq, 0.5 / (1 + i * 0.3), t + i * 0.11);
+      const id = startTone(freq, 0.5 / (1 + i * 0.3), t + i * 0.11);
       setTimeout(() => noteOff(id), 1800 + i * 110);
     });
   }
 
-  // ---- Resonant plate for taps: a soft mallet on a metal plate, the instrument the scene
-  // shows. Its partials are inharmonic (roughly a struck plate's mode ratios), each doubled
-  // with a slight detune so it shimmers. It sustains while the key or finger is down, then
-  // rings out naturally when released.
-  interface PlateVoice {
+  // ---- Felt piano for taps: a muted upright, the hammer wrapped in felt. A warm, low-passed
+  // tone (triangle fundamental plus two quickly fading harmonics, each doubled with a slight
+  // detune) with a soft thump of hammer. It sustains gently while the key or finger is down,
+  // so a long note sounds long, and is damped like a piano key when released.
+  interface TapVoice {
     out: GainNode;
     oscillators: OscillatorNode[];
   }
-  const voices = new Map<number, PlateVoice>();
+  const voices = new Map<number, TapVoice>();
   let nextVoiceId = 1;
-  const plateBus = ctx.createGain();
-  plateBus.gain.value = 0.9;
-  const plateTone = ctx.createBiquadFilter();
-  plateTone.type = "lowpass";
-  plateTone.frequency.value = 2600;
-  plateTone.Q.value = 0.4;
-  plateBus.connect(plateTone);
-  plateTone.connect(master);
+  const tapBus = ctx.createGain();
+  tapBus.gain.value = 0.95;
+  const feltTone = ctx.createBiquadFilter();
+  feltTone.type = "lowpass";
+  feltTone.frequency.value = 1500;
+  feltTone.Q.value = 0.3;
+  tapBus.connect(feltTone);
+  feltTone.connect(master);
 
-  /** Partial ratios and relative levels: a fundamental, then the plate's higher modes. */
-  const PLATE_PARTIALS: [number, number][] = [
-    [1, 1],
-    [2.32, 0.42],
-    [4.25, 0.2],
-    [6.63, 0.09],
+  /** Partials: [ratio, level, wave, seconds to fade to a whisper]. */
+  const FELT_PARTIALS: [number, number, OscillatorType, number][] = [
+    [1, 0.8, "triangle", 6],
+    [2, 0.3, "sine", 1.2],
+    [3, 0.1, "sine", 0.6],
   ];
 
-  function startPlate(freq: number, velocity: number, when: number): number {
+  function startTone(freq: number, velocity: number, when: number): number {
     const t = Math.max(when, ctx.currentTime);
     const v = Math.max(0.05, Math.min(1, velocity));
     const out = ctx.createGain();
-    // A soft mallet: a quick but rounded attack, then a slow bloom-and-settle while held.
     out.gain.setValueAtTime(0, t);
-    out.gain.linearRampToValueAtTime(0.2 * v, t + 0.012);
-    out.gain.exponentialRampToValueAtTime(0.11 * v, t + 0.5);
-    out.gain.exponentialRampToValueAtTime(0.07 * v, t + 5);
-    out.connect(plateBus);
+    out.gain.linearRampToValueAtTime(0.26 * v, t + 0.012);
+    out.gain.exponentialRampToValueAtTime(0.12 * v, t + 0.6);
+    out.gain.exponentialRampToValueAtTime(0.07 * v, t + 4);
+    out.connect(tapBus);
 
     const oscillators: OscillatorNode[] = [];
-    for (const [ratio, level] of PLATE_PARTIALS) {
-      // Higher partials die away faster, as on a real plate.
+    for (const [ratio, level, wave, fade] of FELT_PARTIALS) {
       const partial = ctx.createGain();
       partial.gain.setValueAtTime(level, t);
-      partial.gain.exponentialRampToValueAtTime(Math.max(0.0005, level * 0.15), t + 0.4 + 3 / ratio);
+      partial.gain.exponentialRampToValueAtTime(Math.max(0.0005, level * 0.05), t + fade);
       partial.connect(out);
-      for (const detune of [-3, 4]) {
+      for (const detune of [-2, 3]) {
         const osc = ctx.createOscillator();
-        osc.type = "sine";
+        osc.type = wave;
         osc.frequency.value = freq * ratio;
-        osc.detune.value = detune * ratio;
+        osc.detune.value = detune;
         osc.connect(partial);
         oscillators.push(osc);
       }
     }
-    // The mallet's touch: a brief, soft burst of filtered noise.
+    // The felt hammer: a very short, soft, low thump.
     const noise = ctx.createBufferSource();
-    const noiseBuf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.03), ctx.sampleRate);
+    const noiseBuf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.025), ctx.sampleRate);
     const data = noiseBuf.getChannelData(0);
-    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length) ** 2;
     noise.buffer = noiseBuf;
     const noiseFilter = ctx.createBiquadFilter();
-    noiseFilter.type = "bandpass";
-    noiseFilter.frequency.value = freq * 3;
-    noiseFilter.Q.value = 1.2;
+    noiseFilter.type = "lowpass";
+    noiseFilter.frequency.value = 700;
     const noiseGain = ctx.createGain();
-    noiseGain.gain.value = 0.05 * v;
+    noiseGain.gain.value = 0.08 * v;
     noise.connect(noiseFilter);
     noiseFilter.connect(noiseGain);
     noiseGain.connect(out);
@@ -395,8 +396,21 @@ export function createAudioEngine(): AudioEngine {
     return id;
   }
 
+  function scheduleNote(freq: number, velocity: number, when: number, duration: number): void {
+    const id = startTone(freq, velocity, when);
+    const voice = voices.get(id);
+    if (!voice) return;
+    voices.delete(id);
+    const end = Math.max(when + 0.05, when + duration);
+    voice.out.gain.setTargetAtTime(0.0001, end, 0.08);
+    for (const osc of voice.oscillators) {
+      osc.stop(end + 0.6);
+      trackNode(osc);
+    }
+  }
+
   function noteOn(freq: number, velocity = 0.8): number {
-    return startPlate(freq, velocity, ctx.currentTime);
+    return startTone(freq, velocity, ctx.currentTime);
   }
 
   function noteOff(id: number): void {
@@ -407,15 +421,16 @@ export function createAudioEngine(): AudioEngine {
     const g = voice.out.gain;
     g.cancelScheduledValues(t);
     g.setValueAtTime(Math.max(g.value, 0.0001), t);
-    g.exponentialRampToValueAtTime(0.0001, t + 0.9);
+    // A piano damper: quick, but not a click.
+    g.exponentialRampToValueAtTime(0.0001, t + 0.4);
     for (const osc of voice.oscillators) {
       try {
-        osc.stop(t + 1);
+        osc.stop(t + 0.5);
       } catch {
         // Already stopped.
       }
     }
   }
 
-  return { ctx, unlock, now, scheduleClick, scheduleCountIn, startMetronome, stopAll, playHit, setAmbience, chime, noteOn, noteOff };
+  return { ctx, unlock, now, scheduleClick, scheduleCountIn, startMetronome, stopAll, playHit, setAmbience, chime, noteOn, noteOff, scheduleNote };
 }

@@ -3,17 +3,18 @@
 import type { AudioEngine } from "../audio/engine";
 import type { Scene } from "../scene/resonance";
 import { runCalibration } from "../input/calibration";
-import { field, segmented, select, stepper } from "./controls";
-import { TIER_NAMES } from "../rhythm/generate";
-import { MAX_TWO_HAND_TIER, TWO_HAND_STAGES } from "../rhythm/twoHands";
+import { chips, field, segmented, select, stepper } from "./controls";
+import { describeIngredients, INGREDIENTS, type Ingredient, type MeterChoice } from "../rhythm/generate";
+import { TWO_HAND_STAGES } from "../rhythm/twoHands";
+import { firstOpenLesson, firstOpenStep, LESSONS, loadProgress, PASS_ACCURACY, stepDone } from "./lessons";
 import type { Mode } from "../types";
 
 export interface HomeOptions {
   engine: AudioEngine;
-  /** A generated one-hand reading exercise at `tier` (see TIER_NAMES). */
-  onRandom: (tier: number, bars: 4 | 8 | 16, mode: Mode) => void;
-  /** A generated two-hand exercise at `stage` (see TWO_HAND_STAGES), with `tier`'s rhythms. */
-  onTwoHands: (stage: number, tier: number, bars: 4 | 8 | 16, mode: Mode) => void;
+  /** Play a step of a lesson (see lessons.ts). */
+  onLesson: (lessonIndex: number, stepIndex: number) => void;
+  /** Free practice: an exercise built from the chosen ingredients. */
+  onFree: (choice: FreeChoice) => void;
   scene: Scene;
   sounds: { label: string; isOn: () => boolean; set: (on: boolean) => void }[];
   /** Practice tempo override (null = each level's own tempo). */
@@ -43,7 +44,7 @@ function startHomeScene(scene: Scene, slot: HTMLElement): void {
 
   const place = () => {
     const rect = slot.getBoundingClientRect();
-    const radius = Math.min(rect.width * 0.46, rect.height * 1.25, 460);
+    const radius = Math.min(rect.width * 0.46, rect.height * 0.95, 460);
     scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height / 2, radius);
   };
   place();
@@ -145,13 +146,73 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   panel.className = "home-panel";
   panel.setAttribute("aria-label", "Choose an exercise");
 
-  let { tier, hands, stage, bars, mode } = prefs;
+  let { track, lessonIndex, ingredients, meter, hands, stage, bars, mode } = prefs;
+  const progress = loadProgress();
+  if (lessonIndex < 0) lessonIndex = firstOpenLesson(progress);
+  let stepIndex = firstOpenStep(progress, LESSONS[lessonIndex]!);
 
-  const tierSelect = select(
-    TIER_NAMES.map((name, i) => ({ value: String(i + 1), label: `${i + 1}. ${name}` })),
-    String(tier),
+  // ---- Track: the lesson path, or free practice ----
+  const trackControl = segmented(
+    [
+      { value: "lessons", label: "Lessons" },
+      { value: "free", label: "Free practice" },
+    ],
+    track,
     (value) => {
-      tier = Number(value);
+      track = value === "free" ? "free" : "lessons";
+      paint();
+    },
+  );
+  trackControl.el.classList.add("track-switch");
+
+  // ---- Lessons ----
+  const lessonSelect = select(
+    LESSONS.map((lesson, i) => ({ value: String(i), label: `${i + 1}. ${lesson.title}` })),
+    String(lessonIndex),
+    (value) => {
+      lessonIndex = Number(value);
+      stepIndex = firstOpenStep(loadProgress(), LESSONS[lessonIndex]!);
+      rebuildSteps();
+      paint();
+    },
+  );
+  const stepSlot = document.createElement("div");
+  const stepField = field("Step", stepSlot);
+  function rebuildSteps(): void {
+    const lesson = LESSONS[lessonIndex]!;
+    const p = loadProgress();
+    const control = segmented(
+      lesson.steps.map((step, i) => ({ value: String(i), label: stepDone(p, lesson, i) ? `${step.label} ✓` : step.label })),
+      String(stepIndex),
+      (value) => {
+        stepIndex = Number(value);
+        paint();
+      },
+    );
+    stepSlot.replaceChildren(control.el);
+  }
+  rebuildSteps();
+  const lessonFields = document.createElement("div");
+  lessonFields.className = "home-fields";
+  const lessonField = field("Lesson", lessonSelect.el);
+  lessonField.classList.add("difficulty-field");
+  lessonFields.append(lessonField, stepField);
+
+  // ---- Free practice ----
+  const ingredientChips = chips(
+    INGREDIENTS.map((i) => ({ value: i.key, label: i.label })),
+    ingredients,
+    (values) => {
+      ingredients = values as Ingredient[];
+      paint();
+    },
+    ["quarters"],
+  );
+  const meterControl = segmented(
+    (["4/4", "3/4", "6/8"] as const).map((m) => ({ value: m, label: m })),
+    meter,
+    (value) => {
+      meter = value as MeterChoice;
       paint();
     },
   );
@@ -166,7 +227,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
       paint();
     },
   );
-  const stageSelect = select(
+  const relateSelect = select(
     TWO_HAND_STAGES.map((name, i) => ({ value: String(i + 1), label: name })),
     String(stage),
     (value) => {
@@ -201,18 +262,17 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     },
     { less: "Slower", more: "Faster", reset: "Back to the default tempo" },
   );
-
-  const stageField = field("Stage", stageSelect.el);
-  stageField.classList.add("stage-field");
-  const difficultyField = field("Difficulty", tierSelect.el);
-  difficultyField.classList.add("difficulty-field");
-  const grid = document.createElement("div");
-  grid.className = "home-fields";
-  grid.append(difficultyField, field("Hands", handsControl.el), stageField, field("Length", lengthControl.el), field("Mode", modeControl.el), field("Tempo", tempoControl.el));
+  const ingredientsField = field("Rhythms to include", ingredientChips.el);
+  ingredientsField.classList.add("wide-field");
+  const meterField = field("Meter", meterControl.el);
+  const relateField = field("How the hands relate", relateSelect.el);
+  const freeFields = document.createElement("div");
+  freeFields.className = "home-fields";
+  freeFields.append(ingredientsField, field("Hands", handsControl.el), relateField, meterField, field("Length", lengthControl.el), field("Mode", modeControl.el), field("Tempo", tempoControl.el));
 
   const note = document.createElement("p");
   note.className = "panel-note";
-  panel.append(grid, note);
+  panel.append(trackControl.el, lessonFields, freeFields, note);
 
   const play = document.createElement("button");
   play.type = "button";
@@ -221,20 +281,29 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   const playWhat = play.lastChild as HTMLElement;
 
   const defaultBpm = () => 65;
-  const effectiveTier = () => (hands === 2 ? Math.min(tier, MAX_TWO_HAND_TIER) : tier);
 
   function paint(): void {
-    stageField.hidden = hands !== 2;
-    // 3/4 & 6/8 is one-hand only for now.
-    tierSelect.setDisabled(hands === 2 ? TIER_NAMES.map((_, i) => String(i + 1)).filter((v) => Number(v) > MAX_TWO_HAND_TIER) : []);
-    if (hands === 2 && tier > MAX_TWO_HAND_TIER) tier = MAX_TWO_HAND_TIER;
-    tierSelect.set(String(tier));
-    note.textContent = mode === "practice" ? "The metronome keeps going: play on the click." : "One bar of clicks, then keep the pulse yourself.";
-    const override = opts.tempo.get();
-    tempoControl.setText(`${override ?? defaultBpm()} bpm`, override !== null);
-    const what = `${TIER_NAMES[effectiveTier() - 1] ?? ""}, ${bars} bars`;
-    playWhat.textContent = hands === 2 ? `Two hands, ${TWO_HAND_STAGES[stage - 1]?.toLowerCase()}, ${what.toLowerCase()}` : what;
-    saveHomePrefs({ tier, hands, stage, bars, mode });
+    const lessons = track === "lessons";
+    lessonFields.hidden = !lessons;
+    freeFields.hidden = lessons;
+    relateField.hidden = hands !== 2;
+    // Two-hand exercises are written in 4/4.
+    meterField.hidden = hands === 2;
+    if (lessons) {
+      const lesson = LESSONS[lessonIndex]!;
+      const step = lesson.steps[stepIndex]!;
+      const p = loadProgress();
+      const done = lesson.steps.filter((_, i) => stepDone(p, lesson, i)).length;
+      note.textContent = `${done} of ${lesson.steps.length} steps done. A step counts as done at ${PASS_ACCURACY} or more.`;
+      playWhat.textContent = `${lesson.title}, ${step.label.toLowerCase()}`;
+    } else {
+      note.textContent = mode === "practice" ? "The metronome keeps going: play on the click." : "One bar of clicks, then keep the pulse yourself.";
+      const override = opts.tempo.get();
+      tempoControl.setText(`${override ?? defaultBpm()} bpm`, override !== null);
+      const what = `${describeIngredients(new Set<Ingredient>(["quarters", ...ingredients]))}, ${bars} bars`;
+      playWhat.textContent = hands === 2 ? `Two hands, ${what.toLowerCase()}` : what;
+    }
+    saveHomePrefs({ track, lessonIndex, ingredients, meter, hands, stage, bars, mode });
   }
 
   const stepTempo = (delta: number) => {
@@ -245,8 +314,8 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   };
 
   const start = () => {
-    if (hands === 2) opts.onTwoHands(stage, effectiveTier(), bars, mode);
-    else opts.onRandom(tier, bars, mode);
+    if (track === "lessons") opts.onLesson(lessonIndex, stepIndex);
+    else opts.onFree({ ingredients: ["quarters", ...ingredients.filter((i) => i !== "quarters")], meter: hands === 2 ? "4/4" : meter, hands, stage, bars, mode });
   };
   play.addEventListener("click", start);
   const onKey = (event: KeyboardEvent) => {
@@ -303,30 +372,41 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
 
 
 const BAR_OPTIONS = [4, 8, 16] as const;
-const HOME_PREFS_KEY = "resonance.homePrefs";
+const HOME_PREFS_KEY = "resonance.homePrefs2";
 
-interface HomePrefs {
-  tier: number;
+/** What free practice builds. */
+export interface FreeChoice {
+  ingredients: Ingredient[];
+  meter: MeterChoice;
   hands: 1 | 2;
   stage: number;
   bars: 4 | 8 | 16;
   mode: Mode;
 }
 
+interface HomePrefs extends FreeChoice {
+  track: "lessons" | "free";
+  /** -1: start at the first lesson not yet done. */
+  lessonIndex: number;
+}
+
 function loadHomePrefs(): HomePrefs {
-  const fallback: HomePrefs = { tier: 4, hands: 1, stage: 1, bars: 8, mode: "practice" };
+  const fallback: HomePrefs = { track: "lessons", lessonIndex: -1, ingredients: ["quarters", "halves", "rests", "eighths"], meter: "4/4", hands: 1, stage: 1, bars: 8, mode: "practice" };
   try {
     const raw: unknown = JSON.parse(localStorage.getItem(HOME_PREFS_KEY) ?? "null");
     if (!raw || typeof raw !== "object") return fallback;
     const r = raw as Partial<HomePrefs>;
-    const tier = Number(r.tier);
+    const known = new Set(INGREDIENTS.map((i) => i.key));
+    const lessonIndex = Number(r.lessonIndex);
     const stage = Number(r.stage);
-    const bars = BAR_OPTIONS.find((b) => b === Number(r.bars));
     return {
-      tier: tier >= 1 && tier <= TIER_NAMES.length ? tier : fallback.tier,
+      track: r.track === "free" ? "free" : "lessons",
+      lessonIndex: Number.isInteger(lessonIndex) && lessonIndex >= 0 && lessonIndex < LESSONS.length ? lessonIndex : -1,
+      ingredients: Array.isArray(r.ingredients) ? r.ingredients.filter((i): i is Ingredient => known.has(i as Ingredient)) : fallback.ingredients,
+      meter: r.meter === "3/4" || r.meter === "6/8" ? r.meter : "4/4",
       hands: r.hands === 2 ? 2 : 1,
-      stage: stage >= 1 && stage <= TWO_HAND_STAGES.length ? stage : fallback.stage,
-      bars: bars ?? fallback.bars,
+      stage: stage >= 1 && stage <= TWO_HAND_STAGES.length ? stage : 1,
+      bars: BAR_OPTIONS.find((b) => b === Number(r.bars)) ?? 8,
       mode: r.mode === "countIn" ? "countIn" : "practice",
     };
   } catch {
