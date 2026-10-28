@@ -12,13 +12,15 @@ import type { HoldState, Scene } from "../scene/resonance";
 import { barQuarters, levelLines } from "../rhythm/durations";
 import { levelOnsets, restSpans, tieFlags as levelTieFlags } from "../rhythm/onsets";
 import type { Grade, Hand, Hit, Level, Mode, Release, RunResult } from "../types";
+import { isPhoneBackdrop } from "./home";
+import { onTweak, tweak } from "../ui/tweaks";
 import { attackWords, buildEndedEarlyPanel, buildListenedPanel, buildResultsPanel, describeNoteJudgement, describeRestJudgement, releaseWords } from "./results";
 
 export interface PlayCallbacks {
   onHome: () => void;
   /** Play the same exercise again, at `bpm` when given (the player changed the tempo). */
   onRetry: (bpm?: number) => void;
-  onNext: () => void;
+  onNext: (bpm?: number) => void;
   /** Hear the same exercise played correctly. */
   onListen: () => void;
   /** A run reached its end (not stopped or lost), with its accuracy. */
@@ -134,9 +136,6 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   // Hands the player plays: both on a two-hand level, unless practising one of them.
   const hands: Hand[] = solo !== undefined && twoHands ? [solo] : twoHands ? [0, 1] : [0];
   (titleEl.lastChild as HTMLElement).textContent = `${level.bpm} bpm, ${demo ? "listening" : mode === "practice" ? (guide ? "play along" : "practice") : "count-in"}`;
-  const escHint = document.createElement("span");
-  escHint.className = "esc-hint";
-  escHint.textContent = demo ? "Esc to stop" : "Esc to stop, R to retry";
   topbar.append(homeButton, titleEl);
   if (options.steps) {
     const steps = document.createElement("ol");
@@ -151,15 +150,46 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     });
     topbar.appendChild(steps);
   }
-  topbar.appendChild(escHint);
+  // While playing: restart and stop, as icons so they fit on a phone. The back arrow takes over
+  // once the run is over (the results' own actions cover the rest).
+  const runControls = document.createElement("div");
+  runControls.className = "run-controls";
+  const iconButton = (label: string, svg: string, onClick: () => void): HTMLButtonElement => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "icon-button";
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    button.innerHTML = svg;
+    button.addEventListener("click", onClick);
+    return button;
+  };
+  const restartButton = iconButton(
+    demo ? "Start over (R)" : "Restart (R)",
+    `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5 12a7 7 0 1 0 2.05-4.95M5 4v4h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+    () => leave(() => (demo ? callbacks.onListen() : callbacks.onRetry())),
+  );
+  const stopButton = iconButton(
+    "Stop (Esc)",
+    `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="currentColor"/></svg>`,
+    () => finish("stopped"),
+  );
+  runControls.append(restartButton, stopButton);
+  topbar.appendChild(runControls);
   screen.appendChild(topbar);
 
+  /** Free practice, independent hands: on the results, play again with both hands or one. */
+  let handSwitch: HTMLElement | null = null;
   if (options.handChoice && twoHands && !demo) {
     const onPick = options.handChoice.onPick;
-    const handSwitch = document.createElement("div");
-    handSwitch.className = "hand-switch";
+    handSwitch = document.createElement("div");
+    handSwitch.className = "hand-switch bento-cell";
     handSwitch.setAttribute("role", "group");
-    handSwitch.setAttribute("aria-label", "Hands");
+    handSwitch.setAttribute("aria-label", "Play again with");
+    const handLabel = document.createElement("span");
+    handLabel.className = "option-label";
+    handLabel.textContent = "Play again with";
+    handSwitch.appendChild(handLabel);
     const choices: [Hand | undefined, string][] = [
       [undefined, "Both hands"],
       [1, "Right hand"],
@@ -174,7 +204,6 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       if (!current) button.addEventListener("click", () => leave(() => onPick(hand)));
       handSwitch.appendChild(button);
     }
-    screen.appendChild(handSwitch);
   }
 
   const dotsRow = document.createElement("div");
@@ -237,24 +266,71 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   gradeFlash.className = "grade-flash";
   plateSlot.appendChild(gradeFlash);
 
+  // The results take the whole screen under the top bar: the sand's final figure on top, the
+  // numbers and notes below it, and the actions pinned to the bottom edge.
   const resultsOverlay = document.createElement("div");
   resultsOverlay.className = "results-overlay";
   resultsOverlay.hidden = true;
+  const resultsFigure = document.createElement("div");
+  resultsFigure.className = "results-figure";
+  const resultsBody = document.createElement("div");
+  resultsBody.className = "results-body";
+  resultsOverlay.append(resultsFigure, resultsBody);
   screen.appendChild(resultsOverlay);
+
+  // "See where it went": the whole piece, every note in its grade colour, with a way back.
+  const reviewBar = document.createElement("div");
+  reviewBar.className = "review-bar";
+  reviewBar.hidden = true;
+  const reviewHint = document.createElement("span");
+  reviewHint.className = "review-hint";
+  const canHover = typeof matchMedia === "function" && matchMedia("(hover: hover)").matches;
+  reviewHint.textContent = canHover ? "Point at a note to see how it landed" : "Tap a note to see how it landed";
+  const reviewBack = document.createElement("button");
+  reviewBack.type = "button";
+  reviewBack.className = "results-button review-back";
+  reviewBack.textContent = "Back to results";
+  reviewBar.append(reviewHint, reviewBack);
+  screen.appendChild(reviewBar);
 
   container.appendChild(screen);
 
-  /** While playing, the sand runs edge to edge; when the run ends it pulls back into view. */
+  /** While playing, the sand runs edge to edge; when the run ends it sits at the top of the results. */
   let immersive = true;
-  function placePlate(): void {
+  function placePlate(snap = false): void {
+    if (!immersive) {
+      if (isPhoneBackdrop()) {
+        // Phones: the sand lies quietly behind the whole results page, still while it scrolls,
+        // and slides away for the review so the notes stand alone.
+        const reviewing = screen.classList.contains("reviewing");
+        scene.setDim(reviewing ? 1 : tweak("sandResults"));
+        scene.setPlate(window.innerWidth / 2, window.innerHeight * (reviewing ? 1.9 : 0.42), window.innerWidth * 0.72);
+        return;
+      }
+      const rect = resultsFigure.getBoundingClientRect();
+      // Reviewing the piece hides the results: the sand stays where it was, dimmed.
+      if (rect.width === 0) return;
+      if (!screen.classList.contains("reviewing")) scene.setDim(0);
+      // The finished figure is framed from above, like a picture.
+      scene.setSteep(true);
+      // Side by side (wide screens) it sits in its own column; stacked (tablets) it is larger and
+      // runs a little way behind the top of the results block.
+      const sideBySide = window.innerWidth >= 900 && window.innerWidth >= window.innerHeight;
+      const radius = sideBySide ? Math.max(40, Math.min(rect.width * 0.38, rect.height * 0.5)) : Math.max(40, Math.min(rect.width * 0.46, rect.height * 0.9));
+      scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height * (sideBySide ? 0.5 : 0.7), radius, snap);
+      return;
+    }
     const rect = plateSlot.getBoundingClientRect();
     const framed = Math.max(40, Math.min(rect.width * 0.42, rect.height * 1.05));
-    const radius = immersive ? Math.max(window.innerWidth * 0.62, framed * 1.6) : framed;
-    scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height * (immersive ? 0.52 : 0.5), radius);
+    scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height * 0.52, Math.max(window.innerWidth * 0.62, framed * 1.6), snap);
   }
-  const plateObserver = new ResizeObserver(placePlate);
+  const plateObserver = new ResizeObserver(() => placePlate());
   plateObserver.observe(plateSlot);
+  plateObserver.observe(resultsFigure);
   placePlate();
+  const offTweak = onTweak(() => {
+    if (!immersive) placePlate();
+  });
 
   const baseFigure = figureSeed(level.id);
   // The sand keeps whatever figure it last settled into; the piece's own figure takes over
@@ -269,11 +345,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   // The notes area shows whole lines only, as many as fit in about 40% of the screen (at least
   // one), so a line is never sliced through — two-hand lines, with two staves each, are tall.
   // A short piece gets exactly its own height.
-  /** Share of the screen height the notes may take: less once the results need the room. */
-  let staffShare = 0.4;
+  /** Share of the screen height the notes may take. */
+  const staffShare = 0.4;
   /** While playing, the next line is always in view too, if two lines fit in 60% of the screen. */
-  let minLines = 2;
+  const minLines = 2;
   function fitStaffArea(): void {
+    // After the run the staff is either hidden or shown whole (review), sized by CSS.
+    if (screen.classList.contains("finished")) return;
     const layout = staff.layout();
     // The window shows `lines` whole lines. staff.layout measures the real ink of every line
     // (tuplet numbers, stems, ties), so the top line is fully visible with a small margin and
@@ -393,6 +471,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   let flashTimeout: ReturnType<typeof setTimeout> | null = null;
   let lastResult: RunResult | null = null;
   let tooltipEl: HTMLDivElement | null = null;
+  let tooltipEvent: number | null = null;
   /** The sustained note each hand is holding, if any, for its hold bar and the plate's ring. */
   interface Holding {
     onsetIndex: number;
@@ -566,6 +645,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       const inOwnRest = current?.kind === "rest" && (!twoHands || current.hand === hit.zone);
       if (current && inOwnRest) spoilRest(current);
       showGradeFlash("miss", inOwnRest ? "that's a rest" : otherHandDue(hit) ? "other hand" : "extra tap");
+      if (current) staff.pulse(primaryEventIndex(current), "miss");
       markBarDirty(liveJudge.beatAt(hit.time));
       scene.strike("miss", lastPress.x, lastPress.y);
       strayInARow++;
@@ -588,6 +668,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     const onset = onsets[judged.onsetIndex];
     if (onset && (judged.grade === "ok" || judged.grade === "miss")) markBarDirty(onset.beat);
     scene.strike(judged.grade, lastPress.x, lastPress.y, onset?.quarters ?? 1);
+    // The feedback sits where the eyes are: on the note just played.
+    if (onset) staff.pulse(onset.eventIndex, judged.grade);
 
     if (onset) {
       if (onset.quarters > SUSTAINED_MIN_QUARTERS) {
@@ -819,8 +901,10 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       }
     }
 
+    // Only ever forward: the audio clock can jitter back a few ms (and count-in's projected
+    // pulse is re-fitted after taps), which at a bar line used to flick the staff back a line.
     const bar = Math.min(level.bars.length - 1, Math.floor(beatNow / beatsPerBar));
-    if (bar !== shownBar) {
+    if (bar > shownBar) {
       shownBar = bar;
       staff.setBarHighlight(bar);
       staff.revealEvent(staff.firstEventOfBar(bar));
@@ -908,6 +992,9 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       hideTooltip();
       return;
     }
+    // Hovering along the same note keeps its tooltip where it is.
+    if (tooltipEl && eventIndex === tooltipEvent) return;
+    tooltipEvent = eventIndex;
     const noteJudgement = lastResult.judgements.find((j) => tieChainIndices(tieFlags, j.onset.eventIndex).includes(eventIndex));
     if (noteJudgement) {
       showTooltip(clientX, clientY, describeNoteJudgement(noteJudgement));
@@ -920,6 +1007,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   }
 
   staffContainer.addEventListener("pointerdown", (e) => handleStaffTap(e.clientX, e.clientY));
+  // With a mouse, the review explains a note on hover: no click needed.
+  staffContainer.addEventListener("pointermove", (e) => {
+    if (e.pointerType === "mouse") handleStaffTap(e.clientX, e.clientY);
+  });
+  staffContainer.addEventListener("pointerleave", (e) => {
+    if (e.pointerType === "mouse") hideTooltip();
+  });
 
   function logDebugTable(result: RunResult): void {
     const rows = result.judgements.map((j) => ({
@@ -973,31 +1067,26 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     // The last in-run grade flash (e.g. "PERFECT") must not linger once results are shown.
     gradeFlash.classList.remove("show");
 
-    // The results panel replaces the tap area (which is no longer needed) rather than
-    // overlaying the whole screen, so the staff with its final grade marks stays fully visible.
-    tapArea.hidden = true;
-    screen.classList.add("finished");
-    immersive = false;
-    staffShare = 0.28;
-    minLines = 1;
-    fitStaffArea();
-    placePlate();
+    showResultsLayer();
 
     const panelCallbacks = {
       onRetry: (bpm?: number) => leave(() => callbacks.onRetry(bpm)),
-      onNext: () => leave(callbacks.onNext),
+      onNext: (bpm?: number) => leave(() => callbacks.onNext(bpm)),
       onHome: () => leave(callbacks.onHome),
       onListen: () => leave(callbacks.onListen),
+      onReview: () => setReviewing(true),
     };
-    const retryTempo = { bpm: level.bpm, nextLabel: options.nextLabel, goal: options.goal };
-    resultsOverlay.innerHTML = "";
+    // A lesson step passed at its goal tempo: moving on is the main action. Otherwise another go.
+    const passed = outcome === "done" && options.goal !== undefined && result.accuracy >= options.goal.pass && level.bpm >= options.goal.bpm;
+    const retryTempo = { bpm: level.bpm, nextLabel: options.nextLabel, goal: options.goal, primary: passed ? ("next" as const) : ("retry" as const) };
     if (outcome === "done") {
       callbacks.onComplete?.(result.accuracy);
       const quality = result.judgements.some((j) => j.hitTime !== null) ? result.accuracy / 100 : 0;
       scene.reveal(quality);
       engine.setAmbience(0.8, 3);
       if (quality > 0) engine.chime(quality);
-      resultsOverlay.appendChild(buildResultsPanel(result, level.bpm, mode, panelCallbacks, retryTempo));
+      resultsBody.appendChild(buildResultsPanel(result, level.bpm, mode, panelCallbacks, retryTempo));
+      placeHandSwitch();
     } else {
       // No reveal: the sand just settles back into the void.
       scene.setAmbient(0.12);
@@ -1006,37 +1095,64 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       engine.setAmbience(0.5, 2);
       const title = outcome === "lost" ? "Lost the beat" : "Stopped";
       const detail = outcome === "lost" ? (lostReason ?? "") : "You stopped the exercise.";
-      resultsOverlay.appendChild(buildEndedEarlyPanel(title, detail, panelCallbacks, retryTempo));
+      resultsBody.appendChild(buildEndedEarlyPanel(title, detail, panelCallbacks, retryTempo));
+      placeHandSwitch();
     }
-    resultsOverlay.hidden = false;
   }
+
+  /** The hand choice is the last cell above the results' actions. */
+  function placeHandSwitch(): void {
+    const scroll = resultsBody.querySelector(".bento-scroll");
+    if (handSwitch && scroll) scroll.appendChild(handSwitch);
+  }
+
+  /** The play area gives way to the full-screen results, with the sand on top. */
+  function showResultsLayer(): void {
+    tapArea.hidden = true;
+    screen.classList.add("finished");
+    immersive = false;
+    resultsBody.innerHTML = "";
+    resultsOverlay.hidden = false;
+    resultsOverlay.scrollTop = 0;
+    placePlate();
+  }
+
+  /** Switches between the results and the whole piece marked with how each note went. */
+  function setReviewing(on: boolean): void {
+    hideTooltip();
+    screen.classList.toggle("reviewing", on);
+    resultsOverlay.hidden = on;
+    reviewBar.hidden = !on;
+    scene.setDim(on ? 0.85 : 0);
+    if (on) {
+      staffContainer.style.paddingBottom = "24px";
+      staffContainer.scrollTop = 0;
+    }
+    placePlate(!on);
+  }
+  reviewBack.addEventListener("click", () => setReviewing(false));
 
   /** After listening: the staff settles, and the player is invited to take their turn. */
   function finishListening(outcome: "done" | "lost" | "stopped"): void {
     staff.setAnimate(false);
     gradeFlash.classList.remove("show");
-    tapArea.hidden = true;
-    screen.classList.add("finished");
-    immersive = false;
-    staffShare = 0.28;
-    minLines = 1;
-    fitStaffArea();
-    placePlate();
+    showResultsLayer();
     if (outcome === "done") scene.reveal(0.95);
     engine.setAmbience(0.6, 2);
-    resultsOverlay.innerHTML = "";
-    resultsOverlay.appendChild(
+    resultsBody.appendChild(
       buildListenedPanel({
         onPlay: () => leave(() => callbacks.onRetry()),
         onListen: () => leave(callbacks.onListen),
         onHome: () => leave(callbacks.onHome),
       }),
     );
-    resultsOverlay.hidden = false;
   }
 
   /** Leaving the screen for good: the plate stops following this layout. */
   function leave(then: () => void): void {
+    offTweak();
+    scene.setDim(0);
+    scene.setSteep(false);
     window.removeEventListener("resize", onWindowResize);
     teardown();
     plateObserver.disconnect();
@@ -1054,6 +1170,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     if (key === "escape") {
       event.preventDefault();
       if (!ended) finish("stopped");
+      else if (screen.classList.contains("reviewing")) setReviewing(false);
       else leave(callbacks.onHome);
     } else if (key === "r") {
       event.preventDefault();
@@ -1065,8 +1182,12 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       leave(callbacks.onListen);
     } else if (key === "enter" && ended) {
       event.preventDefault();
-      if (demo) leave(() => callbacks.onRetry());
-      else leave(callbacks.onNext);
+      // Enter takes the big action; N moves on.
+      resultsOverlay.querySelector<HTMLButtonElement>(".results-main")?.click();
+    } else if (key === "n" && ended && !demo) {
+      event.preventDefault();
+      const chosen = Number(resultsOverlay.querySelector<HTMLElement>("[data-retry-bpm]")?.dataset.retryBpm);
+      leave(() => callbacks.onNext(Number.isFinite(chosen) && chosen > 0 && chosen !== level.bpm ? chosen : undefined));
     } else if (ended && !demo && (key === "-" || key === "+" || key === "=")) {
       event.preventDefault();
       resultsOverlay.querySelector<HTMLButtonElement>(key === "-" ? ".retry-tempo .step:first-child" : ".retry-tempo .step:last-child")?.click();

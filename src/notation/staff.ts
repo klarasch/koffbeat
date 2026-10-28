@@ -59,8 +59,10 @@ export interface StaffView {
    * length of the whole tied chain starting at `eventIndex`.
    */
   setHold(eventIndex: number, quarters: number, progress: number | null, state?: "filling" | "ready" | "over"): void;
-  /** Live play: a graded note sends out a small pulse in its grade's colour. */
+  /** Live play: a note the clock settles as missed sends out a pulse in the miss colour. */
   setAnimate(on: boolean): void;
+  /** A tap landed on this note: a ring in the grade's colour blooms out of the notehead. */
+  pulse(eventIndex: number, grade: Grade): void;
   /** Softly highlights one bar (0-based), or none with null: where the music is right now. */
   setBarHighlight(barIndex: number | null): void;
   /** The index of the first event in a bar (0-based), for scrolling it into view. */
@@ -397,8 +399,45 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   let eventMeta: EventMeta[] = [];
   let bars: BarMeta[] = [];
   let scrollable = false;
+  /** During play: the line the window is meant to show, and its scroll animation. */
+  let revealedLine = 0;
+  let scrollAnim = 0;
+
+  /** The scroll offset that shows `revealedLine` at the top. */
+  function revealTarget(): number {
+    return view.layout().scrollTopOf(revealedLine);
+  }
+
+  /** Glides to the revealed line with our own animation (Safari's smooth scroll proved unreliable). */
+  function glideToRevealed(): void {
+    cancelAnimationFrame(scrollAnim);
+    const from = container.scrollTop;
+    const start = performance.now();
+    const step = (now: number): void => {
+      const to = revealTarget();
+      const t = Math.min(1, (now - start) / 320);
+      const eased = 1 - Math.pow(1 - t, 3);
+      container.scrollTop = from + (to - from) * eased;
+      if (t < 1) scrollAnim = requestAnimationFrame(step);
+      else scrollAnim = 0;
+    };
+    scrollAnim = requestAnimationFrame(step);
+  }
+
+  // During play nothing but revealEvent moves the window: anything else that scrolls it (focus,
+  // layout shifts, the browser's own adjustments) is put back on the current line.
+  container.addEventListener(
+    "scroll",
+    () => {
+      if (scrollable || scrollAnim) return;
+      const to = revealTarget();
+      if (Math.abs(container.scrollTop - to) > 1) container.scrollTop = to;
+    },
+    { passive: true },
+  );
 
   function applyScrollStyle(): void {
+    container.style.overflowAnchor = "none";
     container.style.overflowY = scrollable ? "auto" : "hidden";
     container.style.overflowX = "auto";
     container.style.touchAction = scrollable ? "pan-y" : "none";
@@ -704,7 +743,8 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     build();
     for (const [eventIndex, state] of states) view.setState(eventIndex, state);
     view.setBarHighlight(highlightedBar);
-    container.scrollTop = scrollTop;
+    // While playing, keep showing the same line (its offset may have changed with the layout).
+    container.scrollTop = scrollable ? scrollTop : revealTarget();
   });
   resizeObserver.observe(container);
 
@@ -789,6 +829,9 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   }
 
   const view: StaffView = {
+    pulse(eventIndex: number, grade: Grade): void {
+      if (animate) pulseAt(eventIndex, GRADE_COLORS[grade], grade === "perfect");
+    },
     setAnimate(on: boolean): void {
       animate = on;
     },
@@ -914,9 +957,9 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
           el.style.opacity = "1";
           break;
       }
-      if (animate && previous !== state && state !== "upcoming" && state !== "next" && state !== "active" && state !== "done") {
-        pulseAt(eventIndex, GRADE_COLORS[state], state === "perfect");
-      }
+      // Taps pulse their note themselves (pulse), at the moment of the tap; only a note that
+      // passes unplayed gets its pulse here.
+      if (animate && previous !== state && state === "miss") pulseAt(eventIndex, GRADE_COLORS.miss, false);
     },
     layout() {
       const lineCount = Math.max(1, Math.max(...eventMeta.map((m) => m?.line ?? 0)) + 1);
@@ -934,16 +977,9 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     revealEvent(eventIndex: number): void {
       const meta = eventMeta[eventIndex];
       if (!meta) return;
-      const target = view.layout().scrollTopOf(meta.line);
-      if (typeof container.scrollTo === "function") {
-        try {
-          container.scrollTo({ top: target, behavior: "smooth" });
-          return;
-        } catch {
-          // fall through to a plain assignment below
-        }
-      }
-      container.scrollTop = target;
+      if (meta.line === revealedLine && !scrollAnim && Math.abs(container.scrollTop - revealTarget()) <= 1) return;
+      revealedLine = meta.line;
+      glideToRevealed();
     },
     setScrollable(value: boolean): void {
       scrollable = value;
@@ -966,6 +1002,7 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       }
     },
     destroy(): void {
+      cancelAnimationFrame(scrollAnim);
       destroyed = true;
       resizeObserver?.disconnect();
       resizeObserver = null;

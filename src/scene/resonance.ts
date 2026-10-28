@@ -20,10 +20,15 @@ export type StrikeKind = Grade | "neutral";
 export type HoldState = "filling" | "ready" | "over";
 
 export interface Scene {
-  /** Where the sand bed sits on screen, in viewport CSS px: its centre and half-width. */
-  setPlate(cx: number, cy: number, radius: number): void;
+  /**
+   * Where the sand bed sits on screen, in viewport CSS px: its centre and half-width. With
+   * `snap` the centre jumps there at once (it follows scrolled content) instead of gliding.
+   */
+  setPlate(cx: number, cy: number, radius: number, snap?: boolean): void;
   /** Which Chladni figure the sand is drawn toward (any integer; wraps around the mode list). */
   setFigure(index: number): void;
+  /** Look down on the plate more steeply (as on an upright phone), e.g. to frame a finished figure. */
+  setSteep(on: boolean): void;
   /**
    * A tap landed: a wave on the ground under the tap point (or the centre) and an energy kick.
    * `quarters` is the note's written length: longer notes send broader, slower waves.
@@ -340,12 +345,13 @@ varying vec3 vWorld;
 ${COLORS_GLSL}
 ${SURFACE_GLSL}
 
+// There is no ground: only the ripples and the hold ring are drawn, and the page's own paper
+// (CSS) shows through everywhere else. Colours are layered as premultiplied ink with coverage.
 void main() {
   vec2 p = vWorld.xz;
   float r = length(p);
-  vec3 view = normalize(cameraPosition - vWorld);
-  // There is no ground: the plane shows the void behind it, matching the sky exactly.
-  vec3 col = mix(VOID_LOW, VOID_TOP, smoothstep(-0.25, 0.45, -view.y));
+  vec3 ink = vec3(0.0);
+  float a = 0.0;
 
   // Ripple fronts: thin lines of grade colour travelling out through the white.
   for (int i = 0; i < ${MAX_RIPPLES}; i++) {
@@ -354,7 +360,9 @@ void main() {
     float d = length(p - rp.xy);
     float front = rp.z * uRippleShape[i].y;
     float ring = exp(-pow((d - front) / (uRippleShape[i].x * 0.08), 2.0)) * exp(-rp.z * 1.5) * rp.w;
-    col = mix(col, uRippleColor[i], clamp(ring * 9.0, 0.0, 0.3) * (1.0 - smoothstep(1.5, 3.0, d)));
+    float f = clamp(ring * 9.0, 0.0, 0.3) * (1.0 - smoothstep(1.5, 3.0, d));
+    ink = uRippleColor[i] * f + ink * (1.0 - f);
+    a = f + a * (1.0 - f);
   }
 
   // Hold ring traced around the bed.
@@ -364,11 +372,17 @@ void main() {
     float a01 = fract(ang / 6.2831853 + 1.0);
     float filled = step(a01, clamp(uHold.x, 0.0, 1.0));
     vec3 holdCol = uHold.y > 2.5 ? vec3(0.82, 0.23, 0.23) : uHold.y > 1.5 ? vec3(0.17, 0.12, 0.2) : vec3(0.42, 0.25, 0.63);
-    col = mix(col, vec3(0.17, 0.12, 0.2), band * 0.05 * uHold.z);
-    col = mix(col, holdCol, band * filled * uHold.z * 0.85);
+    float f1 = band * 0.05 * uHold.z;
+    ink = vec3(0.17, 0.12, 0.2) * f1 + ink * (1.0 - f1);
+    a = f1 + a * (1.0 - f1);
+    float f2 = band * filled * uHold.z * 0.85;
+    ink = holdCol * f2 + ink * (1.0 - f2);
+    a = f2 + a * (1.0 - f2);
   }
-  col = mix(col, VOID_TOP, uDim * 0.45);
-  gl_FragColor = vec4(col, 1.0);
+  float keep = 1.0 - uDim * 0.45;
+  a *= keep;
+  ink *= keep;
+  gl_FragColor = vec4(a > 0.0001 ? ink / a : vec3(0.0), a);
 }
 `;
 
@@ -417,6 +431,7 @@ function noopScene(): Scene {
     release() {},
     setHold() {},
     setRest() {},
+    setSteep() {},
     setAmbient() {},
     setDim() {},
     scatter() {},
@@ -462,7 +477,8 @@ function polarGround(rings: number, segments: number, inner: number, outer: numb
 export function createScene(canvas: HTMLCanvasElement): Scene {
   let renderer: THREE.WebGLRenderer;
   try {
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "high-performance" });
+    renderer.setClearColor(0x000000, 0);
   } catch (err) {
     console.warn("resonance: WebGL unavailable", err);
     return noopScene();
@@ -483,11 +499,22 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(32, 1, 0.05, 400);
-  // A low, gallery-like view of the figure; there is no horizon to frame.
-  const CAM_BASE = new THREE.Vector3(0, 0.75, 3.1);
+  // A low, gallery-like view of the figure; there is no horizon to frame. On a tall, narrow
+  // screen (a phone held upright) the plate is only as wide as the screen, so the camera looks
+  // down more steeply: the ripples read as rings instead of flat streaks.
   const LOOK_AT = new THREE.Vector3(0, 0.08, 0);
-  camera.position.copy(CAM_BASE);
-  camera.lookAt(LOOK_AT);
+  const CAM_DIST = Math.hypot(0.75 - LOOK_AT.y, 3.1);
+  const LOW_ELEVATION = Math.atan2(0.75 - LOOK_AT.y, 3.1);
+  const PORTRAIT_ELEVATION = 0.6;
+  let steep = false;
+  const elevationTarget = (): number => (steep || window.innerWidth < window.innerHeight * 0.9 ? PORTRAIT_ELEVATION : LOW_ELEVATION);
+  let elevation = elevationTarget();
+  function placeCamera(azimuth: number): void {
+    const flat = CAM_DIST * Math.cos(elevation);
+    camera.position.set(flat * Math.sin(azimuth), LOOK_AT.y + CAM_DIST * Math.sin(elevation), flat * Math.cos(azimuth));
+    camera.lookAt(LOOK_AT);
+  }
+  placeCamera(0);
 
   // ---- Shared uniforms ----
   const ripples = Array.from({ length: MAX_RIPPLES }, () => new THREE.Vector4(0, 0, 0, 0));
@@ -550,6 +577,9 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     new THREE.ShaderMaterial({ vertexShader: SKY_VERT, fragmentShader: SKY_FRAG, uniforms: { uDim: dimU }, side: THREE.BackSide, depthWrite: false }),
   );
   sky.frustumCulled = false;
+  // The paper is the page's own CSS background (light and grain included): the sky stays off so
+  // the canvas is clear and Safari's edges match the page exactly.
+  sky.visible = false;
   sky.renderOrder = -1;
   scene.add(sky);
 
@@ -574,9 +604,11 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
       vertexShader: GROUND_VERT,
       fragmentShader: GROUND_FRAG,
       uniforms: { ...shared, uHold: { value: holdU }, uRippleColor: { value: rippleColor }, uDim: dimU },
+      transparent: true,
     }),
   );
   ground.frustumCulled = false;
+  ground.renderOrder = -1;
   scene.add(ground);
 
   // ---- Pigment ----
@@ -773,8 +805,8 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     }
     drift += ((ambient > 0.05 && !reducedMotion ? 1 : 0) - drift) * (1 - Math.exp(-dt * 0.5));
     const az = Math.sin(time * 0.035) * 0.16 * drift;
-    camera.position.set(CAM_BASE.x * Math.cos(az) + CAM_BASE.z * Math.sin(az), CAM_BASE.y, -CAM_BASE.x * Math.sin(az) + CAM_BASE.z * Math.cos(az));
-    camera.lookAt(LOOK_AT);
+    elevation += (elevationTarget() - elevation) * ease;
+    placeCamera(az);
 
     for (const r of ripples) {
       if (r.w > 0) {
@@ -820,10 +852,14 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   return {
     supported: true,
     debug: () => ({ zoom: camera.zoom, uSize: pigmentUniforms.uSize.value, plateR: plate.r, lift, energy, count: COUNT, pixelRatio: renderer.getPixelRatio() }),
-    setPlate(x: number, y: number, radius: number) {
+    setPlate(x: number, y: number, radius: number, snap = false) {
       plateTarget.cx = x;
       plateTarget.cy = y;
       plateTarget.r = Math.max(20, radius);
+      if (snap) {
+        plate.cx = x;
+        plate.cy = y;
+      }
       if (!plateInit) {
         plate.cx = x;
         plate.cy = y;
@@ -892,6 +928,9 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     },
     setAmbient(level: number) {
       ambient = reducedMotion ? level * 0.4 : level;
+    },
+    setSteep(on: boolean) {
+      steep = on;
     },
     setDim(value: number) {
       dimTarget = value;

@@ -30,8 +30,22 @@ body {
   margin: 0;
   padding: 0;
   min-height: 100%;
-  background: var(--void);
   color: var(--ink);
+}
+
+/* The paper: today's colour and a band of soft light across the middle. The light never makes
+   it darker than the plain paper, and it fades out before the top and bottom edges, so Safari's bars (which take the page's edge colour) blend in. It lives on the
+   root, so it is painted edge to edge; the scene's canvas is clear. The values are tunable live
+   (src/ui/tweaks.ts). */
+html {
+  background-color: var(--void);
+  background-image: radial-gradient(var(--paper-light-w, 110%) var(--paper-light-h, 34%) at 50% var(--paper-light-y, 42%), rgba(255, 254, 252, var(--paper-light, 0.5)), rgba(255, 254, 252, 0));
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+}
+
+body {
+  background: transparent;
 }
 
 body {
@@ -40,6 +54,34 @@ body {
   -webkit-text-size-adjust: 100%;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
+}
+
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Tap feedback on controls (src/ui/ink.ts): a soft purple wash spreading from the finger. */
+.ink-layer {
+  position: fixed;
+  z-index: 2147482000;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ink-dot {
+  position: absolute;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.16;
+  transform: scale(0);
+  animation: ink-spread 0.6s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+}
+
+@keyframes ink-spread {
+  to {
+    transform: scale(1);
+    opacity: 0;
+  }
 }
 
 #scene {
@@ -184,21 +226,24 @@ body,
   overflow-y: auto;
 }
 
+/* Play stays in reach at the bottom whenever the choices are taller than the window (at any
+   size); when everything fits it simply sits in place. */
+.home-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  margin: 0 calc(-1 * clamp(18px, 5vw, 56px)) calc(-1 * clamp(18px, 4vh, 44px));
+  padding: 26px clamp(18px, 5vw, 56px) calc(clamp(12px, 2.5vh, 22px) + env(safe-area-inset-bottom));
+  background: linear-gradient(to top, var(--void) 76%, rgba(246, 244, 240, 0));
+}
+
 @media (max-width: 560px) {
   .home-tagline {
     display: none;
   }
 
-  /* Play stays in reach at the bottom while the choices scroll above it: the summary on its
-     own line, then Play as one full-width row, the word on the left and the arrow on the right. */
-  .home-footer {
-    position: sticky;
-    bottom: 0;
-    z-index: 5;
-    margin: 0 calc(-1 * clamp(18px, 5vw, 56px)) calc(-1 * clamp(18px, 4vh, 44px));
-    padding: 26px clamp(18px, 5vw, 56px) calc(clamp(12px, 2.5vh, 22px) + env(safe-area-inset-bottom));
-    background: linear-gradient(to top, var(--void) 76%, rgba(246, 244, 240, 0));
-  }
+  /* Phones: the summary on its own line, then Play as one full-width row, the word on the left
+     and the arrow on the right. */
 
   .home-footer .play-cta {
     width: 100%;
@@ -300,6 +345,11 @@ body,
   display: flex;
   flex-direction: column;
   gap: clamp(24px, 3.6vh, 40px);
+}
+
+/* The fade-in sits on each child, not on the dock: a fading parent stops the glass inside it
+   from blurring what's behind until the fade ends (a flash of unblurred sand). */
+.home-dock > * {
   animation: rise 1.2s 0.2s var(--ease) both;
 }
 
@@ -889,9 +939,18 @@ body,
 .play-title-name {
   font-size: 15px;
   font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 700px) {
+  .play-title-name {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    line-height: 1.25;
+  }
 }
 
 .play-title-meta {
@@ -917,27 +976,68 @@ body,
   }
 }
 
+/* While playing: restart and stop as icons (the back arrow returns with the results). */
+.run-controls {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: var(--ink-dim);
+  transition:
+    color 0.2s var(--ease),
+    background 0.2s var(--ease);
+}
+
+@media (hover: hover) {
+  .icon-button:hover {
+    color: var(--ink);
+    background: rgba(42, 30, 52, 0.06);
+  }
+}
+
+.icon-button:active {
+  background: rgba(42, 30, 52, 0.1);
+}
+
+.play-screen.finished .run-controls,
+.play-screen:not(.finished) .home-button {
+  display: none;
+}
+
 /* Free practice, two hands: play both, or one hand alone. */
 .hand-switch {
   position: relative;
   z-index: 2;
   display: flex;
-  gap: 18px;
-  padding: 2px clamp(18px, 5vw, 56px) 0;
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 20px;
+  font-size: 15px;
+}
+
+.hand-switch .option-label {
+  flex-basis: 100%;
 }
 
 .hand-switch button {
+  min-height: 44px;
   color: var(--ink-faint);
-  padding: 6px 0 2px;
 }
 
 .hand-switch button[aria-pressed="true"] {
   color: var(--ink);
-  box-shadow: inset 0 -1.5px 0 var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 6px;
   cursor: default;
 }
 
@@ -1076,28 +1176,29 @@ body,
 .note-pulse-ring {
   position: absolute;
   z-index: 2;
-  width: 14px;
-  height: 14px;
-  margin: -7px 0 0 -7px;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
   border-radius: 50%;
-  border: 1.5px solid var(--pulse-color);
+  border: 2.5px solid var(--pulse-color);
+  background: radial-gradient(circle, color-mix(in srgb, var(--pulse-color) 35%, transparent) 0 45%, transparent 70%);
   pointer-events: none;
-  animation: note-ring 0.6s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+  animation: note-ring 0.7s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
 }
 
 .note-pulse-ring.strong {
-  box-shadow: 0 0 10px color-mix(in srgb, var(--pulse-color) 45%, transparent);
-  animation-duration: 0.75s;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--pulse-color) 55%, transparent);
+  animation-duration: 0.8s;
 }
 
 @keyframes note-ring {
   0% {
-    opacity: 0.9;
-    transform: scale(0.6);
+    opacity: 1;
+    transform: scale(0.5);
   }
   100% {
     opacity: 0;
-    transform: scale(2.6);
+    transform: scale(3);
   }
 }
 
@@ -1112,7 +1213,7 @@ body,
   }
   100% {
     opacity: 0;
-    transform: scale(3.2);
+    transform: scale(3.8);
   }
 }
 
@@ -1197,7 +1298,8 @@ body,
 
 .grade-flash {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: clamp(11px, 3.4vw, 14px);
+  font-weight: 500;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   pointer-events: none;
@@ -1228,40 +1330,355 @@ body,
 
 /* ---------- Results: numbers floating in the space ---------- */
 
-.play-screen.finished .staff-area {
-  height: clamp(130px, 30%, 320px);
+/* After a run the play area gives way to a full-screen results page: the sand's final figure
+   on top, then the numbers and notes, with the actions pinned to the bottom edge. The staff
+   stays laid out (hidden) so "See where it went" can show it whole. */
+.play-screen.finished .count-in-dots,
+.play-screen.finished .stage {
+  display: none;
+}
+
+.play-screen.finished:not(.reviewing) .staff-area {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.play-screen.reviewing .staff-area {
+  flex: 1 1 auto;
+  height: auto !important;
+  min-height: 0;
+  padding-top: 12px;
 }
 
 .results-overlay {
   position: relative;
   z-index: 3;
-  flex: 0 0 auto;
-  max-height: 62%;
+  flex: 1 1 auto;
   min-height: 0;
   display: flex;
-  align-items: flex-end;
-  overflow-y: auto;
+  flex-direction: column;
+  /* Only the bento's own content scrolls; its actions row stays put at the bottom. */
+  overflow: hidden;
+}
+
+/* The fade-in sits on the glass block itself (see .home-dock > *). */
+.results-panel > .bento {
   animation: rise 0.8s var(--ease) both;
 }
 
-.results-overlay[hidden] {
+.results-overlay[hidden],
+.review-bar[hidden] {
   display: none;
 }
 
-.results-panel {
-  width: 100%;
-  padding: clamp(12px, 2vh, 20px) clamp(18px, 5vw, 56px) calc(clamp(18px, 4vh, 44px) + env(safe-area-inset-bottom));
-  display: flex;
-  flex-direction: column;
-  gap: clamp(18px, 2.8vh, 28px);
+/* Empty: the WebGL sand is placed over this slot (play.ts placePlate). */
+.results-figure {
+  flex: 0 0 auto;
+  height: clamp(180px, 34svh, 440px);
+  pointer-events: none;
 }
 
-/* Phones: Safari's floating bottom bar can overlap the page; keep the buttons clear of it. */
-@media (pointer: coarse) {
-  .results-panel {
-    padding-bottom: calc(clamp(28px, 5vh, 48px) + env(safe-area-inset-bottom));
+.results-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.results-panel {
+  --gutter: clamp(16px, 5vw, 56px);
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  padding: 8px var(--gutter) clamp(12px, 2.5vh, 24px);
+  display: flex;
+  flex-direction: column;
+}
+
+.results-panel > .bento {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.bento .score-card-value {
+  font-size: clamp(48px, 7vw, 76px);
+}
+
+/* Home's choices as one ruled block: each field a cell, hairlines between them. */
+.home-panel.bento {
+  gap: 0;
+}
+
+.home-panel .home-fields {
+  gap: 0;
+  overflow: clip;
+}
+
+.home-panel .field {
+  padding: 12px clamp(14px, 2.4vw, 22px) 14px;
+  box-shadow: 0 0 0 0.5px rgba(42, 30, 52, var(--lines, 0.12));
+}
+
+.home-panel > .panel-note {
+  margin: 0;
+  padding: 12px clamp(14px, 2.4vw, 22px);
+}
+
+/* ---------- Bento: the results (and home's choices) as one ruled block ----------
+   Glass over the sand, a hairline around it and between the cells, no gaps. The glass, blur and
+   line strength are tunable live (src/ui/tweaks.ts). */
+.bento {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(42, 30, 52, var(--lines, 0.12));
+  border-radius: 16px;
+  /* clip, not hidden: hidden would stop the actions row from staying in reach (sticky). */
+  overflow: clip;
+  background: rgba(251, 250, 247, var(--glass, 0.6));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 14px)) saturate(1.1);
+  backdrop-filter: blur(var(--glass-blur, 14px)) saturate(1.1);
+}
+
+.bento-cell {
+  min-width: 0;
+  padding: clamp(14px, 2vh, 20px) clamp(16px, 2.4vw, 24px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bento > * + * {
+  border-top: 1px solid rgba(42, 30, 52, var(--lines, 0.12));
+}
+
+.bento-row {
+  display: flex;
+}
+
+/* The results' cells scroll inside the block; the actions row below them stays put. */
+.bento-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.bento-scroll > * + * {
+  border-top: 1px solid rgba(42, 30, 52, var(--lines, 0.12));
+}
+
+.bento-row > .bento-cell {
+  flex: 1 1 0;
+}
+
+.bento-row > * + * {
+  border-left: 1px solid rgba(42, 30, 52, var(--lines, 0.12));
+}
+
+.bento-grow {
+  flex: 1 0 auto;
+}
+
+/* The actions: the block's last row, always in view. First the tempo (it applies to every
+   choice) and the side actions, then the main action written like home's Play (a big word),
+   with the other way on beside it. */
+.bento > .results-buttons {
+  flex: 0 0 auto;
+  gap: 10px;
+}
+
+.results-main-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px 28px;
+  flex-wrap: wrap;
+}
+
+.results-main {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 12px;
+  min-height: 44px;
+  color: var(--ink);
+}
+
+.results-main-word {
+  font-size: clamp(32px, 4vw, 44px);
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
+.results-main-arrow {
+  font-size: clamp(26px, 3.2vw, 36px);
+  font-weight: 300;
+  line-height: 1;
+  transition: transform 0.4s var(--ease);
+}
+
+@media (hover: hover) {
+  .results-main:hover .results-main-arrow {
+    transform: translateX(6px);
   }
 }
+
+.results-main:active {
+  transform: translateY(1px);
+}
+
+.results-other {
+  color: var(--ink);
+}
+
+.results-secondary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px clamp(20px, 3vw, 36px);
+}
+
+.results-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--ink-dim);
+}
+
+/* The hover underline sits just under the word, not at the bottom of the tall tap area. */
+.results-button::after {
+  bottom: 9px;
+}
+
+.retry-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.retry-tempo {
+  width: 168px;
+}
+
+.retry-tempo .segment.segment {
+  height: 44px;
+  min-height: 44px;
+}
+
+.retry-tempo .step {
+  flex-basis: 40px;
+}
+
+@media (max-width: 640px) {
+  .results-secondary {
+    justify-content: space-between;
+    gap: 8px 12px;
+  }
+
+  /* The back arrow already goes home. */
+  .results-secondary .home-action {
+    display: none;
+  }
+}
+
+/* Free practice, independent hands: play again with both hands or one. It scrolls under the
+   actions row, never over it. */
+.results-panel .hand-switch {
+  z-index: auto;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 20px;
+}
+
+/* Wide screens: the sand on the left like a framed picture, the numbers and actions on the
+   right, together in the middle of the height rather than spread to the edges. */
+@media (min-width: 900px) and (min-aspect-ratio: 1/1) {
+  .results-overlay {
+    flex-direction: row;
+    overflow: hidden;
+  }
+
+  .results-figure {
+    flex: 1 1 50%;
+    height: auto;
+  }
+
+  .results-body {
+    flex: 1 1 50%;
+    min-height: 0;
+    max-width: 680px;
+    justify-content: center;
+  }
+
+  /* As tall as its content, centred, scrolling inside only when the window is short. */
+  .results-panel {
+    flex: 0 1 auto;
+    padding-top: 24px;
+    padding-left: 0;
+  }
+
+  .results-panel > .bento {
+    flex: 0 1 auto;
+  }
+}
+
+/* Phones: the sand is a quiet backdrop behind the whole page (play.ts placePlate), so the
+   numbers start right under the title. */
+@media (max-width: 640px) and (max-aspect-ratio: 9/10) {
+  .results-figure {
+    height: 12px;
+  }
+
+  .home-plate-slot {
+    min-height: 40px;
+    flex: 0 0 40px;
+  }
+}
+
+.review-link {
+  align-self: flex-start;
+  min-height: 44px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 5px;
+}
+
+.review-bar {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 20px;
+  padding: 14px clamp(18px, 5vw, 56px) clamp(16px, 3vh, 28px);
+}
+
+.review-hint {
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+
+.review-bar .results-button {
+  min-height: 44px;
+}
+
 
 .results-grid {
   display: grid;
@@ -1390,28 +1807,6 @@ body,
   line-height: 0.9;
 }
 
-.results-buttons {
-  display: flex;
-  gap: clamp(24px, 5vw, 44px);
-  align-items: baseline;
-  padding-top: 6px;
-}
-
-.results-button {
-  font-size: 17px;
-  font-weight: 500;
-  color: var(--ink-dim);
-}
-
-.results-button.primary {
-  color: var(--ink);
-}
-
-.results-button {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 8px;
-}
 
 .kbd {
   font-family: var(--mono);
@@ -1426,12 +1821,6 @@ body,
   }
 }
 
-.results-button.primary::after {
-  height: 2px;
-  width: 18px;
-  background: var(--accent);
-  transform: scaleX(1);
-}
 
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -1531,28 +1920,6 @@ body,
   }
 }
 
-.results-buttons {
-  flex-wrap: wrap;
-  row-gap: 14px;
-}
-
-.retry-group {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.retry-tempo {
-  width: 200px;
-}
-
-.retry-tempo .segment {
-  height: 36px;
-}
-
-.retry-tempo .step {
-  flex-basis: 40px;
-}
 
 /* Count-in results: the tempo kept in each bar, against the count-in tempo. */
 .tempo-chart {
@@ -1605,4 +1972,107 @@ body,
   font-family: var(--mono);
   font-size: 10px;
   color: var(--ink-faint);
+}
+
+/* ---------- Settings page ---------- */
+
+.settings-button {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 4px;
+  margin-top: -8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+@media (hover: hover) {
+  .settings-button:hover {
+    color: var(--ink);
+  }
+}
+
+.settings-page {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--void);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  overflow-y: auto;
+}
+
+.settings-page[hidden] {
+  display: none;
+}
+
+.settings-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px max(16px, 4vw) 0;
+}
+
+.settings-back {
+  width: 44px;
+  height: 44px;
+  margin-left: -12px;
+}
+
+.settings-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.settings-rows {
+  width: 100%;
+  max-width: 560px;
+  padding: 20px max(16px, 4vw) 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-row.text-toggle {
+  width: 100%;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13px;
+  text-align: left;
+  color: var(--ink);
+  border-bottom: 1px solid rgba(42, 30, 52, 0.12);
+}
+
+.settings-row .text-toggle-state {
+  min-width: 0;
+  text-align: right;
+}
+
+.settings-row-arrow {
+  color: var(--ink-dim);
+  font-size: 18px;
+}
+
+@media (pointer: coarse) {
+  .home-button {
+    position: relative;
+  }
+
+  .home-button::after,
+  .stepper .step::after {
+    content: "";
+    position: absolute;
+    inset: -6px;
+  }
+
+  .stepper .step {
+    position: relative;
+    min-height: 44px;
+  }
 }

@@ -3,10 +3,11 @@
 import type { AudioEngine } from "../audio/engine";
 import type { Scene } from "../scene/resonance";
 import { runCalibration } from "../input/calibration";
+import { onTweak, tweak } from "../ui/tweaks";
 import { chips, field, segmented, select, stepper } from "./controls";
 import { describeIngredients, INGREDIENTS, type Ingredient, type MeterChoice } from "../rhythm/generate";
 import { HAND_RELATIONS } from "../rhythm/twoHands";
-import { firstOpenLesson, firstOpenPiece, firstOpenStep, LESSONS, loadProgress, PASS_ACCURACY, pieceDone, PIECES, stepDone } from "./lessons";
+import { firstOpenLesson, firstOpenPiece, firstOpenStep, handsAreIndependent, LESSONS, loadProgress, PASS_ACCURACY, pieceDone, PIECES, stepDone } from "./lessons";
 import type { Mode } from "../types";
 
 export interface HomeOptions {
@@ -33,6 +34,11 @@ export function leaveHome(): void {
 const FIGURE_CYCLE_MS = 15000;
 
 /** The plate floats behind the hero, gently ringing and drifting through figures. */
+/** A narrow, upright screen: the sand becomes a quiet backdrop instead of a framed picture. */
+export function isPhoneBackdrop(): boolean {
+  return window.innerWidth <= 640 && window.innerWidth < window.innerHeight * 0.9;
+}
+
 function startHomeScene(scene: Scene, slot: HTMLElement): void {
   leaveHome();
   let figure = Math.floor(Math.random() * 12);
@@ -42,14 +48,25 @@ function startHomeScene(scene: Scene, slot: HTMLElement): void {
   scene.setDim(0.15);
 
   const place = () => {
+    // Phones: the sand lies quietly behind the whole screen and stays put while the choices scroll.
+    if (isPhoneBackdrop()) {
+      scene.setDim(tweak("sandHome"));
+      scene.setPlate(window.innerWidth / 2, window.innerHeight * 0.42, window.innerWidth * 0.72);
+      return;
+    }
+    scene.setDim(0.15);
     const rect = slot.getBoundingClientRect();
-    const radius = Math.min(rect.width * 0.46, rect.height * 0.95, 460);
+    // Upright phones look down on the plate more steeply (resonance.ts), so it takes more height.
+    const portrait = window.innerWidth < window.innerHeight * 0.9;
+    const radius = Math.min(rect.width * 0.46, rect.height * (portrait ? 0.6 : 0.95), 460);
     scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height / 2, radius);
   };
   place();
   const observer = new ResizeObserver(place);
   observer.observe(slot);
   window.addEventListener("scroll", place, { passive: true });
+  window.addEventListener("resize", place);
+  const offTweak = onTweak(place);
   const timer = setInterval(() => {
     figure += 1;
     scene.setFigure(figure);
@@ -58,6 +75,8 @@ function startHomeScene(scene: Scene, slot: HTMLElement): void {
   homeCleanup = () => {
     observer.disconnect();
     window.removeEventListener("scroll", place);
+    window.removeEventListener("resize", place);
+    offTweak();
     clearInterval(timer);
     scene.setAmbient(0);
   };
@@ -103,12 +122,13 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   tagline.className = "home-tagline";
   tagline.textContent = "Read the rhythm. Play in time and the sand draws its figures.";
   titleBlock.append(title, tagline);
-  const toggles = document.createElement("div");
-  toggles.className = "sound-toggles";
+  // Settings live on their own page: one clear button here, the rows inside it.
+  const settingsRows = document.createElement("div");
+  settingsRows.className = "settings-rows";
   for (const sound of opts.sounds) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "text-toggle";
+    button.className = "settings-row text-toggle";
     const paint = () => {
       const on = sound.isOn();
       button.innerHTML = `<span class="text-toggle-label"></span><span class="text-toggle-state"></span>`;
@@ -122,9 +142,14 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
       sound.set(!sound.isOn());
       paint();
     });
-    toggles.appendChild(button);
+    settingsRows.appendChild(button);
   }
-  top.append(titleBlock, toggles);
+  const settingsButton = document.createElement("button");
+  settingsButton.type = "button";
+  settingsButton.className = "settings-button";
+  settingsButton.textContent = "Settings";
+  settingsButton.setAttribute("aria-haspopup", "dialog");
+  top.append(titleBlock, settingsButton);
   root.appendChild(top);
 
   const plateSlot = document.createElement("div");
@@ -142,10 +167,10 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     markHintSeen();
   }
   const panel = document.createElement("section");
-  panel.className = "home-panel";
+  panel.className = "home-panel bento";
   panel.setAttribute("aria-label", "Choose an exercise");
 
-  let { track, lessonIndex, ingredients, cross, meter, hands, stage, bars, mode } = prefs;
+  let { track, lessonIndex, ingredients, cross, meter, hands, stage, bars, mode, part } = prefs;
   const progress = loadProgress();
   if (lessonIndex < 0) lessonIndex = firstOpenLesson(progress);
   let pieceIndex = firstOpenPiece(progress, LESSONS[lessonIndex]!);
@@ -274,6 +299,19 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
       paint();
     },
   );
+  // Independent hands: play both, or practise one alone (the other is played for you).
+  const partControl = segmented(
+    [
+      { value: "both", label: "Both hands" },
+      { value: "right", label: "Right" },
+      { value: "left", label: "Left" },
+    ],
+    part,
+    (value) => {
+      part = value as HandPart;
+      paint();
+    },
+  );
   const lengthControl = segmented(
     BAR_OPTIONS.map((b) => ({ value: String(b), label: `${b} bars` })),
     String(bars),
@@ -306,13 +344,18 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   const meterField = field("Meter", meterControl.el);
   const relateField = field("How the hands relate", relateControl.el);
   relateField.classList.add("wide-field");
+  const partField = field("Play", partControl.el);
   const freeFields = document.createElement("div");
   freeFields.className = "home-fields";
-  freeFields.append(field("Hands", handsControl.el), relateField, ingredientsField, meterField, field("Length", lengthControl.el), field("Mode", modeControl.el), field("Tempo", tempoControl.el));
+  freeFields.append(field("Hands", handsControl.el), relateField, partField, ingredientsField, meterField, field("Length", lengthControl.el), field("Mode", modeControl.el), field("Tempo", tempoControl.el));
 
   const note = document.createElement("p");
   note.className = "panel-note";
-  panel.append(trackControl.el, lessonFields, freeFields, note);
+  // One ruled block (a "bento", see style.css): the track switch, the choices, and the note.
+  const trackCell = document.createElement("div");
+  trackCell.className = "bento-cell";
+  trackCell.appendChild(trackControl.el);
+  panel.append(trackCell, lessonFields, freeFields, note);
 
   const play = document.createElement("button");
   play.type = "button";
@@ -327,6 +370,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     lessonFields.hidden = !lessons;
     freeFields.hidden = lessons;
     relateField.hidden = hands !== 2;
+    partField.hidden = !(hands === 2 && handsAreIndependent(stage, cross));
     // Two-hand exercises are written in 4/4.
     meterField.hidden = hands === 2;
     ingredientChips.setDisabled(CROSS_CHIP, hands === 2 ? null : "Needs two hands");
@@ -345,7 +389,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
       const what = `${describeIngredients(new Set<Ingredient>(["quarters", ...ingredients]))}, ${bars} bars`;
       playWhat.textContent = hands === 2 ? `Two hands, ${what.toLowerCase()}${cross ? ", 3 against 2" : ""}` : what;
     }
-    saveHomePrefs({ track, lessonIndex, ingredients, cross, meter, hands, stage, bars, mode });
+    saveHomePrefs({ track, lessonIndex, ingredients, cross, meter, hands, stage, bars, mode, part });
   }
 
   const stepTempo = (delta: number) => {
@@ -357,7 +401,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
 
   const start = () => {
     if (track === "lessons") opts.onLesson(lessonIndex, pieceIndex, stepIndex, lessonBpm ?? suggestedBpm());
-    else opts.onFree({ ingredients: ["quarters", ...ingredients.filter((i) => i !== "quarters")], cross: hands === 2 && cross, meter: hands === 2 ? "4/4" : meter, hands, stage, bars, mode });
+    else opts.onFree({ ingredients: ["quarters", ...ingredients.filter((i) => i !== "quarters")], cross: hands === 2 && cross, meter: hands === 2 ? "4/4" : meter, hands, stage, bars, mode, part });
   };
   play.addEventListener("click", start);
   const onKey = (event: KeyboardEvent) => {
@@ -379,7 +423,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
       leaveHome();
       opts.scene.setDim(0.6);
       // The sand rests low on the screen, clear of the instructions.
-      opts.scene.setPlate(window.innerWidth / 2, window.innerHeight * 0.86, Math.min(window.innerWidth * 0.42, 420));
+      opts.scene.setPlate(window.innerWidth / 2, window.innerHeight * (window.innerWidth < window.innerHeight * 0.9 ? 0.8 : 0.86), Math.min(window.innerWidth * 0.42, 420));
       await opts.engine.unlock();
       container.innerHTML = "";
       const calContainer = document.createElement("div");
@@ -393,9 +437,45 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   const footer = document.createElement("div");
   footer.className = "home-footer";
   footer.append(play);
-  // Calibration is a setting, not part of choosing what to play: it sits with the sound switches.
-  calibrateLink.className = "text-toggle calibrate-link";
-  toggles.appendChild(calibrateLink);
+  // Calibration is a setting, not part of choosing what to play: it sits in the Settings page.
+  calibrateLink.className = "settings-row text-toggle calibrate-link";
+  calibrateLink.innerHTML = `<span class="text-toggle-label">Calibrate latency</span><span class="settings-row-arrow" aria-hidden="true">&rsaquo;</span>`;
+  settingsRows.appendChild(calibrateLink);
+
+  const settingsPage = document.createElement("div");
+  settingsPage.className = "settings-page";
+  settingsPage.hidden = true;
+  settingsPage.setAttribute("role", "dialog");
+  settingsPage.setAttribute("aria-label", "Settings");
+  const settingsBar = document.createElement("div");
+  settingsBar.className = "settings-bar";
+  const settingsBack = document.createElement("button");
+  settingsBack.type = "button";
+  settingsBack.className = "home-button settings-back";
+  settingsBack.setAttribute("aria-label", "Back");
+  settingsBack.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const settingsTitle = document.createElement("h2");
+  settingsTitle.className = "settings-title";
+  settingsTitle.textContent = "Settings";
+  settingsBar.append(settingsBack, settingsTitle);
+  settingsPage.append(settingsBar, settingsRows);
+  root.appendChild(settingsPage);
+  const closeSettings = () => {
+    settingsPage.hidden = true;
+    settingsButton.focus();
+  };
+  settingsButton.addEventListener("click", () => {
+    settingsPage.hidden = false;
+    settingsBack.focus();
+  });
+  settingsBack.addEventListener("click", closeSettings);
+  const onSettingsKey = (event: KeyboardEvent) => {
+    if (event.key === "Escape" && !settingsPage.hidden) {
+      event.preventDefault();
+      closeSettings();
+    }
+  };
+  window.addEventListener("keydown", onSettingsKey);
   dock.append(panel, footer);
   root.appendChild(dock);
 
@@ -406,6 +486,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   homeCleanup = () => {
     sceneCleanup?.();
     window.removeEventListener("keydown", onKey);
+    window.removeEventListener("keydown", onSettingsKey);
   };
   opts.engine.setAmbience(0.6, 2);
 }
@@ -427,7 +508,11 @@ export interface FreeChoice {
   stage: number;
   bars: 4 | 8 | 16;
   mode: Mode;
+  /** Independent two hands: both, or one hand alone. */
+  part: HandPart;
 }
+
+export type HandPart = "both" | "right" | "left";
 
 /** The "3 against 2" chip among the rhythm chips (not an ingredient). */
 const CROSS_CHIP = "cross";
@@ -439,7 +524,7 @@ interface HomePrefs extends FreeChoice {
 }
 
 function loadHomePrefs(): HomePrefs {
-  const fallback: HomePrefs = { track: "lessons", lessonIndex: -1, ingredients: ["quarters", "halves", "rests", "eighths"], cross: false, meter: "4/4", hands: 1, stage: 1, bars: 8, mode: "practice" };
+  const fallback: HomePrefs = { track: "lessons", lessonIndex: -1, ingredients: ["quarters", "halves", "rests", "eighths"], cross: false, meter: "4/4", hands: 1, stage: 1, bars: 8, mode: "practice", part: "both" };
   try {
     const raw: unknown = JSON.parse(localStorage.getItem(HOME_PREFS_KEY) ?? "null");
     if (!raw || typeof raw !== "object") return fallback;
@@ -458,6 +543,7 @@ function loadHomePrefs(): HomePrefs {
       cross: typeof r.cross === "boolean" ? r.cross : stage === HAND_RELATIONS.length + 1,
       bars: BAR_OPTIONS.find((b) => b === Number(r.bars)) ?? 8,
       mode: r.mode === "countIn" ? "countIn" : "practice",
+      part: r.part === "right" || r.part === "left" ? r.part : "both",
     };
   } catch {
     return fallback;

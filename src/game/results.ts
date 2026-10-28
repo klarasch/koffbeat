@@ -1,5 +1,5 @@
 // Builds the results overlay shown after a run: two headline scores, tempo detail, and the
-// Retry / Next level / Home actions. Pure DOM builder — timing and judging happen in play.ts.
+// Retry / next / Home actions. Pure DOM builder — timing and judging happen in play.ts.
 
 import type { Grade, Mode, OnsetJudgement, RunResult } from "../types";
 import { stepper } from "./controls";
@@ -7,10 +7,13 @@ import { stepper } from "./controls";
 export interface ResultsCallbacks {
   /** Play the same exercise again, at `bpm` when the player changed it here. */
   onRetry: (bpm?: number) => void;
-  onNext: () => void;
+  /** Move on, at `bpm` when the player changed the tempo here. */
+  onNext: (bpm?: number) => void;
   onHome: () => void;
   /** Hear the exercise played correctly. */
   onListen: () => void;
+  /** Show the whole piece with every note marked by how it went. */
+  onReview?: () => void;
 }
 
 /** The tempo the exercise was played at (Retry can change it) and the main action's label. */
@@ -19,6 +22,8 @@ export interface RetryOptions {
   nextLabel?: string;
   /** A lesson step: the tempo and accuracy it takes to pass. */
   goal?: { bpm: number; pass: number };
+  /** Which action is the big one: another go (default), or moving on. */
+  primary?: "retry" | "next";
 }
 
 /**
@@ -209,41 +214,30 @@ function hitCount(result: RunResult): number {
  * steadiness and drift are kept.
  */
 export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mode, callbacks: ResultsCallbacks, retry?: RetryOptions): HTMLElement {
-  const panel = document.createElement("div");
-  panel.className = "results-panel";
-
   if (hitCount(result) === 0) {
     const noTaps = document.createElement("p");
     noTaps.className = "results-detail";
     const touch = typeof matchMedia === "function" && matchMedia("(hover: none)").matches;
     noTaps.textContent = touch ? "No taps detected. Try again: tap the lower half of the screen." : "No taps detected. Try again: tap the lower half of the screen, or press F / J.";
-    panel.appendChild(noTaps);
-    panel.appendChild(buildButtons(callbacks, retry));
-    return panel;
+    return bentoPanel([cell([noTaps])], buildButtons(callbacks, retry));
   }
 
-  const grid = document.createElement("div");
-  grid.className = "results-grid";
-
-  // Left: the numbers, and how the notes landed.
-  const numbers = document.createElement("div");
-  numbers.className = "results-numbers";
+  // The two headline numbers side by side.
+  const second = mode === "practice" ? textCard("Timing vs click", timingVsClickWords(result.judgements)) : scoreCard("Tempo steadiness", result.steadiness);
   const scores = document.createElement("div");
-  scores.className = "results-scores";
-  scores.appendChild(scoreCard("Rhythm accuracy", result.accuracy));
-  if (mode === "practice") scores.appendChild(textCard("Timing vs click", timingVsClickWords(result.judgements)));
-  else scores.appendChild(scoreCard("Tempo steadiness", result.steadiness));
-  numbers.append(scores, gradeTally(result));
+  scores.className = "bento-row";
+  scores.append(cell([scoreCard("Rhythm accuracy", result.accuracy)]), cell([second]));
+
+  // How the notes landed.
+  const counts: HTMLElement[] = [gradeTally(result)];
   if (result.handAccuracy) {
     const handsLine = document.createElement("p");
     handsLine.className = "results-detail";
     handsLine.textContent = `Left hand ${Math.round(result.handAccuracy[0])}, right hand ${Math.round(result.handAccuracy[1])}`;
-    numbers.appendChild(handsLine);
+    counts.push(handsLine);
   }
 
-  // Right: what a teacher would say.
-  const advice = document.createElement("div");
-  advice.className = "results-advice";
+  // What a teacher would say, and the way to see it on the music.
   const adviceLabel = document.createElement("span");
   adviceLabel.className = "option-label";
   adviceLabel.textContent = "Notes";
@@ -254,10 +248,17 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
     li.textContent = line;
     list.appendChild(li);
   }
-  advice.append(adviceLabel, list);
-  grid.append(numbers, advice);
-  panel.appendChild(grid);
+  const advice: HTMLElement[] = [adviceLabel, list];
+  if (callbacks.onReview) {
+    const review = document.createElement("button");
+    review.type = "button";
+    review.className = "review-link";
+    review.textContent = "See where it went";
+    review.addEventListener("click", callbacks.onReview);
+    advice.push(review);
+  }
 
+  // The tempo it was played at.
   const detail = document.createElement("p");
   detail.className = "results-detail";
   const playedBpm = Math.round(result.playedBpm);
@@ -265,19 +266,44 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
     mode === "practice"
       ? `Played ${playedBpm} bpm, ${tempoVsTargetWords(result.playedBpm, targetBpm)}.`
       : `Played ${playedBpm} bpm, ${tempoVsTargetWords(result.playedBpm, targetBpm)}. ${capitalize(driftWords(result.driftPercent))}.`;
-  panel.appendChild(detail);
+  const tempo: HTMLElement[] = [detail];
   if (mode !== "practice" && result.tempoByBar) {
     const chart = tempoChart(result.tempoByBar, targetBpm);
-    if (chart) panel.appendChild(chart);
+    if (chart) tempo.push(chart);
   }
   const goal = retry?.goal ? goalNote(result.accuracy, retry.bpm, retry.goal) : null;
   if (goal) {
     const goalLine = document.createElement("p");
     goalLine.className = "results-detail goal-note";
     goalLine.textContent = goal;
-    panel.appendChild(goalLine);
+    tempo.push(goalLine);
   }
-  panel.appendChild(buildButtons(callbacks, retry));
+  return bentoPanel([scores, cell(counts), cell(advice, "bento-grow"), cell(tempo)], buildButtons(callbacks, retry));
+}
+
+/** One cell of the results block. */
+function cell(children: HTMLElement[], extraClass = ""): HTMLElement {
+  const el = document.createElement("div");
+  el.className = `bento-cell ${extraClass}`.trim();
+  el.append(...children);
+  return el;
+}
+
+/**
+ * The results as one ruled block (a "bento"): glass over the sand, a hairline around it and
+ * between the cells, and the actions as its last row. Only the cells scroll; the actions stay put.
+ */
+function bentoPanel(cells: HTMLElement[], actions: HTMLElement, extraClass = ""): HTMLElement {
+  const panel = document.createElement("div");
+  panel.className = `results-panel ${extraClass}`.trim();
+  const bento = document.createElement("div");
+  bento.className = "bento";
+  const scroll = document.createElement("div");
+  scroll.className = "bento-scroll";
+  scroll.append(...cells);
+  actions.classList.add("bento-cell");
+  bento.append(scroll, actions);
+  panel.appendChild(bento);
   return panel;
 }
 
@@ -306,16 +332,13 @@ function gradeTally(result: RunResult): HTMLElement {
 
 /** Shown instead of scores when a run ended early: lost the beat, or stopped with Esc. */
 export function buildEndedEarlyPanel(title: string, detail: string, callbacks: ResultsCallbacks, retry?: RetryOptions): HTMLElement {
-  const panel = document.createElement("div");
-  panel.className = "results-panel ended-early";
   const heading = document.createElement("p");
   heading.className = "ended-title";
   heading.textContent = title;
   const text = document.createElement("p");
   text.className = "results-detail";
   text.textContent = detail ? `${detail} Try it again, maybe a little slower, or hear it played first.` : "";
-  panel.append(heading, text, buildButtons(callbacks, retry));
-  return panel;
+  return bentoPanel([cell([heading, text], "bento-grow")], buildButtons(callbacks, retry), "ended-early");
 }
 
 function scoreCard(label: string, value: number): HTMLElement {
@@ -344,31 +367,62 @@ function textCard(label: string, text: string): HTMLElement {
   return card;
 }
 
-function buildButtons(callbacks: ResultsCallbacks, retry?: RetryOptions): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "results-buttons";
-  const make = (label: string, key: string, onClick: () => void, primary = false) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = primary ? "results-button primary" : "results-button";
-    const text = document.createElement("span");
-    text.textContent = label;
-    const kbd = document.createElement("kbd");
-    kbd.className = "kbd";
-    kbd.textContent = key;
-    button.append(text, kbd);
-    button.addEventListener("click", onClick);
-    return button;
-  };
+/** A secondary action: a quiet word, with its key shown on keyboards. */
+function actionButton(label: string, key: string, onClick: () => void, extraClass = ""): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `results-button ${extraClass}`.trim();
+  const text = document.createElement("span");
+  text.textContent = label;
+  const kbd = document.createElement("kbd");
+  kbd.className = "kbd";
+  kbd.textContent = key;
+  button.append(text, kbd);
+  button.addEventListener("click", onClick);
+  return button;
+}
 
-  // Retry, with the tempo to retry at right next to it (the same exercise, faster or slower).
-  const retryGroup = document.createElement("div");
-  retryGroup.className = "retry-group";
+/** The main action, written like home's Play: a big word, and an arrow when it moves on. */
+function mainButton(label: string, key: string, arrow: boolean, onClick: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "results-main";
+  button.innerHTML = `<span class="results-main-word"></span><kbd class="kbd"></kbd>${arrow ? `<span class="results-main-arrow" aria-hidden="true">→</span>` : ""}`;
+  (button.firstChild as HTMLElement).textContent = label;
+  (button.children[1] as HTMLElement).textContent = key;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+/**
+ * The actions bar. First what applies to every choice (the tempo) and the side actions, then
+ * the main action, big, with the other way on beside it.
+ */
+function actionsBar(main: HTMLButtonElement, other: HTMLButtonElement | null, top: HTMLElement[]): HTMLElement {
+  const bar = document.createElement("div");
+  bar.className = "results-buttons";
+  const topRow = document.createElement("div");
+  topRow.className = "results-secondary";
+  topRow.append(...top);
+  const mainRow = document.createElement("div");
+  mainRow.className = "results-main-row";
+  mainRow.append(main);
+  if (other) {
+    other.classList.add("results-other");
+    mainRow.append(other);
+  }
+  bar.append(topRow, mainRow);
+  return bar;
+}
+
+function buildButtons(callbacks: ResultsCallbacks, retry?: RetryOptions): HTMLElement {
+  // The tempo comes first: Retry and the next exercise both start at it.
   let bpm = retry?.bpm ?? 0;
-  const retryButton = make("Retry", "R", () => callbacks.onRetry(retry ? bpm : undefined));
-  retryGroup.appendChild(retryButton);
+  const original = bpm;
+  const top: HTMLElement[] = [];
+  const tempoGroup = document.createElement("div");
+  tempoGroup.className = "retry-group";
   if (retry) {
-    const original = retry.bpm;
     const tempo = stepper(
       (delta) => {
         bpm = Math.max(40, Math.min(200, bpm + delta * 5));
@@ -378,46 +432,39 @@ function buildButtons(callbacks: ResultsCallbacks, retry?: RetryOptions): HTMLEl
         bpm = original;
         paint();
       },
-      { less: "Retry slower", more: "Retry faster", reset: "Back to the tempo you played" },
+      { less: "Slower", more: "Faster", reset: "Back to the tempo you played" },
     );
     tempo.el.classList.add("retry-tempo");
     const paint = () => {
       tempo.setText(`${bpm} bpm`, bpm !== original);
-      retryGroup.dataset.retryBpm = String(bpm);
+      tempoGroup.dataset.retryBpm = String(bpm);
     };
     paint();
-    retryGroup.appendChild(tempo.el);
+    tempoGroup.appendChild(tempo.el);
+    top.push(tempoGroup);
   }
+  top.push(actionButton("Hear it", "H", callbacks.onListen), actionButton("Home", "Esc", callbacks.onHome, "home-action"));
 
-  row.append(retryGroup, make("Hear it", "H", callbacks.onListen), make(retry?.nextLabel ?? "Next level", "↵", callbacks.onNext, true), make("Home", "Esc", callbacks.onHome));
-  return row;
+  const doRetry = () => callbacks.onRetry(retry ? bpm : undefined);
+  const doNext = () => callbacks.onNext(retry && bpm !== original ? bpm : undefined);
+  const nextLabel = retry?.nextLabel ?? "Next level";
+  // Moving on is the main action only once a lesson step is passed; otherwise it's another go.
+  if (retry?.primary === "next") {
+    return actionsBar(mainButton(nextLabel, "↵", true, doNext), actionButton("Retry", "R", doRetry), top);
+  }
+  return actionsBar(mainButton("Retry", "↵", false, doRetry), actionButton(`${nextLabel} →`, "N", doNext), top);
 }
 
 /** After listening to the exercise: the player's turn next. */
 export function buildListenedPanel(callbacks: { onPlay: () => void; onListen: () => void; onHome: () => void }): HTMLElement {
-  const panel = document.createElement("div");
-  panel.className = "results-panel ended-early";
   const heading = document.createElement("p");
   heading.className = "ended-title";
   heading.textContent = "Your turn";
   const text = document.createElement("p");
   text.className = "results-detail";
   text.textContent = "That's how it goes. Now play it yourself, or hear it once more.";
-  const row = document.createElement("div");
-  row.className = "results-buttons";
-  const make = (label: string, key: string, onClick: () => void, primary = false) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = primary ? "results-button primary" : "results-button";
-    button.innerHTML = `<span></span><kbd class="kbd"></kbd>`;
-    (button.firstChild as HTMLElement).textContent = label;
-    (button.lastChild as HTMLElement).textContent = key;
-    button.addEventListener("click", onClick);
-    return button;
-  };
-  row.append(make("Play it", "↵", callbacks.onPlay, true), make("Hear again", "H", callbacks.onListen), make("Home", "Esc", callbacks.onHome));
-  panel.append(heading, text, row);
-  return panel;
+  const bar = actionsBar(mainButton("Play it", "↵", true, callbacks.onPlay), null, [actionButton("Hear again", "H", callbacks.onListen), actionButton("Home", "Esc", callbacks.onHome, "home-action")]);
+  return bentoPanel([cell([heading, text], "bento-grow")], bar, "ended-early");
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";

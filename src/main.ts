@@ -11,6 +11,8 @@ import { startPlay } from "./game/play";
 import { generateLevel } from "./rhythm/generate";
 import { generateTwoHandLevel } from "./rhythm/twoHands";
 import type { Hand, Level, Mode } from "./types";
+import { installInk } from "./ui/ink";
+import { installTweaks } from "./ui/tweaks";
 
 const app = document.getElementById("app");
 if (!app) throw new Error("missing #app root");
@@ -18,6 +20,9 @@ if (!app) throw new Error("missing #app root");
 const engine = createAudioEngine();
 
 // One WebGL scene for the whole app, fixed behind every screen; screens only tell it what to do.
+installTweaks();
+installInk();
+
 const canvas = document.createElement("canvas");
 canvas.id = "scene";
 canvas.setAttribute("aria-hidden", "true");
@@ -165,15 +170,29 @@ function lessonPick(lessonIndex: number, pieceIndex: number, stepIndex: number, 
   };
 }
 
+/** The same pick, and every one after it, played with `solo` (one hand, or both when undefined). */
+function keepSolo(pick: LevelPick, solo: Hand | undefined): LevelPick {
+  return {
+    ...pick,
+    solo,
+    next: () => {
+      const next = pick.next();
+      return next ? keepSolo(next, solo) : null;
+    },
+  };
+}
+
 /** Free practice: an exercise built from the chosen ingredients. */
 function freePick(choice: FreeChoice): LevelPick {
   const again = () => freePick(choice);
   if (choice.hands === 2) {
     const level = withTempo(generateTwoHandLevel({ stage: choice.stage, cross: choice.cross, ingredients: choice.ingredients, bars: choice.bars }));
-    // Both hands from the start; independent hands can switch to one hand alone inside the exercise.
-    return { level, next: again, handChoice: handsAreIndependent(choice.stage, choice.cross) };
+    // Independent hands: the hand(s) chosen on home, and another choice on the results.
+    const independent = handsAreIndependent(choice.stage, choice.cross);
+    const solo: Hand | undefined = !independent || choice.part === "both" ? undefined : choice.part === "right" ? 1 : 0;
+    return { level, next: again, solo, handChoice: independent, nextLabel: "New exercise" };
   }
-  return { level: withTempo(generateLevel({ tier: 1, ingredients: choice.ingredients, meter: choice.meter, bars: choice.bars })), next: again };
+  return { level: withTempo(generateLevel({ tier: 1, ingredients: choice.ingredients, meter: choice.meter, bars: choice.bars })), next: again, nextLabel: "New exercise" };
 }
 
 // Practice tempo: null plays each level at its own tempo; a number overrides it.
@@ -241,7 +260,7 @@ async function doBeginLevel(pick: LevelPick, mode: Mode, listen: boolean): Promi
     root.appendChild(calContainer);
     scene.setDim(0.6);
     // The sand rests low on the screen, clear of the instructions.
-    scene.setPlate(window.innerWidth / 2, window.innerHeight * 0.86, Math.min(window.innerWidth * 0.42, 420));
+    scene.setPlate(window.innerWidth / 2, window.innerHeight * (window.innerWidth < window.innerHeight * 0.9 ? 0.8 : 0.86), Math.min(window.innerWidth * 0.42, 420));
     await runCalibration(engine, calContainer);
   }
 
@@ -257,11 +276,11 @@ async function doBeginLevel(pick: LevelPick, mode: Mode, listen: boolean): Promi
       onHome: showHome,
       // Retry is the same exercise, at the tempo chosen on the results when there is one.
       onRetry: (bpm) => beginLevel(bpm ? { ...pick, level: { ...pick.level, bpm } } : pick, mode),
-      onNext: () => {
+      onNext: (bpm) => {
         const next = pick.next();
-        // The next step of the same free-practice exercise keeps the tempo it's being practised at
-        // (a lesson step suggests its own).
-        if (next && !next.lesson && next.level.id === pick.level.id) next.level = { ...next.level, bpm: pick.level.bpm };
+        // A tempo chosen on the results carries into the next exercise. Without one, free
+        // practice keeps the tempo it's being practised at (a lesson step suggests its own).
+        if (next && (bpm || !next.lesson)) next.level = { ...next.level, bpm: bpm ?? pick.level.bpm };
         beginLevel(next, mode, next?.listenFirst);
       },
       onListen: () => beginLevel(pick, mode, true),
@@ -280,7 +299,12 @@ async function doBeginLevel(pick: LevelPick, mode: Mode, listen: boolean): Promi
       steps: pick.steps,
       nextLabel: pick.nextLabel,
       // Switching hands restarts the same exercise with that hand alone (or both).
-      handChoice: pick.handChoice ? { onPick: (solo) => beginLevel({ ...pick, solo }, mode) } : undefined,
+      // The hand chosen there carries on into the next exercise too.
+      handChoice: pick.handChoice
+        ? {
+            onPick: (solo) => beginLevel(keepSolo(pick, solo), mode),
+          }
+        : undefined,
     },
   );
 }
