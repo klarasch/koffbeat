@@ -198,8 +198,7 @@ const CELLS: Cell[] = [
   { tier: 5, needs: ["dotted"], ingredientOnly: true, meters: ["3/4"], quarters: 3, wholeBar: true, restRun: 0, endsWithRest: false, make: () => [note("h", { dots: 1 })] },
   // Tier 6 (quarter tied across the beat into an eighth pair's first note)
   { tier: 6, needs: ["ties"], quarters: 2, beatAligned: true, restRun: 0, endsWithRest: false, make: () => [note("q", { tie: true }), note("8"), note("8")] },
-  // Ingredient mode only: a quarter tied to a quarter
-  { tier: 6, needs: ["ties"], ingredientOnly: true, quarters: 2, beatAligned: true, restRun: 0, endsWithRest: false, make: () => [note("q", { tie: true }), note("q")] },
+  // No quarter-tied-to-quarter cell: inside a bar that's just a half note. Quarters tie only across the barline.
   // Tier 7
   { tier: 7, needs: ["sixteenths"], quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("16"), note("16"), note("16"), note("16")] },
   { tier: 7, needs: ["sixteenths"], quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("8"), note("16"), note("16")] },

@@ -426,6 +426,22 @@ describe("ingredients", () => {
     }
   });
 
+  it("a quarter is never tied to a quarter inside a bar (that's just a half note); only across the barline", () => {
+    const rng = mulberry32(31);
+    for (let n = 0; n < 600; n++) {
+      const ingredients: Ingredient[] = ["ties", ...KEYS.filter(() => rng() < 0.3)];
+      const meter = METER_CHOICES[n % 3] as MeterChoice;
+      const level = generateLevel({ tier: 1, ingredients, meter, bars: BAR_COUNTS[n % 3] as 4 | 8 | 16, seed: n });
+      for (const bar of level.bars) {
+        bar.forEach((e, i) => {
+          const next = bar[i + 1];
+          const inBarQuarterTie = e.tie && e.value === "q" && !e.dots && !e.tuplet && next?.value === "q" && !next.dots && !next.tuplet;
+          expect(inBarQuarterTie, `#${n} [${ingredients.join(",")}] ${meter}`).toBeFalsy();
+        });
+      }
+    }
+  });
+
   it("ingredients that aren't selected never appear", () => {
     const rng = mulberry32(77);
     for (let n = 0; n < 600; n++) {
