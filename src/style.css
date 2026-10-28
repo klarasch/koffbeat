@@ -2117,6 +2117,11 @@ body,
 
 /* ---------- Settings page ---------- */
 
+.home-top-actions {
+  display: flex;
+  gap: clamp(8px, 2.5vw, 24px);
+}
+
 .settings-button {
   min-height: 44px;
   min-width: 44px;
@@ -2261,4 +2266,36 @@ body,
   .settings-row.text-toggle:last-child {
     border-bottom: 0;
   }
+}
+
+/* "How to play" (src/ui/howto.ts): the calibration page's layout, over frosted paper so the
+   sand still shows faintly behind. */
+.howto {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(246, 244, 240, 0.82);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  animation: rise 0.35s var(--ease) both;
+}
+
+.howto-page {
+  justify-content: center;
+}
+
+.howto .cal-heading {
+  font-size: clamp(32px, 7vw, 56px);
+}
+
+.howto .cal-text {
+  min-height: 4.5em;
+}
+
+/* Skip sits apart from Back and Next, at the far end of the row. */
+.howto .howto-skip {
+  margin-left: auto;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-dim);
 }

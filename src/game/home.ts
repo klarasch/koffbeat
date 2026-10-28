@@ -3,6 +3,7 @@
 import type { AudioEngine } from "../audio/engine";
 import type { Scene } from "../scene/resonance";
 import { runCalibration } from "../input/calibration";
+import { showHowTo } from "../ui/howto";
 import { onTweak, tweak } from "../ui/tweaks";
 import { chips, field, segmented, select, stepper } from "./controls";
 import { lang, setLang, t } from "../i18n";
@@ -176,7 +177,19 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   settingsButton.className = "settings-button";
   settingsButton.textContent = t("settings.title");
   settingsButton.setAttribute("aria-haspopup", "dialog");
-  top.append(titleBlock, settingsButton);
+  // "How to play" is always one tap away, beside Settings.
+  const howToButton = document.createElement("button");
+  howToButton.type = "button";
+  howToButton.className = "settings-button";
+  howToButton.textContent = t("howto.button");
+  howToButton.setAttribute("aria-haspopup", "dialog");
+  howToButton.addEventListener("click", () => {
+    void showHowTo().then(() => howToButton.focus({ preventScroll: true }));
+  });
+  const topActions = document.createElement("div");
+  topActions.className = "home-top-actions";
+  topActions.append(howToButton, settingsButton);
+  top.append(titleBlock, topActions);
   root.appendChild(top);
 
   const plateSlot = document.createElement("div");

@@ -12,6 +12,7 @@ import { startPlay } from "./game/play";
 import { generateLevel } from "./rhythm/generate";
 import { generateTwoHandLevel } from "./rhythm/twoHands";
 import type { Hand, Level, Mode } from "./types";
+import { hasSeenHowTo, showHowTo } from "./ui/howto";
 import { installInk } from "./ui/ink";
 import { installTweaks } from "./ui/tweaks";
 
@@ -254,6 +255,15 @@ function beginLevel(pick: LevelPick | null, mode: Mode, listen = false): void {
 async function doBeginLevel(pick: LevelPick, mode: Mode, listen: boolean): Promise<void> {
   leaveHome();
   await engine.unlock();
+
+  // The first exercise of all, whichever it is, starts with "How to play".
+  if (!hasSeenHowTo() || !hasSavedOffset()) {
+    (app as HTMLElement).innerHTML = "";
+    scene.setDim(0.6);
+    // The sand rests low on the screen, clear of the instructions.
+    scene.setPlate(window.innerWidth / 2, window.innerHeight * (window.innerWidth < window.innerHeight * 0.9 ? 0.8 : 0.86), Math.min(window.innerWidth * 0.42, 420));
+  }
+  if (!hasSeenHowTo()) await showHowTo(true);
 
   if (!hasSavedOffset()) {
     const root = app as HTMLElement;
