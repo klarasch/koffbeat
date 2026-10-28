@@ -284,6 +284,8 @@ export function stepper(onStep: (delta: number) => void, onReset: () => void, la
 export interface Chips {
   el: HTMLElement;
   set(values: string[]): void;
+  /** Disables a chip (shown off, with `reason` as its title), or enables it again with null. */
+  setDisabled(value: string, reason: string | null): void;
 }
 
 /**
@@ -314,9 +316,10 @@ export function chips(choices: Choice[], initial: string[], onChange: (values: s
     el.appendChild(button);
     return button;
   });
+  const unavailable = new Set<string>();
   function paint(): void {
     choices.forEach((choice, i) => {
-      const on = selected.has(choice.value);
+      const on = selected.has(choice.value) && !unavailable.has(choice.value);
       buttons[i]!.classList.toggle("selected", on);
       buttons[i]!.setAttribute("aria-pressed", String(on));
     });
@@ -326,6 +329,16 @@ export function chips(choices: Choice[], initial: string[], onChange: (values: s
     el,
     set(values: string[]) {
       selected = new Set([...values, ...locked]);
+      paint();
+    },
+    setDisabled(value: string, reason: string | null) {
+      const i = choices.findIndex((c) => c.value === value);
+      const button = buttons[i];
+      if (!button || locked.includes(value)) return;
+      if (reason) unavailable.add(value);
+      else unavailable.delete(value);
+      button.disabled = reason !== null;
+      button.title = reason ?? "";
       paint();
     },
   };

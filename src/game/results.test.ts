@@ -3,9 +3,21 @@ import { judgeRun } from "../rhythm/judge";
 import { LEVELS } from "../rhythm/levels";
 import { levelOnsets, restSpans } from "../rhythm/onsets";
 import { generateTwoHandLevel } from "../rhythm/twoHands";
-import { attackWords, releaseWords, teacherNotes } from "./results";
+import { attackWords, goalNote, releaseWords, teacherNotes } from "./results";
 
 const start = 10;
+
+describe("lesson goal note", () => {
+  const goal = { bpm: 65, pass: 85 };
+  it("says plainly how a slower run compares with the goal", () => {
+    expect(goalNote(90, 50, goal)).toBe("Passed at 50 bpm. The goal is 65.");
+    expect(goalNote(70, 50, goal)).toBe("Not passed yet at 50 bpm. The goal is 65.");
+  });
+  it("stays quiet at the goal tempo or faster", () => {
+    expect(goalNote(90, 65, goal)).toBeNull();
+    expect(goalNote(10, 80, goal)).toBeNull();
+  });
+});
 
 describe("teacher feedback", () => {
   it("words attacks by grade and direction", () => {

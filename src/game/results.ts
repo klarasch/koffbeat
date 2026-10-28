@@ -17,6 +17,17 @@ export interface ResultsCallbacks {
 export interface RetryOptions {
   bpm: number;
   nextLabel?: string;
+  /** A lesson step: the tempo and accuracy it takes to pass. */
+  goal?: { bpm: number; pass: number };
+}
+
+/**
+ * For a lesson step played slower than its goal tempo: whether it passed is plain to see, but it
+ * doesn't count until it's played at the goal. Null when played at the goal or faster.
+ */
+export function goalNote(accuracy: number, playedBpm: number, goal: { bpm: number; pass: number }): string | null {
+  if (playedBpm >= goal.bpm) return null;
+  return accuracy >= goal.pass ? `Passed at ${playedBpm} bpm. The goal is ${goal.bpm}.` : `Not passed yet at ${playedBpm} bpm. The goal is ${goal.bpm}.`;
 }
 
 /**
@@ -253,7 +264,15 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
     mode === "practice"
       ? `Played ${playedBpm} bpm, ${tempoVsTargetWords(result.playedBpm, targetBpm)}.`
       : `Played ${playedBpm} bpm, ${tempoVsTargetWords(result.playedBpm, targetBpm)}. ${capitalize(driftWords(result.driftPercent))}.`;
-  panel.append(detail, buildButtons(callbacks, retry));
+  panel.appendChild(detail);
+  const goal = retry?.goal ? goalNote(result.accuracy, retry.bpm, retry.goal) : null;
+  if (goal) {
+    const goalLine = document.createElement("p");
+    goalLine.className = "results-detail goal-note";
+    goalLine.textContent = goal;
+    panel.appendChild(goalLine);
+  }
+  panel.appendChild(buildButtons(callbacks, retry));
   return panel;
 }
 

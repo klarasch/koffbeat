@@ -317,3 +317,35 @@ describe("generateTwoHandLevel with ingredients", () => {
     expect(generateTwoHandLevel(opts)).toEqual(generateTwoHandLevel(opts));
   });
 });
+
+describe("generateTwoHandLevel with cross rhythm", () => {
+  it("puts a 3:2 bar in every phrase of every relation, one hand in triplets over the other", () => {
+    for (let stage = 1; stage <= 3; stage++) {
+      for (const bars of [4, 8, 16] as const) {
+        for (let seed = 0; seed < 30; seed++) {
+          const tier = 1 + (seed % 10); // below the triplet tier, so only cross bars have triplets
+          const level = generateTwoHandLevel({ stage, tier, bars, seed, cross: true });
+          const label = `stage ${stage} ${bars} bars seed ${seed}`;
+          expect(validateLevel(level), label).toEqual([]);
+          expect(level.id).toContain("-x");
+          const [left, right] = level.lines!;
+          expect(left).toHaveLength(bars);
+          const hasTriplets = (bar: RhythmEvent[]) => bar.some((e) => e.tuplet === 3);
+          for (let at = 2; at < bars; at += 4) {
+            expect([hasTriplets(left![at]!), hasTriplets(right![at]!)].filter(Boolean), label).toHaveLength(1);
+          }
+          const tripletBars = [left!, right!].flatMap((line) => line.filter(hasTriplets));
+          expect(tripletBars, label).toHaveLength(Math.ceil(bars / 4));
+        }
+      }
+    }
+  });
+
+  it("is off by default, deterministic, and ignored by the dedicated 3 against 2 stage", () => {
+    const plain = generateTwoHandLevel({ stage: 3, tier: 4, bars: 8, seed: 5 });
+    expect(plain.lines!.flat(2).some((e) => e.tuplet === 3)).toBe(false);
+    const opts = { stage: 3, tier: 4, bars: 8 as const, seed: 5, cross: true };
+    expect(generateTwoHandLevel(opts)).toEqual(generateTwoHandLevel(opts));
+    expect(generateTwoHandLevel({ stage: 4, bars: 8, seed: 5, cross: true }).id).toBe(generateTwoHandLevel({ stage: 4, bars: 8, seed: 5 }).id);
+  });
+});
