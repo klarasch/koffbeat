@@ -2041,33 +2041,6 @@ body,
   gap: 6px;
 }
 
-/* Home's rhythm chips on an even grid whose columns meet the panel's own, so both edges line
-   up with the fields around them: 2 a row on one column, 4 on two (one per field column on
-   four), and 6 beside Hands (two per field column). */
-.home-panel .rhythms-field .chips {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.home-panel .rhythms-field .chip {
-  min-width: 0;
-  padding: 0 8px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-@media (min-width: 720px) {
-  .home-panel .rhythms-field .chips {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-}
-
-@media (min-width: 1100px) {
-  .home-panel .one-hand > .rhythms-field .chips {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
-}
-
 .chip {
   height: 36px;
   padding: 0 12px;
@@ -2370,99 +2343,111 @@ body,
   color: rgba(246, 244, 240, 0.8);
 }
 
-/* ---------- Calm controls ----------
-   Every choice sits on one light tinted track; what's chosen is a raised white piece, not a
-   solid dark block. So a panel full of choices reads quietly, and Play stays the loudest thing
-   on the screen. Rhythm chips follow the same rule. */
-.segmented {
-  gap: 2px;
-  padding: 3px;
-  border-radius: 7px;
-  background: rgba(42, 30, 52, 0.06);
-}
-
-.segmented .segment {
-  height: 38px;
-  margin: 0;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-}
-
-.segmented .segment.selected {
-  background: #fff;
-  color: var(--ink);
-  font-weight: 500;
-  box-shadow:
-    0 1px 2px rgba(42, 30, 52, 0.14),
-    0 0 0 1px rgba(42, 30, 52, 0.06);
-}
-
-@media (hover: hover) {
-  .segmented .segment:not(.selected):hover {
-    background: rgba(255, 255, 255, 0.55);
-    color: var(--ink);
-  }
-}
-
-.select-button {
-  border: 0;
-  border-radius: 7px;
-  background: rgba(42, 30, 52, 0.06);
-}
-
-@media (hover: hover) {
-  .select-button:hover {
-    background: rgba(42, 30, 52, 0.09);
-  }
-}
-
-/* The stepper: the same track, its value in the middle. */
-.segmented.stepper .step-value {
-  background: transparent;
-}
-
+/* ---------- Arcade controls ----------
+   Hard 2 px ink edges, square corners, labels in mono capitals; what's chosen is filled with
+   ink. No shadows: the edges carry it, like the pixel wordmark. */
+.segment,
+.select-button,
 .chip {
-  height: 38px;
-  border: 0;
-  border-radius: 5px;
-  background: rgba(42, 30, 52, 0.06);
-  color: var(--ink-dim);
+  border: 2px solid var(--ink);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
 }
 
+.segment + .segment {
+  margin-left: -2px;
+}
+
+.segment:first-child,
+.segment:last-child {
+  border-radius: 0;
+}
+
+.segment.selected,
 .chip.selected {
-  background: #fff;
-  color: var(--ink);
-  font-weight: 500;
-  box-shadow:
-    0 1px 2px rgba(42, 30, 52, 0.14),
-    0 0 0 1px rgba(42, 30, 52, 0.06);
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--void);
 }
 
 @media (hover: hover) {
+  .segment:not(.selected):hover,
+  .select-button:hover,
   .chip:not(:disabled):not(.selected):hover {
-    background: rgba(42, 30, 52, 0.1);
-    border-color: transparent;
+    background: rgba(42, 30, 52, 0.07);
+    border-color: var(--ink);
     color: var(--ink);
-  }
-
-  .chip.selected:not(:disabled):hover {
-    background: #fff;
   }
 }
 
-/* The rhythm grid: the chips share one track, like the other choices. */
+/* The lesson list keeps its own case: lesson names read as names. */
+.select-button {
+  font-family: var(--ui);
+  font-size: 15px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.select-list {
+  border: 2px solid var(--ink);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.stepper .step,
+.stepper .step-value {
+  font-size: 14px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* The rhythms: no boxes, each one its pixel drawing and a short name. Chosen ones are in ink
+   with a purple bar underneath; the rest stay faint. */
 .home-panel .rhythms-field .chips {
-  gap: 2px;
-  padding: 3px;
-  border-radius: 7px;
-  background: rgba(42, 30, 52, 0.06);
+  gap: 4px 22px;
 }
 
 .home-panel .rhythms-field .chip {
+  height: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 9px;
+  border: 0;
   background: transparent;
+  color: var(--ink-faint);
+}
+
+.home-panel .rhythms-field .chip .px-icon {
+  display: block;
+  flex: none;
+  opacity: 0.6;
 }
 
 .home-panel .rhythms-field .chip.selected {
-  background: #fff;
+  color: var(--ink);
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+
+.home-panel .rhythms-field .chip.selected .px-icon {
+  opacity: 1;
+}
+
+@media (hover: hover) {
+  .home-panel .rhythms-field .chip:not(:disabled):not(.selected):hover {
+    background: transparent;
+    color: var(--ink);
+  }
+}
+
+/* Quarter notes are always in: shown chosen, but quieter. */
+.home-panel .rhythms-field .chip:disabled.selected {
+  opacity: 0.55;
 }
