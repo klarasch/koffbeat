@@ -2255,3 +2255,17 @@ body,
   background: transparent;
   color: var(--ink-dim);
 }
+
+/* A run that ended early, or just after listening: only a heading, a line and the actions. The
+   block is as tall as that, centred in the space, rather than stretched with a gap inside. */
+.results-panel.ended-early {
+  justify-content: center;
+}
+
+.results-panel.ended-early > .bento {
+  flex: 0 1 auto;
+}
+
+.results-panel.ended-early .bento-grow {
+  flex: 0 0 auto;
+}
