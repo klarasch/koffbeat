@@ -1427,11 +1427,25 @@ body,
   .home-panel .home-fields {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
 
-  .home-fields:has(> .part-field[hidden]) > .hands-field,
-  .home-fields:has(> .meter-field[hidden]) > .length-field {
-    grid-column: 1 / -1;
+/* Wide screens: four columns, so everything fits without scrolling. Free practice reads
+   Hands | Play | How the hands relate, then the rhythms, then Meter | Length | Mode | Tempo;
+   a lesson is one row: Lesson | Piece | Step | Tempo. */
+@media (min-width: 1100px) {
+  .home-panel .home-fields {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
+
+  .home-fields > .relate-field {
+    grid-column: span 2;
+  }
+}
+
+/* A field that doesn't apply right now keeps its place, greyed out (home.ts setOff). */
+.field-off {
+  opacity: 0.38;
+  pointer-events: none;
 }
 
 /* Home's choices as one ruled block: each field a cell, hairlines between them. */
@@ -1669,11 +1683,67 @@ body,
 }
 
 /* Home on phones: the sand is a backdrop behind the choices (home.ts), so no slot of its own,
-   just a little air under the title. */
+   just a little air under the title. The page scrolls under a header that stays put. */
 @media (max-width: 640px) and (max-aspect-ratio: 9/10) {
   .home-plate-slot {
     min-height: 40px;
     flex: 0 0 40px;
+  }
+
+  .home-top {
+    position: sticky;
+    top: calc(-1 * env(safe-area-inset-top, 0px));
+    z-index: 6;
+    margin-top: calc(-1 * env(safe-area-inset-top, 0px));
+    padding-top: calc(env(safe-area-inset-top, 0px) + clamp(20px, 5vh, 48px));
+    padding-bottom: 18px;
+    background: linear-gradient(to bottom, var(--void) 70%, rgba(246, 244, 240, 0));
+  }
+}
+
+/* Home on larger screens fits the window: the header stays put, the sand takes the space that
+   is left (and flows on behind the choices), Play sits at the bottom, and only the choices
+   would scroll, inside their block, on a very short window. */
+@media not all and (max-width: 640px) and (max-aspect-ratio: 9/10) {
+  .home {
+    overflow: hidden;
+  }
+
+  .home-top {
+    flex: none;
+  }
+
+  .home-plate-slot {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+  }
+
+  .home-dock {
+    flex: 0 1 auto;
+    min-height: 0;
+  }
+
+  .home-dock > .home-panel {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .home-dock {
+    gap: 16px;
+  }
+
+  .home-dock > .home-footer {
+    flex: none;
+    position: relative;
+    margin-top: 0;
+    padding-top: 12px;
+  }
+
+  .home-footer .play-cta-word {
+    font-size: clamp(44px, 8vh, 72px);
   }
 }
 

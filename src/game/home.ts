@@ -34,6 +34,14 @@ export function leaveHome(): void {
 const FIGURE_CYCLE_MS = 15000;
 
 /** The plate floats behind the hero, gently ringing and drifting through figures. */
+/** Greys a field out (and takes it out of reach) while it doesn't apply, keeping its place. */
+function setOff(fieldEl: HTMLElement, off: boolean, reason: string): void {
+  fieldEl.classList.toggle("field-off", off);
+  fieldEl.inert = off;
+  if (off) fieldEl.title = reason;
+  else fieldEl.removeAttribute("title");
+}
+
 /** A narrow, upright screen: the sand becomes a quiet backdrop instead of a framed picture. */
 export function isPhoneBackdrop(): boolean {
   return window.innerWidth <= 640 && window.innerWidth < window.innerHeight * 0.9;
@@ -50,17 +58,20 @@ function startHomeScene(scene: Scene, slot: HTMLElement): void {
   const place = () => {
     // Phones: the sand lies quietly behind the whole screen and stays put while the choices scroll.
     if (isPhoneBackdrop()) {
+      scene.setSteep(false);
       scene.setDim(tweak("sandHome"));
       scene.setPlate(window.innerWidth / 2, window.innerHeight * 0.42, window.innerWidth * 0.72);
       return;
     }
-    // Larger screens: the sand sits above the choices, large, and flows on behind them (the glass
-    // blurs it). It stays put while the choices scroll, so it is placed as if unscrolled.
+    // Larger screens: the sand fills the space above the choices, seen from above (as on a
+    // tablet held upright), and flows on behind them, where the glass blurs it.
+    scene.setSteep(true);
     scene.setDim(0.15);
+    // Centred on the top edge of the choices: the upper half fills the space above them, the
+    // lower half glows through the glass.
     const rect = slot.getBoundingClientRect();
-    const scrolled = slot.parentElement?.scrollTop ?? 0;
-    const radius = Math.min(window.innerWidth * 0.3, rect.height * 1.1, 420);
-    scene.setPlate(rect.left + rect.width / 2, rect.top + scrolled + rect.height * 0.62, radius);
+    const radius = Math.max(180, Math.min(window.innerWidth * 0.3, window.innerHeight * 0.42, 600));
+    scene.setPlate(rect.left + rect.width / 2, rect.bottom - 8, radius);
   };
   place();
   const observer = new ResizeObserver(place);
@@ -77,6 +88,7 @@ function startHomeScene(scene: Scene, slot: HTMLElement): void {
     observer.disconnect();
     window.removeEventListener("scroll", place);
     window.removeEventListener("resize", place);
+    scene.setSteep(false);
     offTweak();
     clearInterval(timer);
     scene.setAmbient(0);
@@ -378,10 +390,11 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     const lessons = track === "lessons";
     lessonFields.hidden = !lessons;
     freeFields.hidden = lessons;
-    relateField.hidden = hands !== 2;
-    partField.hidden = hands !== 2;
+    // Fields that don't apply stay in place, greyed out, so the layout never jumps.
+    setOff(relateField, hands !== 2, "Needs two hands");
+    setOff(partField, hands !== 2, "Needs two hands");
     // Two-hand exercises are written in 4/4.
-    meterField.hidden = hands === 2;
+    setOff(meterField, hands === 2, "Two-hand pieces are in 4/4");
     ingredientChips.setDisabled(CROSS_CHIP, hands === 2 ? null : "Needs two hands");
     if (lessons) {
       const lesson = LESSONS[lessonIndex]!;
