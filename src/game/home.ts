@@ -4,6 +4,7 @@ import type { AudioEngine } from "../audio/engine";
 import type { Scene } from "../scene/resonance";
 import { runCalibration } from "../input/calibration";
 import { showHowTo } from "../ui/howto";
+import { kbd } from "../ui/keys";
 import { onTweak, tweak } from "../ui/tweaks";
 import { chips, field, segmented, select, stepper } from "./controls";
 import { lang, setLang, t } from "../i18n";
@@ -404,9 +405,10 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   const play = document.createElement("button");
   play.type = "button";
   play.className = "play-cta";
-  play.innerHTML = `<span class="play-cta-word"></span><span class="play-cta-arrow" aria-hidden="true"><kbd class="kbd">↵</kbd>→</span><span class="play-cta-what"></span>`;
+  play.innerHTML = `<span class="play-cta-word"></span><span class="play-cta-arrow" aria-hidden="true">→</span><span class="play-cta-what"></span>`;
   const playWhat = play.lastChild as HTMLElement;
   (play.firstChild as HTMLElement).textContent = t("home.playWord");
+  (play.children[1] as HTMLElement).prepend(kbd("↵", "kbd-big"));
 
   const defaultBpm = () => 65;
 

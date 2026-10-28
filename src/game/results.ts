@@ -1,7 +1,7 @@
 // Builds the results overlay shown after a run: two headline scores, tempo detail, and the
 // Retry / next / Home actions. Pure DOM builder — timing and judging happen in play.ts.
 
-import { setTextWithKeys } from "../ui/keys";
+import { kbd, setTextWithKeys } from "../ui/keys";
 import { type Key, t } from "../i18n";
 import type { Grade, Mode, OnsetJudgement, RunResult } from "../types";
 import { stepper } from "./controls";
@@ -369,10 +369,7 @@ function actionButton(label: string, key: string, onClick: () => void, extraClas
   button.className = `results-button ${extraClass}`.trim();
   const text = document.createElement("span");
   text.textContent = label;
-  const kbd = document.createElement("kbd");
-  kbd.className = "kbd";
-  kbd.textContent = key;
-  button.append(text, kbd);
+  button.append(text, kbd(key));
   button.addEventListener("click", onClick);
   return button;
 }
@@ -382,9 +379,9 @@ function mainButton(label: string, key: string, arrow: boolean, onClick: () => v
   const button = document.createElement("button");
   button.type = "button";
   button.className = "results-main";
-  button.innerHTML = `<span class="results-main-word"></span><kbd class="kbd"></kbd>${arrow ? `<span class="results-main-arrow" aria-hidden="true">→</span>` : ""}`;
+  button.innerHTML = `<span class="results-main-word"></span>${arrow ? `<span class="results-main-arrow" aria-hidden="true">→</span>` : ""}`;
   (button.firstChild as HTMLElement).textContent = label;
-  (button.children[1] as HTMLElement).textContent = key;
+  button.insertBefore(kbd(key, "kbd-big"), button.children[1] ?? null);
   button.addEventListener("click", onClick);
   return button;
 }

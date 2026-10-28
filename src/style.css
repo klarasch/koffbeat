@@ -1559,7 +1559,7 @@ body,
    with the other way on beside it. */
 .bento > .results-buttons {
   flex: 0 0 auto;
-  gap: 10px;
+  gap: 20px;
 }
 
 .results-main-row {
@@ -1572,7 +1572,7 @@ body,
 
 .results-main {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
   min-height: 44px;
   color: var(--ink);
@@ -1987,8 +1987,27 @@ body,
   gap: 14px;
 }
 
-.play-cta-arrow .kbd {
-  font-size: 11px;
+/* Enter and the arrows: drawn icons, centred in the box. */
+.kbd-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kbd-icon svg {
+  display: block;
+  width: 1.3em;
+  height: 1.3em;
+}
+
+/* Beside a big action word (Play, Retry): a larger key, centred on the word. */
+.kbd-big {
+  min-width: 30px;
+  min-height: 26px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 16px;
 }
 
 
