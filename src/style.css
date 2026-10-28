@@ -2177,3 +2177,48 @@ body,
     min-height: 44px;
   }
 }
+
+/* Larger screens: Settings opens as a small popover under its button instead of a whole page,
+   on the same glass as the choices. (home.ts closes it on a click outside.) */
+@media not all and (max-width: 640px) and (max-aspect-ratio: 9/10) {
+  .settings-page {
+    inset: auto;
+    top: calc(env(safe-area-inset-top) + clamp(20px, 5vh, 48px) + 32px);
+    right: clamp(18px, 5vw, 56px);
+    width: 340px;
+    max-height: calc(100vh - 140px);
+    padding: 6px 20px 8px;
+    border: 1px solid rgba(42, 30, 52, var(--lines, 0.12));
+    border-radius: 16px;
+    background: rgba(251, 250, 247, 0.88);
+    -webkit-backdrop-filter: blur(18px) saturate(1.1);
+    backdrop-filter: blur(18px) saturate(1.1);
+    box-shadow: 0 18px 48px -18px rgba(42, 30, 52, 0.28);
+    animation: rise 0.25s var(--ease) both;
+  }
+
+  .settings-bar {
+    padding: 12px 0 4px;
+  }
+
+  .settings-back {
+    display: none;
+  }
+
+  .settings-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+  }
+
+  .settings-rows {
+    padding: 0;
+  }
+
+  .settings-row.text-toggle:last-child {
+    border-bottom: 0;
+  }
+}

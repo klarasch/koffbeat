@@ -482,12 +482,26 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   root.appendChild(settingsPage);
   const closeSettings = () => {
     settingsPage.hidden = true;
+    settingsButton.setAttribute("aria-expanded", "false");
     settingsButton.focus();
   };
   settingsButton.addEventListener("click", () => {
+    if (!settingsPage.hidden) {
+      closeSettings();
+      return;
+    }
     settingsPage.hidden = false;
-    settingsBack.focus();
+    settingsButton.setAttribute("aria-expanded", "true");
+    // The popover (larger screens) has no back button: focus its first row instead.
+    (isPhoneBackdrop() ? settingsBack : (settingsRows.firstElementChild as HTMLElement | null))?.focus();
   });
+  // As a popover, a click anywhere else closes it.
+  const onOutside = (event: PointerEvent) => {
+    if (settingsPage.hidden || isPhoneBackdrop()) return;
+    const target = event.target as Node;
+    if (!settingsPage.contains(target) && !settingsButton.contains(target)) closeSettings();
+  };
+  document.addEventListener("pointerdown", onOutside);
   settingsBack.addEventListener("click", closeSettings);
   const onSettingsKey = (event: KeyboardEvent) => {
     if (event.key === "Escape" && !settingsPage.hidden) {
@@ -507,6 +521,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     sceneCleanup?.();
     window.removeEventListener("keydown", onKey);
     window.removeEventListener("keydown", onSettingsKey);
+    document.removeEventListener("pointerdown", onOutside);
   };
   opts.engine.setAmbience(0.6, 2);
 }
