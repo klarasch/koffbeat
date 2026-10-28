@@ -4,11 +4,13 @@
 // each piece) is kept on this device. Pure data and storage; main.ts turns a step into a
 // playable level.
 
-import { generateLevel, TIER_NAMES } from "../rhythm/generate";
-import { generateTwoHandLevel, TWO_HAND_STAGES } from "../rhythm/twoHands";
+import { type Key, t } from "../i18n";
+import { generateLevel, tierName } from "../rhythm/generate";
+import { generateTwoHandLevel, stageName } from "../rhythm/twoHands";
 import type { Hand, Level, Mode } from "../types";
 
 export interface LessonStep {
+  /** In the current language (read when shown, so a language switch needs no reload). */
   label: string;
   mode: Mode;
   /** The suggested tempo: a step counts as done only at this tempo or faster. */
@@ -42,25 +44,34 @@ export function handsAreIndependent(stage: number, cross = false): boolean {
 /** Fixed pieces per lesson. */
 export const PIECES = 3;
 
+function step(key: Key, rest: Omit<LessonStep, "label">): LessonStep {
+  return {
+    get label() {
+      return t(key);
+    },
+    ...rest,
+  };
+}
+
 const READING_STEPS: LessonStep[] = [
-  { label: "Learn", mode: "practice", bpm: 55, guide: true },
-  { label: "Practice", mode: "practice", bpm: 65 },
-  { label: "Count-in", mode: "countIn", bpm: 65 },
+  step("step.learn", { mode: "practice", bpm: 55, guide: true }),
+  step("step.practice", { mode: "practice", bpm: 65 }),
+  step("step.countIn", { mode: "countIn", bpm: 65 }),
 ];
 
 /** Hands that play in turn or in unison: nothing to learn hand by hand, so straight to both. */
 const SHARED_HANDS_STEPS: LessonStep[] = [
-  { label: "Learn", mode: "practice", bpm: 55, guide: true },
-  { label: "Together", mode: "practice", bpm: 60 },
-  { label: "Count-in", mode: "countIn", bpm: 60 },
+  step("step.learn", { mode: "practice", bpm: 55, guide: true }),
+  step("step.together", { mode: "practice", bpm: 60 }),
+  step("step.countIn", { mode: "countIn", bpm: 60 }),
 ];
 
 /** Independent hands: each hand alone first, then together. */
 const TWO_HAND_STEPS: LessonStep[] = [
-  { label: "Right hand", mode: "practice", bpm: 55, solo: 1 },
-  { label: "Left hand", mode: "practice", bpm: 55, solo: 0 },
-  { label: "Together", mode: "practice", bpm: 60 },
-  { label: "Count-in", mode: "countIn", bpm: 60 },
+  step("step.right", { mode: "practice", bpm: 55, solo: 1 }),
+  step("step.left", { mode: "practice", bpm: 55, solo: 0 }),
+  step("step.together", { mode: "practice", bpm: 60 }),
+  step("step.countIn", { mode: "countIn", bpm: 60 }),
 ];
 
 /** Two-hand lessons: each stage with a reading tier the hands are comfortable with by then. */
@@ -72,10 +83,20 @@ const TWO_HAND_LESSONS: [stage: number, tier: number][] = [
 ];
 
 export const LESSONS: Lesson[] = [
-  ...TIER_NAMES.map((name, i): Lesson => ({ id: `read-${i + 1}`, title: name, tier: i + 1, bars: 8, steps: READING_STEPS })),
+  ...Array.from({ length: 12 }, (_, i): Lesson => ({
+    id: `read-${i + 1}`,
+    get title() {
+      return tierName(i + 1);
+    },
+    tier: i + 1,
+    bars: 8,
+    steps: READING_STEPS,
+  })),
   ...TWO_HAND_LESSONS.map(([stage, tier]): Lesson => ({
     id: `hands-${stage}`,
-    title: `Two hands: ${TWO_HAND_STAGES[stage - 1]?.toLowerCase()}`,
+    get title() {
+      return t("title.lessonTwoHands", { stage: stageName(stage).toLowerCase() });
+    },
     tier,
     stage,
     bars: 4,

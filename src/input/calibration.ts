@@ -1,4 +1,5 @@
 import type { AudioEngine } from "../audio/engine";
+import { t } from "../i18n";
 import { attachInput } from "./input";
 
 /** Result of matching tapped times against the click grid used to elicit them. */
@@ -154,23 +155,23 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
 
     const label = document.createElement("p");
     label.className = "cal-label";
-    label.textContent = "Latency calibration";
+    label.textContent = t("cal.label");
 
     const heading = document.createElement("h1");
     heading.className = "cal-heading";
-    heading.textContent = "Tune your timing";
+    heading.textContent = t("cal.heading");
 
     const explanation = document.createElement("p");
     explanation.className = "cal-text";
-    explanation.textContent = "Tap along with the clicks on the pad below, or press F or J. This measures your device’s delay so every tap is judged fairly. Listen to the sound, not the screen.";
+    explanation.textContent = t("cal.text");
 
     const statusLine = document.createElement("p");
     statusLine.className = "cal-status";
 
-    const startButton = createButton("Start", "primary");
-    const skipButton = createButton("Skip for now", "secondary");
+    const startButton = createButton(t("cal.start"), "primary");
+    const skipButton = createButton(t("cal.skipForNow"), "secondary");
     // While a round runs, the only way out: stops it and leaves calibration.
-    const cancelButton = createButton("Cancel", "secondary");
+    const cancelButton = createButton(t("cal.cancel"), "secondary");
     const cancelRow = document.createElement("div");
     cancelRow.className = "cal-actions";
     cancelRow.append(cancelButton);
@@ -180,7 +181,7 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
     // "clicked" Start, restarting the round on top of the one still playing.
     const tapPad = document.createElement("div");
     tapPad.className = "cal-pad";
-    tapPad.textContent = "Tap here";
+    tapPad.textContent = t("cal.pad");
     tapPad.hidden = true;
 
     const resultBox = document.createElement("div");
@@ -190,9 +191,9 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
     resultNumber.className = "cal-number";
     const resultText = document.createElement("p");
     resultText.className = "cal-text";
-    const saveButton = createButton("Save", "primary");
-    const retryButton = createButton("Retry", "secondary");
-    const skipAfterButton = createButton("Skip", "secondary");
+    const saveButton = createButton(t("cal.save"), "primary");
+    const retryButton = createButton(t("cal.retry"), "secondary");
+    const skipAfterButton = createButton(t("cal.skip"), "secondary");
     const resultActions = document.createElement("div");
     resultActions.className = "cal-actions";
     resultActions.append(saveButton, retryButton, skipAfterButton);
@@ -275,7 +276,7 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
       startRow.hidden = true;
       cancelRow.hidden = false;
       resultBox.hidden = true;
-      statusLine.textContent = "Listen…";
+      statusLine.textContent = t("cal.listen");
 
       await engine.unlock();
 
@@ -308,19 +309,19 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
       let result: CalibrationResult = { offsetSec: 0, spreadMs: 0, ok: false };
       await new Promise<void>((done) => {
         const timer = setInterval(() => {
-          const t = engine.now();
-          const beat = Math.floor((t - startTime) / SECONDS_PER_BEAT);
+          const now = engine.now();
+          const beat = Math.floor((now - startTime) / SECONDS_PER_BEAT);
           if (beat < BEATS_PER_BAR) {
-            statusLine.textContent = beat < 0 ? "Listen…" : `Listen…  ${BEATS_PER_BAR - beat}`;
+            statusLine.textContent = beat < 0 ? t("cal.listen") : t("cal.listenN", { n: BEATS_PER_BAR - beat });
           } else if (usableTaps.length < TAPS_NEEDED) {
-            statusLine.textContent = usableTaps.length === 0 ? "Tap along whenever you’re ready" : "Keep tapping on the beat";
+            statusLine.textContent = usableTaps.length === 0 ? t("cal.tapWhenReady") : t("cal.keepTapping");
           } else {
-            statusLine.textContent = "Keep it steady…";
+            statusLine.textContent = t("cal.keepSteady");
           }
           const recent = usableTaps.slice(-TAPS_NEEDED);
           progressBars.forEach((bar, i) => bar.classList.toggle("on", i < recent.length));
           if (recent.length >= TAPS_NEEDED) result = computeOffset(recent, clickTimes);
-          if (result.ok || t >= endTime || cancelled) {
+          if (result.ok || now >= endTime || cancelled) {
             clearInterval(timer);
             done();
           }
@@ -342,12 +343,12 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
       lastOffsetSec = result.ok ? result.offsetSec : loadOffset();
       const offsetMs = Math.round(result.offsetSec * 1000);
       statusLine.textContent = "";
-      resultNumber.textContent = result.ok ? `${Math.abs(offsetMs)} ms` : "Not yet";
+      resultNumber.textContent = result.ok ? `${Math.abs(offsetMs)} ms` : t("cal.notYet");
       resultText.textContent = result.ok
-        ? `Your device's delay${offsetMs >= 0 ? " (taps land late)" : " (taps land early)"}. Save it, and every tap will be judged with it taken out.`
+        ? t("cal.resultOk", { when: t(offsetMs >= 0 ? "cal.delayLate" : "cal.delayEarly") })
         : usableTaps.length < TAPS_NEEDED
-          ? `Only ${usableTaps.length} taps landed near the clicks. Try again, or skip for now.`
-          : `Taps weren’t steady enough yet (spread ${Math.round(result.spreadMs)} ms). Try again, or skip for now.`;
+          ? t("cal.fewTaps", { n: usableTaps.length })
+          : t("cal.unsteady", { ms: Math.round(result.spreadMs) });
       resultBox.hidden = false;
       saveButton.hidden = !result.ok;
     }

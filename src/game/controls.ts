@@ -2,6 +2,7 @@
 // segmented control, a styled select with its own listbox, and a numeric stepper. All are
 // keyboard and screen-reader friendly.
 
+import { t } from "../i18n";
 export interface Choice {
   value: string;
   label: string;
@@ -333,7 +334,7 @@ export function chips(choices: Choice[], initial: string[], onChange: (values: s
     button.textContent = choice.label;
     if (locked.includes(choice.value)) {
       button.disabled = true;
-      button.title = "Always included";
+      button.title = t("home.alwaysIncluded");
     }
     button.addEventListener("click", () => {
       if (locked.includes(choice.value)) return;

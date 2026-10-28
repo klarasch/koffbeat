@@ -3,6 +3,7 @@
 // shown karaoke-style (upcoming/next/active/graded) rather than with a moving playhead — nothing
 // on screen advances at the nominal tempo, only when the player actually plays.
 
+import { t } from "../i18n";
 import type { AudioEngine } from "../audio/engine";
 import { loadOffset } from "../input/calibration";
 import { attachInput } from "../input/input";
@@ -126,7 +127,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   const homeButton = document.createElement("button");
   homeButton.type = "button";
   homeButton.className = "home-button";
-  homeButton.setAttribute("aria-label", "Home");
+  homeButton.setAttribute("aria-label", t("play.home"));
   homeButton.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   const titleEl = document.createElement("div");
   titleEl.className = "play-title";
@@ -135,12 +136,12 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   const twoHands = levelLines(level).length > 1;
   // Hands the player plays: both on a two-hand level, unless practising one of them.
   const hands: Hand[] = solo !== undefined && twoHands ? [solo] : twoHands ? [0, 1] : [0];
-  (titleEl.lastChild as HTMLElement).textContent = `${level.bpm} bpm, ${demo ? "listening" : mode === "practice" ? (guide ? "play along" : "practice") : "count-in"}`;
+  (titleEl.lastChild as HTMLElement).textContent = t("play.meta", { bpm: level.bpm, what: t(demo ? "play.metaListening" : mode === "practice" ? (guide ? "play.metaAlong" : "play.metaPractice") : "play.metaCountIn") });
   topbar.append(homeButton, titleEl);
   if (options.steps) {
     const steps = document.createElement("ol");
     steps.className = "step-indicator";
-    steps.setAttribute("aria-label", "Steps");
+    steps.setAttribute("aria-label", t("play.steps"));
     options.steps.labels.forEach((label, i) => {
       const li = document.createElement("li");
       li.textContent = label;
@@ -165,12 +166,12 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     return button;
   };
   const restartButton = iconButton(
-    demo ? "Start over (R)" : "Restart (R)",
+    t(demo ? "play.startOver" : "play.restart"),
     `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5 12a7 7 0 1 0 2.05-4.95M5 4v4h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
     () => leave(() => (demo ? callbacks.onListen() : callbacks.onRetry())),
   );
   const stopButton = iconButton(
-    "Stop (Esc)",
+    t("play.stop"),
     `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="currentColor"/></svg>`,
     () => finish("stopped"),
   );
@@ -185,15 +186,15 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     handSwitch = document.createElement("div");
     handSwitch.className = "hand-switch bento-cell";
     handSwitch.setAttribute("role", "group");
-    handSwitch.setAttribute("aria-label", "Play again with");
+    handSwitch.setAttribute("aria-label", t("play.againWith"));
     const handLabel = document.createElement("span");
     handLabel.className = "option-label";
-    handLabel.textContent = "Play again with";
+    handLabel.textContent = t("play.againWith");
     handSwitch.appendChild(handLabel);
     const choices: [Hand | undefined, string][] = [
-      [undefined, "Both hands"],
-      [1, "Right hand"],
-      [0, "Left hand"],
+      [undefined, t("play.bothHands")],
+      [1, t("play.rightHand")],
+      [0, t("play.leftHand")],
     ];
     for (const [hand, label] of choices) {
       const button = document.createElement("button");
@@ -251,13 +252,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   zoneLeftLabel.className = "tap-zone-label";
   // The key in brackets is for keyboards only; touch screens hide it (.key-hint).
   const zoneLabel = (words: string, key: string) => `${words}<span class="key-hint"> (${key})</span>`;
-  zoneLeftLabel.innerHTML = demo ? "" : twoHands ? (solo === 1 ? "" : zoneLabel("left hand", "F")) : zoneLabel("tap", "F");
+  zoneLeftLabel.innerHTML = demo ? "" : twoHands ? (solo === 1 ? "" : zoneLabel(t("play.zoneLeft"), "F")) : zoneLabel(t("play.zoneTap"), "F");
   zoneLeft.appendChild(zoneLeftLabel);
   const zoneRight = document.createElement("div");
   zoneRight.className = "tap-zone tap-zone-right";
   const zoneRightLabel = document.createElement("span");
   zoneRightLabel.className = "tap-zone-label";
-  zoneRightLabel.innerHTML = demo ? "" : twoHands ? (solo === 0 ? "" : zoneLabel("right hand", "J")) : zoneLabel("tap", "J");
+  zoneRightLabel.innerHTML = demo ? "" : twoHands ? (solo === 0 ? "" : zoneLabel(t("play.zoneRight"), "J")) : zoneLabel(t("play.zoneTap"), "J");
   zoneRight.appendChild(zoneRightLabel);
   tapArea.append(zoneLeft, zoneRight);
   stage.appendChild(tapArea);
@@ -285,11 +286,11 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   const reviewHint = document.createElement("span");
   reviewHint.className = "review-hint";
   const canHover = typeof matchMedia === "function" && matchMedia("(hover: hover)").matches;
-  reviewHint.textContent = canHover ? "Point at a note to see how it landed" : "Tap a note to see how it landed";
+  reviewHint.textContent = t(canHover ? "play.reviewHover" : "play.reviewTouch");
   const reviewBack = document.createElement("button");
   reviewBack.type = "button";
   reviewBack.className = "results-button review-back";
-  reviewBack.textContent = "Back to results";
+  reviewBack.textContent = t("play.backToResults");
   reviewBar.append(reviewHint, reviewBack);
   screen.appendChild(reviewBar);
 
@@ -644,7 +645,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       const current = timeline[twoHands ? (nowByHand.get(hit.zone) ?? -1) : nextPointer];
       const inOwnRest = current?.kind === "rest" && (!twoHands || current.hand === hit.zone);
       if (current && inOwnRest) spoilRest(current);
-      showGradeFlash("miss", inOwnRest ? "that's a rest" : otherHandDue(hit) ? "other hand" : "extra tap");
+      showGradeFlash("miss", inOwnRest ? t("flash.rest") : otherHandDue(hit) ? t("flash.otherHand") : t("flash.extra"));
       if (current) staff.pulse(primaryEventIndex(current), "miss");
       markBarDirty(liveJudge.beatAt(hit.time));
       scene.strike("miss", lastPress.x, lastPress.y);
@@ -706,7 +707,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
         if (item) staff.revealEvent(primaryEventIndex(item));
       }
     }
-    showGradeFlash(judged.grade, judged.resynced ? "back in" : attackWords(judged.grade, judged.errorMs ?? 0));
+    showGradeFlash(judged.grade, judged.resynced ? t("flash.backIn") : attackWords(judged.grade, judged.errorMs ?? 0));
   }
 
   function handleRelease(release: Release): void {
@@ -782,9 +783,9 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   function checkLost(): void {
     if (ended) return;
     const current = timeline[nextPointer];
-    const where = current ? ` in bar ${barOf(current.beat)}` : "";
-    if (missedInARow >= (clockDriven ? LOST_MISSED_NOTES_CLOCKED : LOST_MISSED_NOTES)) lostReason = `${missedInARow} notes in a row were missed${where}.`;
-    else if (strayInARow >= LOST_STRAY_TAPS) lostReason = `${strayInARow} taps in a row didn't match a note${where}.`;
+    const where = current ? t("lost.where", { bar: barOf(current.beat) }) : "";
+    if (missedInARow >= (clockDriven ? LOST_MISSED_NOTES_CLOCKED : LOST_MISSED_NOTES)) lostReason = t("lost.missed", { n: missedInARow, where });
+    else if (strayInARow >= LOST_STRAY_TAPS) lostReason = t("lost.stray", { n: strayInARow, where });
     if (lostReason) finish("lost");
   }
 
@@ -851,7 +852,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     if (!demo) checkLost();
     if (ended) return;
     if (!demo && missedInARow >= 3 && heard - lastGoodHitTime > LOST_SILENT_BARS * beatsPerBar * secPerQuarter) {
-      lostReason = `The playing stopped in bar ${barOf(beatNow)}.`;
+      lostReason = t("lost.stopped", { bar: barOf(beatNow) });
       finish("lost");
       return;
     }
@@ -908,20 +909,20 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       shownBar = bar;
       staff.setBarHighlight(bar);
       staff.revealEvent(staff.firstEventOfBar(bar));
-      barCounter.textContent = `bar ${bar + 1} / ${level.bars.length}`;
+      barCounter.textContent = t("play.bar", { bar: bar + 1, n: level.bars.length });
     }
   }
 
   /** Silence check: nothing played for a couple of bars after a note was due. */
-  function checkSilence(t: number): void {
+  function checkSilence(now: number): void {
     let due: number | null = null;
     for (let i = nextPointer; i < timeline.length; i++) {
       const item = timeline[i];
       if (item?.kind === "note") {
         const onset = onsets[item.onsetIndex];
         if (onset) due = liveJudge.predictTime(onset.beat);
-        if (onset && due !== null && t > due + LOST_SILENT_BARS * beatsPerBar * secPerQuarter) {
-          lostReason = matchedCount === 0 ? "Nothing was played after the count-in." : `The playing stopped in bar ${barOf(onset.beat)}.`;
+        if (onset && due !== null && now > due + LOST_SILENT_BARS * beatsPerBar * secPerQuarter) {
+          lostReason = matchedCount === 0 ? t("lost.nothing") : t("lost.stopped", { bar: barOf(onset.beat) });
           finish("lost");
         }
         return;
@@ -1093,8 +1094,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       if (outcome === "lost") scene.fling();
       else scene.setRest(true);
       engine.setAmbience(0.5, 2);
-      const title = outcome === "lost" ? "Lost the beat" : "Stopped";
-      const detail = outcome === "lost" ? (lostReason ?? "") : "You stopped the exercise.";
+      const title = outcome === "lost" ? t("ended.lost") : t("ended.stopped");
+      const detail = outcome === "lost" ? (lostReason ?? "") : t("ended.youStopped");
       resultsBody.appendChild(buildEndedEarlyPanel(title, detail, panelCallbacks, retryTempo));
       placeHandSwitch();
     }

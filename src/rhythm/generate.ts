@@ -2,23 +2,16 @@
 // concerns here — just picks beat-aligned rhythmic "cells" per tier and arranges them into
 // 4-bar phrases that read like something a teacher would actually write.
 
+import { joinList, type Key, t, tEn } from "../i18n";
 import type { Level, Meter, RhythmEvent } from "../types";
 
 /** Short human-readable description of what each tier adds, index 0 = tier 1. */
-export const TIER_NAMES: string[] = [
-  "Quarter notes",
-  "Halves & wholes",
-  "Rests",
-  "Eighth notes",
-  "Dotted rhythms",
-  "Ties",
-  "Sixteenths",
-  "Syncopation",
-  "Dotted eighth & sixteenth",
-  "Off-beat rests",
-  "Triplets",
-  "3/4 & 6/8",
-];
+export const TIER_NAMES: string[] = Array.from({ length: 12 }, (_, i) => tEn(`tier.${i + 1}` as Key));
+
+/** The name of a tier (1-12) in the current language. */
+export function tierName(tier: number): string {
+  return tier >= 1 && tier <= 12 ? t(`tier.${tier}` as Key) : t("tier.n", { n: tier });
+}
 
 /** One independent rhythmic ingredient the player can switch on (Free practice mode). */
 export type Ingredient =
@@ -34,19 +27,24 @@ export type Ingredient =
   | "offbeatRests"
   | "triplets";
 
+/** An ingredient's label in the current language (`INGREDIENTS[].label` is always English). */
+export function ingredientLabel(key: Ingredient): string {
+  return t(`ing.${key}` as Key);
+}
+
 /** For the UI: one entry per ingredient, in curriculum order. `tier` is the tier that introduces it. */
 export const INGREDIENTS: { key: Ingredient; label: string; tier: number }[] = [
-  { key: "quarters", label: "Quarters", tier: 1 },
-  { key: "halves", label: "Halves", tier: 2 },
-  { key: "rests", label: "Rests", tier: 3 },
-  { key: "eighths", label: "Eighths", tier: 4 },
-  { key: "dotted", label: "Dotted notes", tier: 5 },
-  { key: "ties", label: "Ties", tier: 6 },
-  { key: "sixteenths", label: "Sixteenths", tier: 7 },
-  { key: "syncopation", label: "Syncopation", tier: 8 },
-  { key: "dottedEighths", label: "Dotted eighths", tier: 9 },
-  { key: "offbeatRests", label: "Off-beat rests", tier: 10 },
-  { key: "triplets", label: "Triplets", tier: 11 },
+  { key: "quarters", label: tEn("ing.quarters"), tier: 1 },
+  { key: "halves", label: tEn("ing.halves"), tier: 2 },
+  { key: "rests", label: tEn("ing.rests"), tier: 3 },
+  { key: "eighths", label: tEn("ing.eighths"), tier: 4 },
+  { key: "dotted", label: tEn("ing.dotted"), tier: 5 },
+  { key: "ties", label: tEn("ing.ties"), tier: 6 },
+  { key: "sixteenths", label: tEn("ing.sixteenths"), tier: 7 },
+  { key: "syncopation", label: tEn("ing.syncopation"), tier: 8 },
+  { key: "dottedEighths", label: tEn("ing.dottedEighths"), tier: 9 },
+  { key: "offbeatRests", label: tEn("ing.offbeatRests"), tier: 10 },
+  { key: "triplets", label: tEn("ing.triplets"), tier: 11 },
 ];
 
 const INGREDIENT_TIER: Record<Ingredient, number> = Object.fromEntries(INGREDIENTS.map((i) => [i.key, i.tier])) as Record<Ingredient, number>;
@@ -97,9 +95,14 @@ function orderedIngredients(set: ReadonlySet<Ingredient>): Ingredient[] {
 /** "Eighths, rests and ties": plain words, sentence case; quarters are left out unless alone. */
 export function describeIngredients(set: ReadonlySet<Ingredient>): string {
   const keys = orderedIngredients(set).filter((k) => k !== "quarters");
-  const labels = (keys.length > 0 ? keys : (["quarters"] as Ingredient[])).map((k) => INGREDIENTS.find((i) => i.key === k)?.label.toLowerCase() ?? k);
-  const text = labels.length > 1 ? `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}` : (labels[0] ?? "");
+  const labels = (keys.length > 0 ? keys : (["quarters"] as Ingredient[])).map((k) => ingredientLabel(k).toLowerCase());
+  const text = joinList(labels);
   return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** " in 6/8" for a title; nothing for 4/4. */
+export function meterPart(kind: MeterKind): string {
+  return kind === "4/4" ? "" : t("inMeter", { meter: kind });
 }
 
 export const METERS: Record<MeterKind, Meter> = {
@@ -449,13 +452,13 @@ export function generateLevel(opts: GenerateOptions): Level {
     kind = opts.meter ?? "4/4";
     const code = orderedIngredients(palette.ingredients).map((k) => INGREDIENT_TIER[k].toString(36)).join("");
     id = `gen-i${code}-${kind.replace("/", "")}-${seed}`;
-    title = `${describeIngredients(palette.ingredients)}${kind === "4/4" ? "" : ` in ${kind}`}, ${opts.bars} bars`;
+    title = t("title.level", { what: describeIngredients(palette.ingredients), meterPart: meterPart(kind), bars: t("bars", { n: opts.bars }) });
   } else {
     const { tier } = opts;
     palette = tierPalette(tier);
     kind = tier >= METER_TIER ? (rng() < 0.5 ? "3/4" : "6/8") : "4/4";
     id = `gen-t${tier}-${seed}`;
-    title = `${TIER_NAMES[tier - 1] ?? `Tier ${tier}`}, ${opts.bars} bars`;
+    title = t("title.tier", { name: tierName(tier), bars: t("bars", { n: opts.bars }) });
   }
 
   const bars: RhythmEvent[][] = [];

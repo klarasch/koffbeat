@@ -5,8 +5,9 @@ import type { Scene } from "../scene/resonance";
 import { runCalibration } from "../input/calibration";
 import { onTweak, tweak } from "../ui/tweaks";
 import { chips, field, segmented, select, stepper } from "./controls";
-import { describeIngredients, INGREDIENTS, type Ingredient, type MeterChoice } from "../rhythm/generate";
-import { HAND_RELATIONS } from "../rhythm/twoHands";
+import { lang, setLang, t } from "../i18n";
+import { describeIngredients, ingredientLabel, INGREDIENTS, type Ingredient, type MeterChoice, meterPart } from "../rhythm/generate";
+import { HAND_RELATIONS, handRelations } from "../rhythm/twoHands";
 import { firstOpenLesson, firstOpenPiece, firstOpenStep, LESSONS, loadProgress, PASS_ACCURACY, pieceDone, PIECES, stepDone } from "./lessons";
 import type { Mode } from "../types";
 
@@ -17,7 +18,7 @@ export interface HomeOptions {
   /** Free practice: an exercise built from the chosen ingredients. */
   onFree: (choice: FreeChoice) => void;
   scene: Scene;
-  sounds: { label: string; isOn: () => boolean; set: (on: boolean) => void }[];
+  sounds: { label: () => string; isOn: () => boolean; set: (on: boolean) => void }[];
   /** Practice tempo override (null = each level's own tempo). */
   tempo: { get: () => number | null; set: (bpm: number | null) => void };
 }
@@ -118,6 +119,9 @@ function markHintSeen(): void {
   }
 }
 
+/** Set when the screen is rebuilt from inside Settings (a language switch), so they reopen. */
+let reopenSettings = false;
+
 export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   container.innerHTML = "";
   const prefs = loadHomePrefs();
@@ -134,7 +138,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   title.textContent = "Koffbeat";
   const tagline = document.createElement("p");
   tagline.className = "home-tagline";
-  tagline.textContent = "Read the rhythm. Play in time and the sand draws its figures.";
+  tagline.textContent = t("home.tagline");
   titleBlock.append(title, tagline);
   // Settings live on their own page: one clear button here, the rows inside it.
   const settingsRows = document.createElement("div");
@@ -146,8 +150,8 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     const paint = () => {
       const on = sound.isOn();
       button.innerHTML = `<span class="text-toggle-label"></span><span class="text-toggle-state"></span>`;
-      (button.firstChild as HTMLElement).textContent = sound.label;
-      (button.lastChild as HTMLElement).textContent = on ? "on" : "off";
+      (button.firstChild as HTMLElement).textContent = sound.label();
+      (button.lastChild as HTMLElement).textContent = t(on ? "settings.on" : "settings.off");
       button.classList.toggle("on", on);
       button.setAttribute("aria-pressed", String(on));
     };
@@ -158,10 +162,23 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     });
     settingsRows.appendChild(button);
   }
+  // Language: shows the current one; a click switches to the other and builds the screen again.
+  const langButton = document.createElement("button");
+  langButton.type = "button";
+  langButton.className = "settings-row text-toggle";
+  langButton.innerHTML = `<span class="text-toggle-label"></span><span class="text-toggle-state"></span>`;
+  (langButton.firstChild as HTMLElement).textContent = t("settings.language");
+  (langButton.lastChild as HTMLElement).textContent = t("settings.langName");
+  langButton.addEventListener("click", () => {
+    setLang(lang() === "cs" ? "en" : "cs");
+    reopenSettings = true;
+    renderHome(container, opts);
+  });
+  settingsRows.appendChild(langButton);
   const settingsButton = document.createElement("button");
   settingsButton.type = "button";
   settingsButton.className = "settings-button";
-  settingsButton.textContent = "Settings";
+  settingsButton.textContent = t("settings.title");
   settingsButton.setAttribute("aria-haspopup", "dialog");
   top.append(titleBlock, settingsButton);
   root.appendChild(top);
@@ -176,13 +193,13 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   if (isTouchDevice() && !hasSeenHint()) {
     const hint = document.createElement("p");
     hint.className = "hint";
-    hint.textContent = "Turn off silent mode to hear the clicks.";
+    hint.textContent = t("home.silentHint");
     dock.appendChild(hint);
     markHintSeen();
   }
   const panel = document.createElement("section");
   panel.className = "home-panel bento";
-  panel.setAttribute("aria-label", "Choose an exercise");
+  panel.setAttribute("aria-label", t("home.chooseExercise"));
 
   let { track, lessonIndex, ingredients, cross, meter, hands, stage, bars, mode, part } = prefs;
   const progress = loadProgress();
@@ -195,8 +212,8 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   // ---- Track: the lesson path, or free practice ----
   const trackControl = segmented(
     [
-      { value: "lessons", label: "Lessons" },
-      { value: "free", label: "Free practice" },
+      { value: "lessons", label: t("home.lessons") },
+      { value: "free", label: t("home.free") },
     ],
     track,
     (value) => {
@@ -208,7 +225,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
 
   // ---- Lessons ----
   const lessonSelect = select(
-    LESSONS.map((lesson, i) => ({ value: String(i), label: `${i + 1}. ${lesson.title}` })),
+    LESSONS.map((lesson, i) => ({ value: String(i), label: t("home.lessonOption", { i: i + 1, title: lesson.title }) })),
     String(lessonIndex),
     (value) => {
       lessonIndex = Number(value);
@@ -221,7 +238,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     },
   );
   const pieceSlot = document.createElement("div");
-  const pieceField = field("Piece", pieceSlot);
+  const pieceField = field(t("home.piece"), pieceSlot);
   function rebuildPieces(): void {
     const lesson = LESSONS[lessonIndex]!;
     const p = loadProgress();
@@ -239,7 +256,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     pieceSlot.replaceChildren(control.el);
   }
   const stepSlot = document.createElement("div");
-  const stepField = field("Step", stepSlot);
+  const stepField = field(t("home.step"), stepSlot);
   function rebuildSteps(): void {
     const lesson = LESSONS[lessonIndex]!;
     const p = loadProgress();
@@ -267,16 +284,16 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
       lessonBpm = null;
       paint();
     },
-    { less: "Slower", more: "Faster", reset: "Back to the suggested tempo" },
+    { less: t("home.slower"), more: t("home.faster"), reset: t("home.backSuggested") },
   );
   const lessonFields = document.createElement("div");
   lessonFields.className = "home-fields";
-  const lessonField = field("Lesson", lessonSelect.el);
-  lessonFields.append(lessonField, pieceField, stepField, field("Tempo", lessonTempoControl.el));
+  const lessonField = field(t("home.lesson"), lessonSelect.el);
+  lessonFields.append(lessonField, pieceField, stepField, field(t("home.tempo"), lessonTempoControl.el));
 
   // ---- Free practice ----
   const ingredientChips = chips(
-    [...INGREDIENTS.map((i) => ({ value: i.key as string, label: i.label })), { value: CROSS_CHIP, label: "3 against 2" }],
+    [...INGREDIENTS.map((i) => ({ value: i.key as string, label: ingredientLabel(i.key) })), { value: CROSS_CHIP, label: t("cross.chip") }],
     cross ? [...ingredients, CROSS_CHIP] : ingredients,
     (values) => {
       ingredients = values.filter((v) => v !== CROSS_CHIP) as Ingredient[];
@@ -295,8 +312,8 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   );
   const handsControl = segmented(
     [
-      { value: "1", label: "One hand" },
-      { value: "2", label: "Two hands" },
+      { value: "1", label: t("home.oneHand") },
+      { value: "2", label: t("home.twoHands") },
     ],
     String(hands),
     (value) => {
@@ -305,7 +322,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     },
   );
   const relateControl = segmented(
-    HAND_RELATIONS.map((name, i) => ({ value: String(i + 1), label: name })),
+    handRelations().map((name, i) => ({ value: String(i + 1), label: name })),
     String(stage),
     (value) => {
       stage = Number(value);
@@ -315,9 +332,9 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   // Two hands: play both, or practise one alone (the other is played for you).
   const partControl = segmented(
     [
-      { value: "both", label: "Both" },
-      { value: "right", label: "Right" },
-      { value: "left", label: "Left" },
+      { value: "both", label: t("home.both") },
+      { value: "right", label: t("home.right") },
+      { value: "left", label: t("home.left") },
     ],
     part,
     (value) => {
@@ -326,7 +343,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     },
   );
   const lengthControl = segmented(
-    BAR_OPTIONS.map((b) => ({ value: String(b), label: `${b} bars` })),
+    BAR_OPTIONS.map((b) => ({ value: String(b), label: t("bars", { n: b }) })),
     String(bars),
     (value) => {
       bars = Number(value) as 4 | 8 | 16;
@@ -335,8 +352,8 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   );
   const modeControl = segmented(
     [
-      { value: "practice", label: "Practice" },
-      { value: "countIn", label: "Count-in" },
+      { value: "practice", label: t("home.modePractice") },
+      { value: "countIn", label: t("home.modeCountIn") },
     ],
     mode,
     (value) => {
@@ -350,25 +367,25 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
       opts.tempo.set(null);
       paint();
     },
-    { less: "Slower", more: "Faster", reset: "Back to the default tempo" },
+    { less: t("home.slower"), more: t("home.faster"), reset: t("home.backDefault") },
   );
-  const ingredientsField = field("Rhythms to include", ingredientChips.el);
+  const ingredientsField = field(t("home.rhythms"), ingredientChips.el);
   ingredientsField.classList.add("wide-field");
-  const meterField = field("Meter", meterControl.el);
-  const relateField = field("How the hands relate", relateControl.el);
+  const meterField = field(t("home.meter"), meterControl.el);
+  const relateField = field(t("home.relate"), relateControl.el);
   relateField.classList.add("wide-field");
-  const partField = field("Play", partControl.el);
+  const partField = field(t("home.play"), partControl.el);
   const freeFields = document.createElement("div");
   freeFields.className = "home-fields";
-  const handsField = field("Hands", handsControl.el);
-  const lengthField = field("Length", lengthControl.el);
+  const handsField = field(t("home.hands"), handsControl.el);
+  const lengthField = field(t("home.length"), lengthControl.el);
   // Classes for the home grid (style.css), and for greying fields out when they don't apply.
   handsField.classList.add("hands-field");
   partField.classList.add("part-field");
   relateField.classList.add("relate-field");
   meterField.classList.add("meter-field");
   lengthField.classList.add("length-field");
-  freeFields.append(handsField, partField, relateField, ingredientsField, meterField, lengthField, field("Mode", modeControl.el), field("Tempo", tempoControl.el));
+  freeFields.append(handsField, partField, relateField, ingredientsField, meterField, lengthField, field(t("home.mode"), modeControl.el), field(t("home.tempo"), tempoControl.el));
 
   const note = document.createElement("p");
   note.className = "panel-note";
@@ -381,8 +398,9 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   const play = document.createElement("button");
   play.type = "button";
   play.className = "play-cta";
-  play.innerHTML = `<span class="play-cta-word">Play</span><span class="play-cta-arrow" aria-hidden="true">→</span><span class="play-cta-what"></span>`;
+  play.innerHTML = `<span class="play-cta-word"></span><span class="play-cta-arrow" aria-hidden="true">→</span><span class="play-cta-what"></span>`;
   const playWhat = play.lastChild as HTMLElement;
+  (play.firstChild as HTMLElement).textContent = t("home.playWord");
 
   const defaultBpm = () => 65;
 
@@ -391,23 +409,23 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     lessonFields.hidden = !lessons;
     freeFields.hidden = lessons;
     // Fields that don't apply stay in place, greyed out, so the layout never jumps.
-    setOff(relateField, hands !== 2, "Needs two hands");
-    setOff(partField, hands !== 2, "Needs two hands");
-    ingredientChips.setDisabled(CROSS_CHIP, hands === 2 ? null : "Needs two hands");
+    setOff(relateField, hands !== 2, t("home.needsTwoHands"));
+    setOff(partField, hands !== 2, t("home.needsTwoHands"));
+    ingredientChips.setDisabled(CROSS_CHIP, hands === 2 ? null : t("home.needsTwoHands"));
     if (lessons) {
       const lesson = LESSONS[lessonIndex]!;
       const step = lesson.steps[stepIndex]!;
       const p = loadProgress();
       const done = lesson.steps.filter((_, i) => stepDone(p, lesson, pieceIndex, i)).length;
-      lessonTempoControl.setText(`${lessonBpm ?? step.bpm} bpm`, lessonBpm !== null);
-      note.textContent = `${done} of ${lesson.steps.length} steps done on this piece. A step counts as done at ${PASS_ACCURACY} or more, at ${step.bpm} bpm or faster.`;
-      playWhat.textContent = `${lesson.title}, piece ${pieceIndex + 1}, ${step.label.toLowerCase()}`;
+      lessonTempoControl.setText(t("bpm", { n: lessonBpm ?? step.bpm }), lessonBpm !== null);
+      note.textContent = t("home.lessonNote", { done, n: lesson.steps.length, pass: PASS_ACCURACY, bpm: step.bpm });
+      playWhat.textContent = t("home.what.lesson", { title: lesson.title, piece: pieceIndex + 1, step: step.label.toLowerCase() });
     } else {
-      note.textContent = mode === "practice" ? "The metronome keeps going: play on the click." : "One bar of clicks, then keep the pulse yourself.";
+      note.textContent = t(mode === "practice" ? "home.noteMetronome" : "home.noteCountIn");
       const override = opts.tempo.get();
-      tempoControl.setText(`${override ?? defaultBpm()} bpm`, override !== null);
-      const what = `${describeIngredients(new Set<Ingredient>(["quarters", ...ingredients]))}${meter === "4/4" ? "" : ` in ${meter}`}, ${bars} bars`;
-      playWhat.textContent = hands === 2 ? `Two hands, ${what.toLowerCase()}${cross ? ", 3 against 2" : ""}` : what;
+      tempoControl.setText(t("bpm", { n: override ?? defaultBpm() }), override !== null);
+      const what = `${describeIngredients(new Set<Ingredient>(["quarters", ...ingredients]))}${meterPart(meter)}, ${t("bars", { n: bars })}`;
+      playWhat.textContent = hands === 2 ? t("home.what.twoHands", { what: what.toLowerCase(), cross: cross ? 1 : 0 }) : what;
     }
     saveHomePrefs({ track, lessonIndex, ingredients, cross, meter, hands, stage, bars, mode, part });
   }
@@ -437,7 +455,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   const calibrateLink = document.createElement("button");
   calibrateLink.type = "button";
   calibrateLink.className = "link-button";
-  calibrateLink.textContent = "Calibrate latency";
+  calibrateLink.textContent = t("settings.calibrate");
   calibrateLink.addEventListener("click", () => {
     void (async () => {
       leaveHome();
@@ -459,24 +477,25 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   footer.append(play);
   // Calibration is a setting, not part of choosing what to play: it sits in the Settings page.
   calibrateLink.className = "settings-row text-toggle calibrate-link";
-  calibrateLink.innerHTML = `<span class="text-toggle-label">Calibrate latency</span><span class="settings-row-arrow" aria-hidden="true">&rsaquo;</span>`;
+  calibrateLink.innerHTML = `<span class="text-toggle-label"></span><span class="settings-row-arrow" aria-hidden="true">&rsaquo;</span>`;
+  (calibrateLink.firstChild as HTMLElement).textContent = t("settings.calibrate");
   settingsRows.appendChild(calibrateLink);
 
   const settingsPage = document.createElement("div");
   settingsPage.className = "settings-page";
   settingsPage.hidden = true;
   settingsPage.setAttribute("role", "dialog");
-  settingsPage.setAttribute("aria-label", "Settings");
+  settingsPage.setAttribute("aria-label", t("settings.title"));
   const settingsBar = document.createElement("div");
   settingsBar.className = "settings-bar";
   const settingsBack = document.createElement("button");
   settingsBack.type = "button";
   settingsBack.className = "home-button settings-back";
-  settingsBack.setAttribute("aria-label", "Back");
+  settingsBack.setAttribute("aria-label", t("settings.back"));
   settingsBack.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   const settingsTitle = document.createElement("h2");
   settingsTitle.className = "settings-title";
-  settingsTitle.textContent = "Settings";
+  settingsTitle.textContent = t("settings.title");
   settingsBar.append(settingsBack, settingsTitle);
   settingsPage.append(settingsBar, settingsRows);
   root.appendChild(settingsPage);
@@ -485,15 +504,18 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     settingsButton.setAttribute("aria-expanded", "false");
     settingsButton.focus();
   };
+  const openSettings = () => {
+    settingsPage.hidden = false;
+    settingsButton.setAttribute("aria-expanded", "true");
+    // The popover (larger screens) has no back button: focus its first row instead.
+    (isPhoneBackdrop() ? settingsBack : (settingsRows.firstElementChild as HTMLElement | null))?.focus();
+  };
   settingsButton.addEventListener("click", () => {
     if (!settingsPage.hidden) {
       closeSettings();
       return;
     }
-    settingsPage.hidden = false;
-    settingsButton.setAttribute("aria-expanded", "true");
-    // The popover (larger screens) has no back button: focus its first row instead.
-    (isPhoneBackdrop() ? settingsBack : (settingsRows.firstElementChild as HTMLElement | null))?.focus();
+    openSettings();
   });
   // As a popover, a click anywhere else closes it.
   const onOutside = (event: PointerEvent) => {
@@ -515,6 +537,11 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
 
   container.appendChild(root);
   paint();
+  // After a language switch the Settings panel stays open.
+  if (reopenSettings) {
+    reopenSettings = false;
+    openSettings();
+  }
   startHomeScene(opts.scene, plateSlot);
   const sceneCleanup = homeCleanup;
   homeCleanup = () => {

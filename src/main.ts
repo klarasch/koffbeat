@@ -3,6 +3,7 @@
 
 import "./style.css";
 import { createAudioEngine } from "./audio/engine";
+import { lang, t } from "./i18n";
 import { runCalibration } from "./input/calibration";
 import { type FreeChoice, leaveHome, renderHome } from "./game/home";
 import { firstOpenPiece, LESSONS, loadProgress, PASS_ACCURACY, pieceLevel, recordResult } from "./game/lessons";
@@ -13,6 +14,9 @@ import { generateTwoHandLevel } from "./rhythm/twoHands";
 import type { Hand, Level, Mode } from "./types";
 import { installInk } from "./ui/ink";
 import { installTweaks } from "./ui/tweaks";
+
+// The page language follows the saved choice, or the browser's on the first visit.
+document.documentElement.lang = lang();
 
 const app = document.getElementById("app");
 if (!app) throw new Error("missing #app root");
@@ -152,7 +156,7 @@ function lessonPick(lessonIndex: number, pieceIndex: number, stepIndex: number, 
   if (!lesson) return null;
   const step = lesson.steps[stepIndex];
   if (!step) return lessonPick(lessonIndex + 1, firstOpenPiece(loadProgress(), LESSONS[lessonIndex + 1] ?? lesson), 0);
-  const level = { ...pieceLevel(lesson, pieceIndex, bpm ?? step.bpm), title: `${lesson.title}, piece ${pieceIndex + 1}: ${step.label.toLowerCase()}` };
+  const level = { ...pieceLevel(lesson, pieceIndex, bpm ?? step.bpm), title: t("title.piece", { lesson: lesson.title, piece: pieceIndex + 1, step: step.label.toLowerCase() }) };
   const lastStep = stepIndex === lesson.steps.length - 1;
   return {
     level,
@@ -163,7 +167,7 @@ function lessonPick(lessonIndex: number, pieceIndex: number, stepIndex: number, 
     listenFirst: step.guide,
     goal: { bpm: step.bpm, pass: PASS_ACCURACY },
     steps: { labels: lesson.steps.map((s) => s.label), current: stepIndex },
-    nextLabel: lastStep ? "Next lesson" : `Next: ${lesson.steps[stepIndex + 1]?.label.toLowerCase()}`,
+    nextLabel: lastStep ? t("next.lesson") : t("next.step", { step: lesson.steps[stepIndex + 1]?.label.toLowerCase() ?? "" }),
     lesson: { index: lessonIndex, piece: pieceIndex, step: stepIndex },
     // The next step suggests its own tempo.
     next: () => (lastStep ? lessonPick(lessonIndex + 1, firstOpenPiece(loadProgress(), LESSONS[lessonIndex + 1] ?? lesson), 0) : lessonPick(lessonIndex, pieceIndex, stepIndex + 1)),
@@ -189,9 +193,9 @@ function freePick(choice: FreeChoice): LevelPick {
     const level = withTempo(generateTwoHandLevel({ stage: choice.stage, cross: choice.cross, ingredients: choice.ingredients, bars: choice.bars, meter: choice.meter }));
     // Any two-hand piece: the hand(s) chosen on home, and another choice on the results.
     const solo: Hand | undefined = choice.part === "both" ? undefined : choice.part === "right" ? 1 : 0;
-    return { level, next: again, solo, handChoice: true, nextLabel: "New exercise" };
+    return { level, next: again, solo, handChoice: true, nextLabel: t("next.exercise") };
   }
-  return { level: withTempo(generateLevel({ tier: 1, ingredients: choice.ingredients, meter: choice.meter, bars: choice.bars })), next: again, nextLabel: "New exercise" };
+  return { level: withTempo(generateLevel({ tier: 1, ingredients: choice.ingredients, meter: choice.meter, bars: choice.bars })), next: again, nextLabel: t("next.exercise") };
 }
 
 // Practice tempo: null plays each level at its own tempo; a number overrides it.
@@ -231,8 +235,8 @@ function showHome(): void {
       },
     },
     sounds: [
-      { label: "Ambience", isOn: ambienceOn, set: setAmbienceOn },
-      { label: "Tap sound", isOn: tapSoundOn, set: setTapSoundOn },
+      { label: () => t("settings.ambience"), isOn: ambienceOn, set: setAmbienceOn },
+      { label: () => t("settings.tapSound"), isOn: tapSoundOn, set: setTapSoundOn },
     ],
     onLesson: (lessonIndex, pieceIndex, stepIndex, bpm) => {
       const pick = lessonPick(lessonIndex, pieceIndex, stepIndex, bpm);

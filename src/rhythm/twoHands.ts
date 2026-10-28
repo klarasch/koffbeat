@@ -4,6 +4,7 @@
 // steady under the other, then three against two. Pieces can be in 4/4, 3/4 or 6/8 (the
 // three-against-two stage is 4/4 only; in 3/4 and 6/8 the cross bars are hemiolas).
 
+import { type Key, t, tEn } from "../i18n";
 import type { Level, RhythmEvent } from "../types";
 import {
   buildBarEvents,
@@ -20,15 +21,26 @@ import {
   type Palette,
   type Rng,
   rest,
-  TIER_NAMES,
+  tierName,
+  meterPart,
   tierPalette,
 } from "./generate";
 
 /** What each stage asks of the hands, index 0 = stage 1. */
-export const TWO_HAND_STAGES: string[] = ["Call and response", "Unison", "Independence", "3 against 2"];
+export const TWO_HAND_STAGES: string[] = [1, 2, 3, 4].map((n) => tEn(`stage.${n}` as Key));
+
+/** The name of a stage (1-4) in the current language. */
+export function stageName(stage: number): string {
+  return t(`stage.${stage}` as Key);
+}
 
 /** The ways the hands can relate in free practice (stages 1-3); "3 against 2" is a rhythm option, see `cross`. */
 export const HAND_RELATIONS: string[] = TWO_HAND_STAGES.slice(0, 3).map((name) => (name === "Independence" ? "Independent" : name));
+
+/** The relation names (stages 1-3) in the current language. */
+export function handRelations(): string[] {
+  return [1, 2, 3].map((n) => (n === 3 ? t("relation.3") : stageName(n)));
+}
 
 const DEFAULT_BPM = 65;
 
@@ -207,11 +219,15 @@ export function generateTwoHandLevel(opts: TwoHandOptions): Level {
   const [left, right] = build(rng, opts.bars, pal, kind);
   const cross = Boolean(opts.cross) && stage < 4;
   if (cross) addCrossBars(rng, pal, left, right, kind);
-  const stageName = (TWO_HAND_STAGES[stage - 1] ?? "").toLowerCase() + (cross ? " with 3 against 2" : "");
   const meterCode = kind === "4/4" ? "" : `-${kind.replace("/", "")}`;
   return {
     id: `${opts.ingredients ? `gen-2h-s${stage}-i-${seed}` : `gen-2h-s${stage}-t${tier}-${seed}`}${cross ? "-x" : ""}${meterCode}`,
-    title: `Two hands: ${stageName}, ${opts.ingredients ? describeIngredients(pal.ingredients).toLowerCase() : TIER_NAMES[tier - 1]?.toLowerCase()}${kind === "4/4" ? "" : ` in ${kind}`}`,
+    title: t("title.twoHands", {
+      stage: stageName(stage).toLowerCase(),
+      cross: cross ? 1 : 0,
+      what: opts.ingredients ? describeIngredients(pal.ingredients).toLowerCase() : tierName(tier).toLowerCase(),
+      meterPart: meterPart(kind),
+    }),
     meter: METERS[kind],
     bpm: opts.bpm ?? DEFAULT_BPM,
     bars: left,

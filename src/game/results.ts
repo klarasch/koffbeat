@@ -1,6 +1,7 @@
 // Builds the results overlay shown after a run: two headline scores, tempo detail, and the
 // Retry / next / Home actions. Pure DOM builder — timing and judging happen in play.ts.
 
+import { type Key, t } from "../i18n";
 import type { Grade, Mode, OnsetJudgement, RunResult } from "../types";
 import { stepper } from "./controls";
 
@@ -32,7 +33,7 @@ export interface RetryOptions {
  */
 export function goalNote(accuracy: number, playedBpm: number, goal: { bpm: number; pass: number }): string | null {
   if (playedBpm >= goal.bpm) return null;
-  return accuracy >= goal.pass ? `Passed at ${playedBpm} bpm. The goal is ${goal.bpm}.` : `Not passed yet at ${playedBpm} bpm. The goal is ${goal.bpm}.`;
+  return t(accuracy >= goal.pass ? "res.passed" : "res.notPassed", { played: playedBpm, goal: goal.bpm });
 }
 
 /**
@@ -42,8 +43,8 @@ export function goalNote(accuracy: number, playedBpm: number, goal: { bpm: numbe
  */
 export function driftWords(driftPercent: number): string {
   const rounded = Math.round(Math.abs(driftPercent));
-  if (rounded < 2) return "steady throughout";
-  return driftPercent > 0 ? `you sped up ${rounded}% from start to end` : `you slowed down ${rounded}% from start to end`;
+  if (rounded < 2) return t("res.steady");
+  return t(driftPercent > 0 ? "res.spedUp" : "res.slowedDown", { n: rounded });
 }
 
 /** How the player's average tempo compared to the count-in's target tempo. */
@@ -51,8 +52,8 @@ export function tempoVsTargetWords(playedBpm: number, targetBpm: number): string
   if (targetBpm <= 0) return "";
   const percent = ((playedBpm - targetBpm) / targetBpm) * 100;
   const rounded = Math.round(Math.abs(percent));
-  if (rounded < 1) return "right on the count-in tempo";
-  return percent > 0 ? `${rounded}% faster than the count-in` : `${rounded}% slower than the count-in`;
+  if (rounded < 1) return t("res.onCountIn");
+  return t(percent > 0 ? "res.fasterThanCountIn" : "res.slowerThanCountIn", { n: rounded });
 }
 
 /** How far from "on the click" a mean signed error has to be to call it out by direction. */
@@ -66,46 +67,39 @@ const TIMING_NOTEWORTHY_MEAN_MS = 8;
  */
 export function timingVsClickWords(judgements: OnsetJudgement[]): string {
   const errors = judgements.filter((j): j is OnsetJudgement & { strictErrorMs: number } => j.strictErrorMs !== null).map((j) => j.strictErrorMs);
-  if (errors.length === 0) return "No taps detected.";
+  if (errors.length === 0) return t("res.noTapsShort");
 
   const mean = errors.reduce((sum, e) => sum + e, 0) / errors.length;
   const variance = errors.reduce((sum, e) => sum + (e - mean) ** 2, 0) / errors.length;
   const spreadMs = Math.round(Math.sqrt(variance));
   const meanMs = Math.round(Math.abs(mean));
 
-  if (meanMs < TIMING_NOTEWORTHY_MEAN_MS) return `Right on the click, ±${spreadMs} ms`;
-  return `You play ${meanMs} ms ${mean > 0 ? "behind" : "ahead of"} the click, ±${spreadMs} ms`;
+  if (meanMs < TIMING_NOTEWORTHY_MEAN_MS) return t("res.onClick", { spread: spreadMs });
+  return t(mean > 0 ? "res.behind" : "res.ahead", { ms: meanMs, spread: spreadMs });
 }
 
 /** A teacher's word for an attack: how early or late, in proportion to the grade. */
 export function attackWords(grade: Grade, errorMs: number): string {
-  if (grade === "perfect") return "on time";
+  if (grade === "perfect") return t("attack.onTime");
   const early = errorMs < 0;
-  if (grade === "good") return early ? "a touch early" : "a touch late";
-  if (grade === "ok") return early ? "early" : "late";
-  return early ? "too soon" : "too late";
+  if (grade === "good") return t(early ? "attack.touchEarly" : "attack.touchLate");
+  if (grade === "ok") return t(early ? "attack.early" : "attack.late");
+  return t(early ? "attack.tooSoon" : "attack.tooLate");
 }
 
 /** A teacher's word for letting go of a long note. */
 export function releaseWords(errorMs: number): string {
-  return errorMs < 0 ? "let go too soon" : "held too long";
+  return t(errorMs < 0 ? "release.soon" : "release.long");
 }
 
-const VALUE_NAMES: [number, string][] = [
-  [0.25, "sixteenths"],
-  [0.5, "eighth notes"],
-  [0.75, "dotted eighths"],
-  [1, "quarter notes"],
-  [1.5, "dotted quarters"],
-  [2, "half notes"],
-  [3, "dotted halves"],
-  [4, "whole notes"],
-];
+/** Note values in quarters; the names are the `value.<quarters>` strings. */
+const VALUE_QUARTERS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4] as const;
 
-function valueName(quarters: number): string {
-  let best = VALUE_NAMES[0]!;
-  for (const entry of VALUE_NAMES) if (Math.abs(entry[0] - quarters) < Math.abs(best[0] - quarters)) best = entry;
-  return best[1];
+/** The key of the note value nearest `quarters`. */
+function valueKey(quarters: number): string {
+  let best: number = VALUE_QUARTERS[0];
+  for (const q of VALUE_QUARTERS) if (Math.abs(q - quarters) < Math.abs(best - quarters)) best = q;
+  return String(best);
 }
 
 /** How far off on average (ms, either way) before a habit is worth a teacher's note. */
@@ -127,7 +121,7 @@ export function teacherNotes(result: RunResult, mode: Mode): string[] {
     const [left, right] = result.handAccuracy;
     if (Math.abs(left - right) >= HAND_GAP) {
       const weak = left < right ? "left" : "right";
-      notes.push(`Your ${weak} hand is less sure than your ${weak === "left" ? "right" : "left"}: play its line alone a few times, then put the hands together again.`);
+      notes.push(t("note.weakHand", { weak }));
     }
   }
   const played = result.judgements.filter((j) => j.relativeErrorMs !== null);
@@ -135,7 +129,7 @@ export function teacherNotes(result: RunResult, mode: Mode): string[] {
   // Rushing / dragging, by the note value it shows up on most.
   const byValue = new Map<string, number[]>();
   for (const j of played) {
-    const name = valueName(j.onset.quarters);
+    const name = valueKey(j.onset.quarters);
     const list = byValue.get(name) ?? [];
     list.push(j.relativeErrorMs ?? 0);
     byValue.set(name, list);
@@ -146,26 +140,26 @@ export function teacherNotes(result: RunResult, mode: Mode): string[] {
     const mean = errors.reduce((a, b) => a + b, 0) / errors.length;
     if (Math.abs(mean) >= HABIT_MS && (!habit || Math.abs(mean) > Math.abs(habit.mean))) habit = { name, mean };
   }
-  if (habit) notes.push(habit.mean < 0 ? `You rush the ${habit.name}: let them come a little later.` : `You drag the ${habit.name}: move them on a little sooner.`);
+  if (habit) notes.push(t(habit.mean < 0 ? "note.rush" : "note.drag", { name: t(`value.${habit.name}` as Key) }));
 
   const holds = result.judgements.filter((j) => j.releaseErrorMs !== null && j.releaseGrade !== null);
   if (holds.length >= 2) {
     const mean = holds.reduce((a, j) => a + (j.releaseErrorMs ?? 0), 0) / holds.length;
-    if (mean <= -HOLD_HABIT_MS) notes.push("You let the long notes go too soon: hold them for their full length.");
-    else if (mean >= HOLD_HABIT_MS) notes.push("You hold the long notes too long: let go as the next beat arrives.");
+    if (mean <= -HOLD_HABIT_MS) notes.push(t("note.holdSoon"));
+    else if (mean >= HOLD_HABIT_MS) notes.push(t("note.holdLong"));
   }
 
   const spoiledRests = result.restJudgements.filter((r) => r.grade === "miss").length;
-  if (spoiledRests > 0) notes.push(spoiledRests === 1 ? "One rest wasn't silent: keep your hands still through it." : `${spoiledRests} rests weren't silent: keep your hands still through them.`);
+  if (spoiledRests > 0) notes.push(spoiledRests === 1 ? t("note.restOne") : t("note.restMany", { n: spoiledRests }));
 
   const missed = result.judgements.filter((j) => j.hitTime === null).length;
-  if (missed > 0 && notes.length < 3) notes.push(missed === 1 ? "One note was missed." : `${missed} notes were missed: if you lose your place, keep counting and come back in.`);
+  if (missed > 0 && notes.length < 3) notes.push(missed === 1 ? t("note.missedOne") : t("note.missedMany", { n: missed }));
 
   if (mode !== "practice" && Math.abs(result.driftPercent) >= 3 && notes.length < 3) {
-    notes.push(result.driftPercent > 0 ? `You sped up ${Math.round(result.driftPercent)}% over the piece: keep the count steady.` : `You slowed down ${Math.round(-result.driftPercent)}% over the piece: keep the count steady.`);
+    notes.push(result.driftPercent > 0 ? t("note.spedUp", { n: Math.round(result.driftPercent) }) : t("note.slowedDown", { n: Math.round(-result.driftPercent) }));
   }
 
-  if (notes.length === 0) notes.push(result.accuracy >= 95 ? "Clean playing. Try it a little faster." : "Good. Play it again and aim for every note on the beat.");
+  if (notes.length === 0) notes.push(t(result.accuracy >= 95 ? "note.clean" : "note.good"));
   return notes.slice(0, 3);
 }
 
@@ -182,15 +176,15 @@ const NOTEWORTHY_ERROR_MS = 15;
  * shorter — those are "played" the instant they're tapped, so there's nothing to say about it).
  */
 export function describeNoteJudgement(j: OnsetJudgement): string {
-  if (j.hitTime === null) return "Not tapped";
+  if (j.hitTime === null) return t("tip.notTapped");
 
   const parts: string[] = [];
   const onsetErr = j.relativeErrorMs ?? 0;
-  parts.push(Math.abs(onsetErr) < NOTEWORTHY_ERROR_MS ? "tapped on time" : `tapped ${Math.round(Math.abs(onsetErr))} ms ${onsetErr > 0 ? "late" : "early"}`);
+  parts.push(Math.abs(onsetErr) < NOTEWORTHY_ERROR_MS ? t("tip.onTime") : t(onsetErr > 0 ? "tip.late" : "tip.early", { ms: Math.round(Math.abs(onsetErr)) }));
 
   if (j.releaseGrade !== null && j.releaseErrorMs !== null && j.releaseGrade !== "perfect") {
     const releaseErr = j.releaseErrorMs;
-    parts.push(releaseErr < 0 ? `held ${Math.round(Math.abs(releaseErr))} ms short` : `held ${Math.round(Math.abs(releaseErr))} ms long`);
+    parts.push(t(releaseErr < 0 ? "tip.short" : "tip.long", { ms: Math.round(Math.abs(releaseErr)) }));
   }
 
   return capitalize(parts.join(", "));
@@ -198,8 +192,10 @@ export function describeNoteJudgement(j: OnsetJudgement): string {
 
 /** Plain-language detail for a rest's tooltip, e.g. "Rest: you tapped during it". */
 export function describeRestJudgement(r: { grade: Grade; reason: string | null }): string {
-  if (r.reason) return `Rest: ${r.reason}`;
-  return r.grade === "miss" ? "Rest: not clean" : "Rest: held clean";
+  // The judge words its reasons in English; map the known ones to the current language.
+  const reason = r.reason === "you tapped during it" ? t("tip.restTapped") : r.reason === "held through it" ? t("tip.restHeld") : r.reason;
+  if (reason) return t("tip.rest", { reason });
+  return t(r.grade === "miss" ? "tip.restNotClean" : "tip.restClean");
 }
 
 function hitCount(result: RunResult): number {
@@ -218,29 +214,29 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
     const noTaps = document.createElement("p");
     noTaps.className = "results-detail";
     const touch = typeof matchMedia === "function" && matchMedia("(hover: none)").matches;
-    noTaps.textContent = touch ? "No taps detected. Try again: tap the lower half of the screen." : "No taps detected. Try again: tap the lower half of the screen, or press F / J.";
+    noTaps.textContent = t(touch ? "res.noTapsTouch" : "res.noTapsKeys");
     return bentoPanel([cell([noTaps])], buildButtons(callbacks, retry));
   }
 
   // The two headline numbers side by side.
-  const second = mode === "practice" ? textCard("Timing vs click", timingVsClickWords(result.judgements)) : scoreCard("Tempo steadiness", result.steadiness);
+  const second = mode === "practice" ? textCard(t("res.timingVsClick"), timingVsClickWords(result.judgements)) : scoreCard(t("res.steadiness"), result.steadiness);
   const scores = document.createElement("div");
   scores.className = "bento-row";
-  scores.append(cell([scoreCard("Rhythm accuracy", result.accuracy)]), cell([second]));
+  scores.append(cell([scoreCard(t("res.accuracy"), result.accuracy)]), cell([second]));
 
   // How the notes landed.
   const counts: HTMLElement[] = [gradeTally(result)];
   if (result.handAccuracy) {
     const handsLine = document.createElement("p");
     handsLine.className = "results-detail";
-    handsLine.textContent = `Left hand ${Math.round(result.handAccuracy[0])}, right hand ${Math.round(result.handAccuracy[1])}`;
+    handsLine.textContent = t("res.handsLine", { left: Math.round(result.handAccuracy[0]), right: Math.round(result.handAccuracy[1]) });
     counts.push(handsLine);
   }
 
   // What a teacher would say, and the way to see it on the music.
   const adviceLabel = document.createElement("span");
   adviceLabel.className = "option-label";
-  adviceLabel.textContent = "Notes";
+  adviceLabel.textContent = t("res.notes");
   const list = document.createElement("ul");
   list.className = "teacher-notes";
   for (const line of teacherNotes(result, mode)) {
@@ -253,7 +249,7 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
     const review = document.createElement("button");
     review.type = "button";
     review.className = "review-link";
-    review.textContent = "See where it went";
+    review.textContent = t("res.review");
     review.addEventListener("click", callbacks.onReview);
     advice.push(review);
   }
@@ -262,10 +258,8 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
   const detail = document.createElement("p");
   detail.className = "results-detail";
   const playedBpm = Math.round(result.playedBpm);
-  detail.textContent =
-    mode === "practice"
-      ? `Played ${playedBpm} bpm, ${tempoVsTargetWords(result.playedBpm, targetBpm)}.`
-      : `Played ${playedBpm} bpm, ${tempoVsTargetWords(result.playedBpm, targetBpm)}. ${capitalize(driftWords(result.driftPercent))}.`;
+  const played = t("res.played", { bpm: playedBpm, vs: tempoVsTargetWords(result.playedBpm, targetBpm) });
+  detail.textContent = mode === "practice" ? played : `${played} ${capitalize(driftWords(result.driftPercent))}.`;
   const tempo: HTMLElement[] = [detail];
   if (mode !== "practice" && result.tempoByBar) {
     const chart = tempoChart(result.tempoByBar, targetBpm);
@@ -314,10 +308,10 @@ function gradeTally(result: RunResult): HTMLElement {
   const counts: Record<Grade, number> = { perfect: 0, good: 0, ok: 0, miss: 0 };
   for (const j of result.judgements) counts[j.hitTime === null ? "miss" : j.grade]++;
   const words: [Grade, string][] = [
-    ["perfect", "clean"],
-    ["good", "good"],
-    ["ok", "close"],
-    ["miss", "missed"],
+    ["perfect", t("res.tallyClean")],
+    ["good", t("res.tallyGood")],
+    ["ok", t("res.tallyClose")],
+    ["miss", t("res.tallyMissed")],
   ];
   for (const [grade, word] of words) {
     const item = document.createElement("span");
@@ -337,7 +331,7 @@ export function buildEndedEarlyPanel(title: string, detail: string, callbacks: R
   heading.textContent = title;
   const text = document.createElement("p");
   text.className = "results-detail";
-  text.textContent = detail ? `${detail} Try it again, maybe a little slower, or hear it played first.` : "";
+  text.textContent = detail ? `${detail}${t("ended.tryAgain")}` : "";
   return bentoPanel([cell([heading, text], "bento-grow")], buildButtons(callbacks, retry), "ended-early");
 }
 
@@ -432,7 +426,7 @@ function buildButtons(callbacks: ResultsCallbacks, retry?: RetryOptions): HTMLEl
         bpm = original;
         paint();
       },
-      { less: "Slower", more: "Faster", reset: "Back to the tempo you played" },
+      { less: t("home.slower"), more: t("home.faster"), reset: t("res.backToPlayed") },
     );
     tempo.el.classList.add("retry-tempo");
     const paint = () => {
@@ -443,27 +437,27 @@ function buildButtons(callbacks: ResultsCallbacks, retry?: RetryOptions): HTMLEl
     tempoGroup.appendChild(tempo.el);
     top.push(tempoGroup);
   }
-  top.push(actionButton("Hear it", "H", callbacks.onListen), actionButton("Home", "Esc", callbacks.onHome, "home-action"));
+  top.push(actionButton(t("res.hearIt"), "H", callbacks.onListen), actionButton(t("res.home"), "Esc", callbacks.onHome, "home-action"));
 
   const doRetry = () => callbacks.onRetry(retry ? bpm : undefined);
   const doNext = () => callbacks.onNext(retry && bpm !== original ? bpm : undefined);
-  const nextLabel = retry?.nextLabel ?? "Next level";
+  const nextLabel = retry?.nextLabel ?? t("next.level");
   // Moving on is the main action only once a lesson step is passed; otherwise it's another go.
   if (retry?.primary === "next") {
-    return actionsBar(mainButton(nextLabel, "↵", true, doNext), actionButton("Retry", "R", doRetry), top);
+    return actionsBar(mainButton(nextLabel, "↵", true, doNext), actionButton(t("res.retry"), "R", doRetry), top);
   }
-  return actionsBar(mainButton("Retry", "↵", false, doRetry), actionButton(`${nextLabel} →`, "N", doNext), top);
+  return actionsBar(mainButton(t("res.retry"), "↵", false, doRetry), actionButton(`${nextLabel} →`, "N", doNext), top);
 }
 
 /** After listening to the exercise: the player's turn next. */
 export function buildListenedPanel(callbacks: { onPlay: () => void; onListen: () => void; onHome: () => void }): HTMLElement {
   const heading = document.createElement("p");
   heading.className = "ended-title";
-  heading.textContent = "Your turn";
+  heading.textContent = t("res.yourTurn");
   const text = document.createElement("p");
   text.className = "results-detail";
-  text.textContent = "That's how it goes. Now play it yourself, or hear it once more.";
-  const bar = actionsBar(mainButton("Play it", "↵", true, callbacks.onPlay), null, [actionButton("Hear again", "H", callbacks.onListen), actionButton("Home", "Esc", callbacks.onHome, "home-action")]);
+  text.textContent = t("res.yourTurnText");
+  const bar = actionsBar(mainButton(t("res.playIt"), "↵", true, callbacks.onPlay), null, [actionButton(t("res.hearAgain"), "H", callbacks.onListen), actionButton(t("res.home"), "Esc", callbacks.onHome, "home-action")]);
   return bentoPanel([cell([heading, text], "bento-grow")], bar, "ended-early");
 }
 
@@ -490,7 +484,7 @@ export function tempoChart(tempoByBar: (number | null)[], targetBpm: number): HT
   svg.setAttribute("preserveAspectRatio", "none");
   svg.setAttribute("class", "tempo-chart-plot");
   svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", `Tempo by bar: ${tempoByBar.map((b) => (b === null ? "unknown" : Math.round(b))).join(", ")} bpm`);
+  svg.setAttribute("aria-label", t("chart.aria", { list: tempoByBar.map((b) => (b === null ? t("chart.unknown") : Math.round(b))).join(", ") }));
 
   const target = document.createElementNS(SVG_NS, "line");
   target.setAttribute("x1", "0");
@@ -521,7 +515,7 @@ export function tempoChart(tempoByBar: (number | null)[], targetBpm: number): HT
   wrap.className = "tempo-chart";
   const label = document.createElement("span");
   label.className = "option-label";
-  label.textContent = "Your tempo, bar by bar";
+  label.textContent = t("chart.title");
   const plot = document.createElement("div");
   plot.className = "tempo-chart-area";
   plot.appendChild(svg);
@@ -532,17 +526,17 @@ export function tempoChart(tempoByBar: (number | null)[], targetBpm: number): HT
     dot.className = "tempo-chart-dot";
     dot.style.left = `${(x(bar) / W) * 100}%`;
     dot.style.top = `${(y(bpm) / H) * 100}%`;
-    dot.title = `Bar ${bar + 1}: ${Math.round(bpm)} bpm`;
+    dot.title = t("chart.dot", { bar: bar + 1, bpm: Math.round(bpm) });
     plot.appendChild(dot);
   });
   const axis = document.createElement("div");
   axis.className = "tempo-chart-axis";
   const first = document.createElement("span");
-  first.textContent = `bar 1: ${Math.round(known[0]!)}`;
+  first.textContent = t("chart.first", { bpm: Math.round(known[0]!) });
   const mid = document.createElement("span");
-  mid.textContent = `dashed: ${targetBpm} bpm`;
+  mid.textContent = t("chart.dashed", { bpm: targetBpm });
   const last = document.createElement("span");
-  last.textContent = `bar ${tempoByBar.length}: ${Math.round(known[known.length - 1]!)}`;
+  last.textContent = t("chart.last", { bar: tempoByBar.length, bpm: Math.round(known[known.length - 1]!) });
   axis.append(first, mid, last);
   wrap.append(label, plot, axis);
   return wrap;
