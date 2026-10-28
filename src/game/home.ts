@@ -34,15 +34,8 @@ export function leaveHome(): void {
 
 const FIGURE_CYCLE_MS = 15000;
 
-/** The plate floats behind the hero, gently ringing and drifting through figures. */
-/** Greys a field out (and takes it out of reach) while it doesn't apply, keeping its place. */
-function setOff(fieldEl: HTMLElement, off: boolean, reason: string): void {
-  fieldEl.classList.toggle("field-off", off);
-  fieldEl.inert = off;
-  if (off) fieldEl.title = reason;
-  else fieldEl.removeAttribute("title");
-}
 
+/** The plate floats behind the hero, gently ringing and drifting through figures. */
 /** A narrow, upright screen: the sand becomes a quiet backdrop instead of a framed picture. */
 export function isPhoneBackdrop(): boolean {
   return window.innerWidth <= 640 && window.innerWidth < window.innerHeight * 0.9;
@@ -370,7 +363,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     { less: t("home.slower"), more: t("home.faster"), reset: t("home.backDefault") },
   );
   const ingredientsField = field(t("home.rhythms"), ingredientChips.el);
-  ingredientsField.classList.add("wide-field");
+  ingredientsField.classList.add("wide-field", "rhythms-field");
   const meterField = field(t("home.meter"), meterControl.el);
   const relateField = field(t("home.relate"), relateControl.el);
   relateField.classList.add("wide-field");
@@ -409,8 +402,10 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     lessonFields.hidden = !lessons;
     freeFields.hidden = lessons;
     // Fields that don't apply stay in place, greyed out, so the layout never jumps.
-    setOff(relateField, hands !== 2, t("home.needsTwoHands"));
-    setOff(partField, hands !== 2, t("home.needsTwoHands"));
+    // With one hand, the two-hand choices are simply not there.
+    relateField.hidden = hands !== 2;
+    partField.hidden = hands !== 2;
+    freeFields.classList.toggle("one-hand", hands !== 2);
     ingredientChips.setDisabled(CROSS_CHIP, hands === 2 ? null : t("home.needsTwoHands"));
     if (lessons) {
       const lesson = LESSONS[lessonIndex]!;

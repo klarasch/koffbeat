@@ -1446,7 +1446,25 @@ body,
   }
 }
 
-/* A field that doesn't apply right now keeps its place, greyed out (home.ts setOff). */
+/* One hand: the two-hand fields are hidden (home.ts), so Hands sits beside the rhythms on wide
+   screens, and on two columns the rhythms come first and Tempo takes the last row. */
+@media (min-width: 1100px) {
+  .home-fields.one-hand > .rhythms-field {
+    grid-column: span 3;
+  }
+}
+
+@media (min-width: 720px) and (max-width: 1099px) {
+  .home-fields.one-hand > .rhythms-field {
+    order: -1;
+  }
+
+  .home-fields.one-hand > .field:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+/* A field that doesn't apply right now keeps its place, greyed out. */
 .field-off {
   opacity: 0.38;
   pointer-events: none;
