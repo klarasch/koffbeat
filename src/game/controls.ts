@@ -163,28 +163,57 @@ export function select(choices: Choice[], initial: string, onChange: (value: str
     }
     paint();
   }
+  /**
+   * While open, the list lives at the top level of the page, placed against the button: inside
+   * a panel that clips or scrolls (or one with a backdrop blur, which also traps fixed
+   * positioning) it would be cut off.
+   */
+  function placeList(): void {
+    const rect = button.getBoundingClientRect();
+    const below = window.innerHeight - rect.bottom;
+    // Open upward when the list wouldn't fit below.
+    const upward = below < Math.min(320, list.scrollHeight + 12) && rect.top > below;
+    list.style.position = "fixed";
+    list.style.left = `${rect.left}px`;
+    list.style.width = `${rect.width}px`;
+    list.style.right = "auto";
+    list.style.top = upward ? "auto" : `${rect.bottom + 4}px`;
+    list.style.bottom = upward ? `${window.innerHeight - rect.top + 4}px` : "auto";
+    list.style.maxHeight = `${Math.max(120, Math.min(320, (upward ? rect.top : below) - 16))}px`;
+  }
   function open(): void {
     if (!list.hidden) return;
     active = current;
+    document.body.appendChild(list);
     list.hidden = false;
-    // Open upward when the list wouldn't fit below.
-    const rect = button.getBoundingClientRect();
-    el.classList.toggle("upward", window.innerHeight - rect.bottom < Math.min(320, list.scrollHeight + 12) && rect.top > window.innerHeight - rect.bottom);
+    placeList();
     button.setAttribute("aria-expanded", "true");
     paint();
     list.focus({ preventScroll: true });
     items[choices.findIndex((c) => c.value === active)]?.scrollIntoView({ block: "nearest" });
     document.addEventListener("pointerdown", onOutside, true);
+    // The page moving under it (a panel scrolling, the window resizing) closes it.
+    document.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
   }
   function close(refocus: boolean): void {
     if (list.hidden) return;
     list.hidden = true;
+    el.appendChild(list);
     button.setAttribute("aria-expanded", "false");
     document.removeEventListener("pointerdown", onOutside, true);
+    document.removeEventListener("scroll", onScroll, true);
+    window.removeEventListener("resize", onResize);
     if (refocus) button.focus({ preventScroll: true });
   }
   function onOutside(event: PointerEvent): void {
-    if (!el.contains(event.target as Node)) close(false);
+    if (!el.contains(event.target as Node) && !list.contains(event.target as Node)) close(false);
+  }
+  function onScroll(event: Event): void {
+    if (event.target !== list) close(false);
+  }
+  function onResize(): void {
+    close(false);
   }
   function move(delta: number): void {
     const enabled = choices.filter((c) => !disabled.has(c.value));

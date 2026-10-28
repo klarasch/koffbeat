@@ -594,7 +594,8 @@ body,
 
 .select-list {
   position: absolute;
-  z-index: 30;
+  /* Open, it sits at the top level of the page (controls.ts placeList), above everything. */
+  z-index: 2147482500;
   left: 0;
   right: 0;
   top: calc(100% + 4px);
