@@ -34,6 +34,8 @@ export function leaveHome(): void {
 
 const FIGURE_CYCLE_MS = 15000;
 
+/** The icon's ink pixels, from the grid in scripts/make-icons.py. */
+const ICON_PATH = "M8 2h2v1h-2zM8 3h3v1h-3zM8 4h4v1h-4zM8 5h1v1h-1zM10 5h2v1h-2zM8 6h1v1h-1zM11 6h1v1h-1zM8 7h1v1h-1zM11 7h1v1h-1zM8 8h1v1h-1zM10 8h1v1h-1zM8 9h1v1h-1zM5 10h4v1h-4zM4 11h5v1h-5zM4 12h5v1h-5zM10 12h2v1h-2zM5 13h4v1h-4zM10 13h2v1h-2z";
 
 /** The plate floats behind the hero, gently ringing and drifting through figures. */
 /** A narrow, upright screen: the sand becomes a quiet backdrop instead of a framed picture. */
@@ -128,7 +130,8 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   const titleBlock = document.createElement("div");
   const title = document.createElement("h1");
   title.className = "home-title";
-  title.textContent = "Koffbeat";
+  // The app icon (a pixel dotted eighth note, as in scripts/make-icons.py) beside the wordmark.
+  title.innerHTML = `<svg class="home-title-icon" viewBox="4 2 8 12" aria-hidden="true" shape-rendering="crispEdges"><path fill="currentColor" d="${ICON_PATH}"/></svg><span>Koffbeat</span>`;
   const tagline = document.createElement("p");
   tagline.className = "home-tagline";
   tagline.textContent = t("home.tagline");

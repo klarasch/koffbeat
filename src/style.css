@@ -280,6 +280,10 @@ body,
 
 /* A quiet pixel wordmark: the sand and Play are the loud things on this screen. */
 .home-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 21px;
   font-family: var(--pixel);
   font-weight: 400;
   font-size: 15px;
@@ -288,6 +292,13 @@ body,
   line-height: 1;
   margin: 0;
   animation: rise 1.2s var(--ease) both;
+}
+
+/* Drawn at 1.75 px per icon pixel, close to the wordmark's own pixel size. */
+.home-title-icon {
+  flex: none;
+  width: 14px;
+  height: 21px;
 }
 
 .home-tagline {
@@ -2102,7 +2113,7 @@ body,
   min-height: 44px;
   min-width: 44px;
   padding: 0 4px;
-  margin-top: -8px;
+  margin-top: -11.5px;
   font-family: var(--mono);
   font-size: 11px;
   letter-spacing: 0.12em;
