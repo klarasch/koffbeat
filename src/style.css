@@ -221,7 +221,9 @@ body,
   inset: 0;
   display: flex;
   flex-direction: column;
-  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  /* No bottom padding: the footer (Play) pads itself for the home indicator. With padding
+     here, the sticky footer stopped above it and the choices showed through underneath. */
+  padding: env(safe-area-inset-top) 0 0;
   overflow-x: hidden;
   overflow-y: auto;
 }
@@ -236,6 +238,12 @@ body,
   padding: 56px clamp(18px, 5vw, 56px) calc(clamp(12px, 2.5vh, 22px) + env(safe-area-inset-bottom));
   /* A long, soft fade at the top, so sand passing behind it never meets a hard edge. */
   background: linear-gradient(to bottom, rgba(246, 244, 240, 0), rgba(246, 244, 240, 0.8) 40px, var(--void) 72px);
+}
+
+/* Paper below the footer too, so an overscroll bounce never shows the choices under it. (A
+   shadow, unlike an extra box, doesn't make the page scroll further.) */
+.home-footer {
+  box-shadow: 0 120px 0 0 var(--void);
 }
 
 @media (max-width: 560px) {
