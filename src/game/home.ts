@@ -361,8 +361,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   freeFields.className = "home-fields";
   const handsField = field("Hands", handsControl.el);
   const lengthField = field("Length", lengthControl.el);
-  // Classes for the home grid (style.css): Hands and Play share a row, Length widens when
-  // there is no meter to choose.
+  // Classes for the home grid (style.css), and for greying fields out when they don't apply.
   handsField.classList.add("hands-field");
   partField.classList.add("part-field");
   relateField.classList.add("relate-field");
@@ -393,8 +392,6 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     // Fields that don't apply stay in place, greyed out, so the layout never jumps.
     setOff(relateField, hands !== 2, "Needs two hands");
     setOff(partField, hands !== 2, "Needs two hands");
-    // Two-hand exercises are written in 4/4.
-    setOff(meterField, hands === 2, "Two-hand pieces are in 4/4");
     ingredientChips.setDisabled(CROSS_CHIP, hands === 2 ? null : "Needs two hands");
     if (lessons) {
       const lesson = LESSONS[lessonIndex]!;
@@ -408,7 +405,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
       note.textContent = mode === "practice" ? "The metronome keeps going: play on the click." : "One bar of clicks, then keep the pulse yourself.";
       const override = opts.tempo.get();
       tempoControl.setText(`${override ?? defaultBpm()} bpm`, override !== null);
-      const what = `${describeIngredients(new Set<Ingredient>(["quarters", ...ingredients]))}, ${bars} bars`;
+      const what = `${describeIngredients(new Set<Ingredient>(["quarters", ...ingredients]))}${meter === "4/4" ? "" : ` in ${meter}`}, ${bars} bars`;
       playWhat.textContent = hands === 2 ? `Two hands, ${what.toLowerCase()}${cross ? ", 3 against 2" : ""}` : what;
     }
     saveHomePrefs({ track, lessonIndex, ingredients, cross, meter, hands, stage, bars, mode, part });
@@ -423,7 +420,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
 
   const start = () => {
     if (track === "lessons") opts.onLesson(lessonIndex, pieceIndex, stepIndex, lessonBpm ?? suggestedBpm());
-    else opts.onFree({ ingredients: ["quarters", ...ingredients.filter((i) => i !== "quarters")], cross: hands === 2 && cross, meter: hands === 2 ? "4/4" : meter, hands, stage, bars, mode, part });
+    else opts.onFree({ ingredients: ["quarters", ...ingredients.filter((i) => i !== "quarters")], cross: hands === 2 && cross, meter, hands, stage, bars, mode, part });
   };
   play.addEventListener("click", start);
   const onKey = (event: KeyboardEvent) => {

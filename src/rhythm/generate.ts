@@ -102,7 +102,7 @@ export function describeIngredients(set: ReadonlySet<Ingredient>): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-const METERS: Record<MeterKind, Meter> = {
+export const METERS: Record<MeterKind, Meter> = {
   "4/4": { beats: 4, beatUnit: 4 },
   "3/4": { beats: 3, beatUnit: 4 },
   "6/8": { beats: 6, beatUnit: 8 },

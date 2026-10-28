@@ -186,7 +186,7 @@ function keepSolo(pick: LevelPick, solo: Hand | undefined): LevelPick {
 function freePick(choice: FreeChoice): LevelPick {
   const again = () => freePick(choice);
   if (choice.hands === 2) {
-    const level = withTempo(generateTwoHandLevel({ stage: choice.stage, cross: choice.cross, ingredients: choice.ingredients, bars: choice.bars }));
+    const level = withTempo(generateTwoHandLevel({ stage: choice.stage, cross: choice.cross, ingredients: choice.ingredients, bars: choice.bars, meter: choice.meter }));
     // Any two-hand piece: the hand(s) chosen on home, and another choice on the results.
     const solo: Hand | undefined = choice.part === "both" ? undefined : choice.part === "right" ? 1 : 0;
     return { level, next: again, solo, handChoice: true, nextLabel: "New exercise" };

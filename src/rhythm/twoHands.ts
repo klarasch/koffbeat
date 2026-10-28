@@ -1,7 +1,8 @@
 // Two-hand reading exercises: two independent rhythm lines, the left hand's on zone 0 and the
 // right hand's on zone 1. Seeded and pure, like the one-line generator it builds on. The stages
 // follow how a teacher brings in hand independence: take turns, play together, keep one hand
-// steady under the other, then three against two.
+// steady under the other, then three against two. Pieces can be in 4/4, 3/4 or 6/8 (the
+// three-against-two stage is 4/4 only; in 3/4 and 6/8 the cross bars are hemiolas).
 
 import type { Level, RhythmEvent } from "../types";
 import {
@@ -12,6 +13,8 @@ import {
   type Ingredient,
   INGREDIENTS,
   ingredientPalette,
+  type MeterChoice,
+  METERS,
   mulberry32,
   note,
   type Palette,
@@ -27,7 +30,6 @@ export const TWO_HAND_STAGES: string[] = ["Call and response", "Unison", "Indepe
 /** The ways the hands can relate in free practice (stages 1-3); "3 against 2" is a rhythm option, see `cross`. */
 export const HAND_RELATIONS: string[] = TWO_HAND_STAGES.slice(0, 3).map((name) => (name === "Independence" ? "Independent" : name));
 
-const METER = { beats: 4, beatUnit: 4 } as const;
 const DEFAULT_BPM = 65;
 
 /** Default rhythm vocabulary: quarters, halves, rests and eighth pairs. */
@@ -55,8 +57,20 @@ function quarters(): RhythmEvent[] {
   return [note("q"), note("q"), note("q"), note("q")];
 }
 
-function wholeRest(): RhythmEvent[] {
-  return [rest("w")];
+/** A bar of the steady beat: quarters in 4/4 and 3/4, dotted quarters in 6/8. */
+function steadyBar(kind: MeterChoice): RhythmEvent[] {
+  if (kind === "6/8") return [note("q", { dots: 1 }), note("q", { dots: 1 })];
+  return kind === "3/4" ? [note("q"), note("q"), note("q")] : quarters();
+}
+
+/** The steady hand's phrase ending: two halves in 4/4, a dotted half in 3/4 and 6/8. */
+function steadyCadence(kind: MeterChoice): RhythmEvent[] {
+  return kind === "4/4" ? [note("h"), note("h")] : [note("h", { dots: 1 })];
+}
+
+/** A whole bar of rest: a whole rest in 4/4, a dotted half rest in 3/4 and 6/8. */
+function wholeRest(kind: MeterChoice): RhythmEvent[] {
+  return [kind === "4/4" ? rest("w") : rest("h", { dots: 1 })];
 }
 
 function tripletQuarters(): RhythmEvent[] {
@@ -67,23 +81,23 @@ function tripletQuarters(): RhythmEvent[] {
  * Stage 1: the hands take turns a bar at a time, the right hand calling and the left answering,
  * often with an echo of the call. The resting hand has a whole-bar rest.
  */
-function callAndResponse(rng: Rng, bars: number, pal: Palette): [Bars, Bars] {
+function callAndResponse(rng: Rng, bars: number, pal: Palette, kind: MeterChoice): [Bars, Bars] {
   const left: Bars = [];
   const right: Bars = [];
   for (let i = 0; i < bars; i += 2) {
-    const call = buildBarEvents(rng, pal, { kind: "4/4", disallowLeadingRest: true });
+    const call = buildBarEvents(rng, pal, { kind, disallowLeadingRest: true });
     const last = i + 2 >= bars;
-    const answer = rng() < 0.5 ? cloneBar(call) : buildBarEvents(rng, pal, { kind: "4/4", disallowLeadingRest: true, forceTrailingHalf: last });
-    right.push(call, wholeRest());
-    left.push(wholeRest(), answer);
+    const answer = rng() < 0.5 ? cloneBar(call) : buildBarEvents(rng, pal, { kind, disallowLeadingRest: true, forceTrailingHalf: last });
+    right.push(call, wholeRest(kind));
+    left.push(wholeRest(kind), answer);
   }
   return [left, right];
 }
 
 /** Stage 2: both hands play the same line together. */
-function unison(rng: Rng, bars: number, pal: Palette): [Bars, Bars] {
+function unison(rng: Rng, bars: number, pal: Palette, kind: MeterChoice): [Bars, Bars] {
   const line: Bars = [];
-  for (let p = 0; p < bars / 4; p++) line.push(...buildPhrase(rng, pal, "4/4", p === 0));
+  for (let p = 0; p < bars / 4; p++) line.push(...buildPhrase(rng, pal, kind, p === 0));
   return [line, line.map(cloneBar)];
 }
 
@@ -91,17 +105,17 @@ function unison(rng: Rng, bars: number, pal: Palette): [Bars, Bars] {
  * Stage 3: one hand keeps steady quarters while the other reads, swapping each phrase; from the
  * third phrase on both hands read their own rhythms.
  */
-function independence(rng: Rng, bars: number, pal: Palette): [Bars, Bars] {
+function independence(rng: Rng, bars: number, pal: Palette, kind: MeterChoice): [Bars, Bars] {
   const left: Bars = [];
   const right: Bars = [];
   for (let p = 0; p < bars / 4; p++) {
-    const reading = buildPhrase(rng, pal, "4/4", true);
+    const reading = buildPhrase(rng, pal, kind, true);
     if (p >= 2) {
       right.push(...reading);
       // The second reading hand reads a couple of tiers (or ingredients) simpler than the first.
-      left.push(...buildPhrase(rng, simpler(pal), "4/4", true));
+      left.push(...buildPhrase(rng, simpler(pal), kind, true));
     } else {
-      const steady = [quarters(), quarters(), quarters(), [note("h"), note("h")]];
+      const steady = [steadyBar(kind), steadyBar(kind), steadyBar(kind), steadyCadence(kind)];
       (p === 0 ? right : left).push(...reading);
       (p === 0 ? left : right).push(...steady);
     }
@@ -143,14 +157,19 @@ function threeAgainstTwo(rng: Rng, bars: number, pal: Palette): [Bars, Bars] {
  * four becomes a full bar of 3:2, one hand in quarter-note triplets over the other's
  * quarters/eighths (the triplet hand swaps each phrase). The bar before loses any tie into it.
  */
-function addCrossBars(rng: Rng, pal: Palette, left: Bars, right: Bars): void {
+function addCrossBars(rng: Rng, pal: Palette, left: Bars, right: Bars, kind: MeterChoice): void {
   const duple = dupleVocabulary(pal);
   for (let at = 2, p = 0; at < left.length; at += 4, p++) {
-    const triplets = [...tripletQuarters(), ...tripletQuarters()];
-    const other = duple ? buildBarEvents(rng, duple, { kind: "4/4", disallowLeadingRest: true }) : quarters();
     const [tripletHand, dupleHand] = p % 2 === 0 ? [right, left] : [left, right];
-    tripletHand[at] = triplets;
-    dupleHand[at] = other;
+    if (kind === "4/4") {
+      tripletHand[at] = [...tripletQuarters(), ...tripletQuarters()];
+      dupleHand[at] = duple ? buildBarEvents(rng, duple, { kind, disallowLeadingRest: true }) : quarters();
+    } else {
+      // 3/4 and 6/8 hold three against two without tuplets (a hemiola): three quarters in one
+      // hand against two dotted quarters in the other, across the same bar.
+      tripletHand[at] = [note("q"), note("q"), note("q")];
+      dupleHand[at] = [note("q", { dots: 1 }), note("q", { dots: 1 })];
+    }
     for (const hand of [left, right]) {
       const before = hand[at - 1]?.at(-1);
       if (before?.tie) delete before.tie;
@@ -169,12 +188,14 @@ export interface TwoHandOptions {
   focus?: Ingredient;
   /** Stages 1-3: add cross-rhythm (3 against 2) bars to the piece. */
   cross?: boolean;
+  /** Stages 1-3: the meter to write in (default 4/4). Stage 4 is always 4/4. */
+  meter?: MeterChoice;
   bars: 4 | 8 | 16;
   bpm?: number;
   seed?: number;
 }
 
-/** Generates a two-hand exercise in 4/4: `lines[0]` for the left hand, `lines[1]` for the right. */
+/** Generates a two-hand exercise: `lines[0]` for the left hand, `lines[1]` for the right. */
 export function generateTwoHandLevel(opts: TwoHandOptions): Level {
   const seed = opts.seed ?? Math.floor(Math.random() * 0xffffffff);
   const rng = mulberry32(seed);
@@ -182,14 +203,16 @@ export function generateTwoHandLevel(opts: TwoHandOptions): Level {
   const build = [callAndResponse, unison, independence, threeAgainstTwo][stage - 1] ?? callAndResponse;
   const tier = Math.min(MAX_TWO_HAND_TIER, Math.max(1, Math.round(opts.tier ?? DEFAULT_TIER)));
   const pal = opts.ingredients ? ingredientPalette(opts.ingredients, opts.focus) : tierPalette(tier);
-  const [left, right] = build(rng, opts.bars, pal);
+  const kind: MeterChoice = stage === 4 ? "4/4" : (opts.meter ?? "4/4");
+  const [left, right] = build(rng, opts.bars, pal, kind);
   const cross = Boolean(opts.cross) && stage < 4;
-  if (cross) addCrossBars(rng, pal, left, right);
+  if (cross) addCrossBars(rng, pal, left, right, kind);
   const stageName = (TWO_HAND_STAGES[stage - 1] ?? "").toLowerCase() + (cross ? " with 3 against 2" : "");
+  const meterCode = kind === "4/4" ? "" : `-${kind.replace("/", "")}`;
   return {
-    id: `${opts.ingredients ? `gen-2h-s${stage}-i-${seed}` : `gen-2h-s${stage}-t${tier}-${seed}`}${cross ? "-x" : ""}`,
-    title: `Two hands: ${stageName}, ${opts.ingredients ? describeIngredients(pal.ingredients).toLowerCase() : TIER_NAMES[tier - 1]?.toLowerCase()}`,
-    meter: METER,
+    id: `${opts.ingredients ? `gen-2h-s${stage}-i-${seed}` : `gen-2h-s${stage}-t${tier}-${seed}`}${cross ? "-x" : ""}${meterCode}`,
+    title: `Two hands: ${stageName}, ${opts.ingredients ? describeIngredients(pal.ingredients).toLowerCase() : TIER_NAMES[tier - 1]?.toLowerCase()}${kind === "4/4" ? "" : ` in ${kind}`}`,
+    meter: METERS[kind],
     bpm: opts.bpm ?? DEFAULT_BPM,
     bars: left,
     lines: [left, right],

@@ -349,3 +349,59 @@ describe("generateTwoHandLevel with cross rhythm", () => {
     expect(generateTwoHandLevel({ stage: 4, bars: 8, seed: 5, cross: true }).id).toBe(generateTwoHandLevel({ stage: 4, bars: 8, seed: 5 }).id);
   });
 });
+
+describe("generateTwoHandLevel in 3/4 and 6/8", () => {
+  const METER_OF = { "3/4": { beats: 3, beatUnit: 4 }, "6/8": { beats: 6, beatUnit: 8 } } as const;
+
+  it("writes valid pieces in the chosen meter for every relation, ingredient mix and length", () => {
+    const rng = mulberry32(7);
+    const keys = INGREDIENTS.map((i) => i.key);
+    for (const meter of ["3/4", "6/8"] as const) {
+      for (let n = 0; n < 180; n++) {
+        const ingredients = keys.filter(() => rng() < 0.45);
+        const stage = (n % 3) + 1;
+        const bars = ([4, 8, 16] as const)[Math.floor(n / 3) % 3] as 4 | 8 | 16;
+        const cross = n % 2 === 0;
+        const level = generateTwoHandLevel({ stage, ingredients, bars, seed: n, meter, cross });
+        const label = `${meter} stage ${stage} [${ingredients.join(",")}] ${bars} bars${cross ? " cross" : ""}`;
+        expect(validateLevel(level), label).toEqual([]);
+        expect(level.meter, label).toEqual(METER_OF[meter]);
+        expect(level.lines?.[0], label).toHaveLength(bars);
+        expect(level.lines?.[1], label).toHaveLength(bars);
+        expect(level.title, label).toContain(`in ${meter}`);
+        // Triplets never appear outside 4/4 (6/8 and 3/4 cross bars are hemiolas instead).
+        if (meter === "6/8") expect(level.lines!.flat(2).some((e) => e.tuplet === 3), label).toBe(false);
+      }
+    }
+  });
+
+  it("call and response rests a whole bar with a dotted half rest", () => {
+    const level = generateTwoHandLevel({ stage: 1, ingredients: ["eighths"], bars: 4, seed: 3, meter: "3/4" });
+    level.lines![0]!.forEach((bar, i) => {
+      const other = level.lines![1]![i]!;
+      const resting = [bar, other].filter((b) => b.length === 1 && b[0]!.rest && b[0]!.value === "h" && b[0]!.dots === 1);
+      expect(resting).toHaveLength(1);
+    });
+  });
+
+  it("puts a hemiola in each phrase when crossing: three quarters against two dotted quarters", () => {
+    for (const meter of ["3/4", "6/8"] as const) {
+      const level = generateTwoHandLevel({ stage: 3, ingredients: ["eighths"], bars: 8, seed: 11, meter, cross: true });
+      const [left, right] = level.lines!;
+      for (const at of [2, 6]) {
+        const bars = [left![at]!, right![at]!];
+        const threes = bars.filter((b) => b.length === 3 && b.every((e) => e.value === "q" && !e.dots));
+        const twos = bars.filter((b) => b.length === 2 && b.every((e) => e.value === "q" && e.dots === 1));
+        expect(threes, `${meter} bar ${at}`).toHaveLength(1);
+        expect(twos, `${meter} bar ${at}`).toHaveLength(1);
+        expect(bars.map((b) => b.reduce((sum, e) => sum + eventQuarters(e), 0))).toEqual([3, 3]);
+      }
+    }
+  });
+
+  it("keeps the dedicated 3 against 2 stage in 4/4", () => {
+    const level = generateTwoHandLevel({ stage: 4, bars: 8, seed: 5, meter: "6/8" });
+    expect(level.meter).toEqual({ beats: 4, beatUnit: 4 });
+    expect(validateLevel(level)).toEqual([]);
+  });
+});
