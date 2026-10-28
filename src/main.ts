@@ -6,7 +6,7 @@ import { createAudioEngine } from "./audio/engine";
 import { lang, t } from "./i18n";
 import { runCalibration } from "./input/calibration";
 import { type FreeChoice, leaveHome, renderHome } from "./game/home";
-import { firstOpenPiece, LESSONS, loadProgress, PASS_ACCURACY, pieceLevel, recordResult } from "./game/lessons";
+import { firstOpenPiece, LESSONS, loadProgress, PASS_ACCURACY, pieceLevel, pieceName, recordResult } from "./game/lessons";
 import { createScene } from "./scene/resonance";
 import { startPlay } from "./game/play";
 import { generateLevel } from "./rhythm/generate";
@@ -156,7 +156,7 @@ function lessonPick(lessonIndex: number, pieceIndex: number, stepIndex: number, 
   if (!lesson) return null;
   const step = lesson.steps[stepIndex];
   if (!step) return lessonPick(lessonIndex + 1, firstOpenPiece(loadProgress(), LESSONS[lessonIndex + 1] ?? lesson), 0);
-  const level = { ...pieceLevel(lesson, pieceIndex, bpm ?? step.bpm), title: t("title.piece", { lesson: lesson.title, piece: pieceIndex + 1, step: step.label.toLowerCase() }) };
+  const level = { ...pieceLevel(lesson, pieceIndex, bpm ?? step.bpm), title: t("title.piece", { lesson: lesson.title, piece: pieceName(pieceIndex), step: step.label.toLowerCase() }) };
   const lastStep = stepIndex === lesson.steps.length - 1;
   return {
     level,

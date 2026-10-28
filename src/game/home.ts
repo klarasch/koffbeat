@@ -8,7 +8,7 @@ import { chips, field, segmented, select, stepper } from "./controls";
 import { lang, setLang, t } from "../i18n";
 import { describeIngredients, ingredientLabel, INGREDIENTS, type Ingredient, type MeterChoice, meterPart } from "../rhythm/generate";
 import { HAND_RELATIONS, handRelations } from "../rhythm/twoHands";
-import { firstOpenLesson, firstOpenPiece, firstOpenStep, LESSONS, loadProgress, PASS_ACCURACY, pieceDone, PIECES, stepDone } from "./lessons";
+import { firstOpenLesson, firstOpenPiece, firstOpenStep, LESSONS, loadProgress, PASS_ACCURACY, pieceDone, pieceName, PIECES, stepDone } from "./lessons";
 import type { Mode } from "../types";
 
 export interface HomeOptions {
@@ -243,7 +243,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     const lesson = LESSONS[lessonIndex]!;
     const p = loadProgress();
     const control = segmented(
-      Array.from({ length: PIECES }, (_, i) => ({ value: String(i), label: pieceDone(p, lesson, i) ? `${i + 1} ✓` : String(i + 1) })),
+      Array.from({ length: PIECES }, (_, i) => ({ value: String(i), label: pieceDone(p, lesson, i) ? `${pieceName(i)} ✓` : pieceName(i) })),
       String(pieceIndex),
       (value) => {
         pieceIndex = Number(value);
@@ -419,7 +419,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
       const done = lesson.steps.filter((_, i) => stepDone(p, lesson, pieceIndex, i)).length;
       lessonTempoControl.setText(t("bpm", { n: lessonBpm ?? step.bpm }), lessonBpm !== null);
       note.textContent = t("home.lessonNote", { done, n: lesson.steps.length, pass: PASS_ACCURACY, bpm: step.bpm });
-      playWhat.textContent = t("home.what.lesson", { title: lesson.title, piece: pieceIndex + 1, step: step.label.toLowerCase() });
+      playWhat.textContent = t("home.what.lesson", { title: lesson.title, piece: pieceName(pieceIndex), step: step.label.toLowerCase() });
     } else {
       note.textContent = t(mode === "practice" ? "home.noteMetronome" : "home.noteCountIn");
       const override = opts.tempo.get();

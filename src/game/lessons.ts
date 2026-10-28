@@ -108,6 +108,11 @@ export const LESSONS: Lesson[] = [
  * The seed of a piece (0-based): a hash of the lesson id and piece number, so the same piece
  * comes back every time (for as long as the generator itself is unchanged).
  */
+/** An exercise of a lesson is named by a letter: A, B, C. */
+export function pieceName(piece: number): string {
+  return String.fromCharCode(65 + piece);
+}
+
 export function pieceSeed(lessonId: string, piece: number): number {
   let h = 0x811c9dc5;
   for (const ch of `${lessonId}#${piece + 1}`) {
