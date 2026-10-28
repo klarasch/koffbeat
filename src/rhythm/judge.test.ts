@@ -506,3 +506,20 @@ describe("next-note scoring (count-in)", () => {
     expect(result.driftPercent).toBeGreaterThan(5);
   });
 });
+
+describe("next-note scoring: final results", () => {
+  it("costs a hesitation one note, not the tempo or the rest of the piece", () => {
+    const options = { sequential: true };
+    const judge = createLiveJudge(onsets, startTime, bpm, options);
+    const hits: Hit[] = onsets.map((o, i) => ({ time: startTime + (o.beat + (i >= 6 ? 3 : 0)) * secPerQuarter, zone: 0 }));
+    const matches = new Map<number, number>();
+    hits.forEach((h, i) => {
+      const r = judge.judgeHit(h);
+      if (r.onsetIndex !== null) matches.set(r.onsetIndex, i);
+    });
+    const result = judgeRun(onsets, rests, startTime, bpm, hits, heldReleases(onsets, 1).map((r, i) => ({ ...r, time: r.time + (i >= 6 ? 3 : 0) * secPerQuarter })), { ...options, matches });
+    expect(result.judgements.filter((j) => j.grade === "miss").length).toBe(1);
+    expect(Math.round(result.playedBpm)).toBe(bpm);
+    expect(result.steadiness).toBeGreaterThan(95);
+  });
+});

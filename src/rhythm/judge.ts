@@ -851,6 +851,37 @@ function judgeRests(
  * same online pulse tracking as the live judge), grades each match by its error relative to a
  * locally-fitted pulse, resolves each note's release, and grades rests.
  */
+/** Next-note scoring: how far a gap's tempo may be from the run's median and still say
+ * something about the tempo (beyond that it's a hesitation or a rush, graded on its own note). */
+const SEQUENTIAL_PAIR_TOLERANCE = 0.3;
+
+/**
+ * Next-note scoring: the player's tempo from the gaps between consecutive taps of each hand
+ * (seconds per quarter, with the beat midpoint of each gap), leaving out hesitations and rushes.
+ */
+function sequentialTempoPairs(points: MatchedPoint[]): { mid: number; spq: number }[] {
+  const pairs: { mid: number; spq: number }[] = [];
+  for (const line of [0, 1] as const) {
+    const sorted = points.filter((p) => p.line === line).sort((a, b) => a.beat - b.beat);
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1]!;
+      const cur = sorted[i]!;
+      const dBeat = cur.beat - prev.beat;
+      if (dBeat < MIN_TEMPO_STEP_QUARTERS) continue;
+      pairs.push({ mid: (cur.beat + prev.beat) / 2, spq: (cur.time - prev.time) / dBeat });
+    }
+  }
+  const m = median(pairs.map((p) => p.spq));
+  return m === null ? [] : pairs.filter((p) => Math.abs(p.spq / m - 1) <= SEQUENTIAL_PAIR_TOLERANCE);
+}
+
+function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
 export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: number, bpm: number, hits: Hit[], releases: Release[], options: JudgeOptions = {}): RunResult {
   const nominal = nominalSecPerQuarter(bpm);
   const grid = options.grid === true;
@@ -878,6 +909,8 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
   const gridOffset = grid ? clampedMedianOffset(matchedPoints, startTime, nominal) : 0;
   const sequential = options.sequential === true && !grid;
   const byBeat = [...matchedPoints].sort((a, b) => a.beat - b.beat);
+  const tempoPairs = sequential ? sequentialTempoPairs(matchedPoints) : [];
+  const runSpq = median(tempoPairs.map((p) => p.spq));
   /** Next-note scoring: from the previous tap, at the local tempo (the rhythm between taps). */
   const predictFromPrevious = (beat: number, excludeOnsetIndex: number | null): number => {
     let previous: MatchedPoint | undefined;
@@ -885,10 +918,9 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
       if (p.beat >= beat - 1e-9) break;
       if (p.onsetIndex !== excludeOnsetIndex) previous = p;
     }
-    if (!previous) return predictTimeAt(matchedPoints, beat, excludeOnsetIndex, startTime, nominal);
-    const around = matchedPoints.filter((p) => p.onsetIndex !== excludeOnsetIndex && Math.abs(p.beat - beat) <= LOCAL_FIT_WIDE_WINDOW_QUARTERS);
-    const fit = around.length >= 2 ? weightedLinearFit(around, beat) : null;
-    const spq = fit && fit.b > nominal * 0.5 && fit.b < nominal * 2 ? fit.b : nominal;
+    if (!previous) return startTime + beat * nominal;
+    const near = tempoPairs.filter((p) => Math.abs(p.mid - beat) <= LOCAL_FIT_WINDOW_QUARTERS * 2).map((p) => p.spq);
+    const spq = median(near) ?? runSpq ?? nominal;
     return previous.time + (beat - previous.beat) * spq;
   };
   const predict = (beat: number, excludeOnsetIndex: number | null = null): number =>
@@ -950,11 +982,27 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
     };
     handAccuracy = [forHand(0), forHand(1)];
   }
-  const playedBpm = computePlayedBpm(matchedPoints, bpm);
-  const driftPercent = computeDriftPercent(onsets, matchedPoints);
-  // Next-note scoring reports the tempo (and drift) separately, so steadiness is only how evenly
-  // the beat was kept from note to note.
-  const steadiness = computeSteadiness(matchedPoints, bpm, sequential ? bpm : playedBpm);
+  let playedBpm: number;
+  let driftPercent: number;
+  let steadiness: number;
+  if (sequential) {
+    // Tempo, drift and steadiness from the gaps between taps, hesitations left out. The tempo is
+    // reported, not graded: steadiness is only how evenly the beat was kept from note to note.
+    playedBpm = runSpq ? 60 / runSpq : bpm;
+    const beats = tempoPairs.map((p) => p.mid);
+    const span = beats.length ? Math.max(...beats) - Math.min(...beats) : 0;
+    const first = median(tempoPairs.filter((p) => p.mid <= Math.min(...beats) + span / 4).map((p) => p.spq));
+    const last = median(tempoPairs.filter((p) => p.mid >= Math.max(...beats) - span / 4).map((p) => p.spq));
+    driftPercent = first && last && tempoPairs.length >= 4 ? (first / last - 1) * 100 : 0;
+    const ratios = runSpq ? tempoPairs.map((p) => p.spq / runSpq) : [];
+    const mean = ratios.reduce((a, r) => a + r, 0) / Math.max(1, ratios.length);
+    const wobblePercent = ratios.length > 1 ? Math.sqrt(ratios.reduce((a, r) => a + (r - mean) ** 2, 0) / ratios.length) * 100 : 0;
+    steadiness = Math.min(100, Math.max(0, 100 - LOCAL_VARIANCE_PENALTY_PER_PERCENT * wobblePercent));
+  } else {
+    playedBpm = computePlayedBpm(matchedPoints, bpm);
+    driftPercent = computeDriftPercent(onsets, matchedPoints);
+    steadiness = computeSteadiness(matchedPoints, bpm, playedBpm);
+  }
 
   const result: RunResult = { judgements, extraHits, restJudgements, accuracy, steadiness, playedBpm, driftPercent };
   if (handAccuracy) result.handAccuracy = handAccuracy;

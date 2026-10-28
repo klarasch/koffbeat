@@ -808,7 +808,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     if (!clockDriven || sequential) checkSilence(t);
     if (ended) return;
 
-    if (t >= endTime) {
+    // Next-note scoring: the piece ends on the player's own clock, which waits when they pause.
+    if (sequential ? t >= liveJudge.predictTime(lastBeat) + endMarginQuarters * liveJudge.secPerQuarter() : t >= endTime) {
       finish();
       return;
     }
