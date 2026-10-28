@@ -67,11 +67,12 @@ function startHomeScene(scene: Scene, slot: HTMLElement): void {
     // tablet held upright), and flows on behind them, where the glass blurs it.
     scene.setSteep(true);
     scene.setDim(0.15);
-    // Mostly above the choices, its lower edge glowing through the glass. (A short window has
-    // less room above, so there it sits lower and more of it shows through.)
+    // Centred in the space above the choices, so the screen balances; only its lower edge
+    // glows through the glass. (A short window has little room above, so there it sits lower.)
     const rect = slot.getBoundingClientRect();
-    const radius = Math.max(180, Math.min(window.innerWidth * 0.3, window.innerHeight * 0.42, 600));
-    scene.setPlate(rect.left + rect.width / 2, Math.max(rect.top + rect.height * 0.5, rect.bottom - radius * 0.3), radius);
+    // Seen from above, the plate is about half as tall as it is wide: sized to that space.
+    const radius = Math.max(180, Math.min(window.innerWidth * 0.3, window.innerHeight * 0.42, rect.height * 0.95, 600));
+    scene.setPlate(rect.left + rect.width / 2, Math.max(rect.top + rect.height * 0.5, rect.top + radius * 0.4), radius);
   };
   place();
   const observer = new ResizeObserver(place);
