@@ -19,7 +19,6 @@ export function plural(n: number, one: string, few: string, many: string): strin
 
 const en = {
   // ---- Home ----
-  "home.tagline": "Don’t skip a beat.",
   "home.silentHint": "Turn off silent mode to hear the clicks.",
   "home.chooseExercise": "Choose an exercise",
   "home.lessons": "Lessons",
@@ -282,7 +281,6 @@ export type Key = keyof typeof en;
 
 const cs: Record<Key, Entry> = {
   // ---- Home ----
-  "home.tagline": "Buď v rytmu.",
   "home.silentHint": "Vypni tichý režim, ať slyšíš metronom.",
   "home.chooseExercise": "Vyber cvičení",
   "home.lessons": "Lekce",

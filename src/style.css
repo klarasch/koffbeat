@@ -247,10 +247,6 @@ body,
 }
 
 @media (max-width: 560px) {
-  .home-tagline {
-    display: none;
-  }
-
   /* Phones: the summary on its own line, then Play as one full-width row, the word on the left
      and the arrow on the right. */
 
@@ -307,15 +303,6 @@ body,
   flex: none;
   width: 14px;
   height: 21px;
-}
-
-.home-tagline {
-  margin: 10px 0 0;
-  max-width: 30ch;
-  font-size: 13px;
-  line-height: 1.45;
-  color: var(--ink-dim);
-  animation: rise 1.2s 0.1s var(--ease) both;
 }
 
 @keyframes rise {

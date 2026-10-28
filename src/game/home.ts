@@ -133,10 +133,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   title.className = "home-title";
   // The app icon (a pixel dotted eighth note, as in scripts/make-icons.py) beside the wordmark.
   title.innerHTML = `<svg class="home-title-icon" viewBox="4 2 8 12" aria-hidden="true" shape-rendering="crispEdges"><path fill="currentColor" d="${ICON_PATH}"/></svg><span>Koffbeat</span>`;
-  const tagline = document.createElement("p");
-  tagline.className = "home-tagline";
-  tagline.textContent = t("home.tagline");
-  titleBlock.append(title, tagline);
+  titleBlock.append(title);
   // Settings live on their own page: one clear button here, the rows inside it.
   const settingsRows = document.createElement("div");
   settingsRows.className = "settings-rows";
