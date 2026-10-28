@@ -1,6 +1,7 @@
 // Entry point: wires the home screen, optional first-run calibration, and the play screen
 // together. The AudioEngine is created once and reused across levels/retries.
 
+import "./fonts";
 import "./style.css";
 import { createAudioEngine } from "./audio/engine";
 import { lang, t } from "./i18n";
@@ -322,3 +323,13 @@ async function doBeginLevel(pick: LevelPick, mode: Mode, listen: boolean): Promi
 }
 
 showHome();
+
+// Installed to the home screen, the app keeps working offline (src/pwa/sw.js). Not in
+// development, where a saved copy would hide changes.
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js").catch(() => {
+      // No offline copy this time; the app works the same online.
+    });
+  });
+}
