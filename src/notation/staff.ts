@@ -439,7 +439,9 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   function applyScrollStyle(): void {
     container.style.overflowAnchor = "none";
     container.style.overflowY = scrollable ? "auto" : "hidden";
-    container.style.overflowX = "auto";
+    // Lines are laid out to the container's width: rounding must never bring up a sideways
+    // scrollbar (phones showed one under the staff).
+    container.style.overflowX = "hidden";
     container.style.touchAction = scrollable ? "pan-y" : "none";
     container.style.setProperty("-webkit-overflow-scrolling", scrollable ? "touch" : "auto");
   }
