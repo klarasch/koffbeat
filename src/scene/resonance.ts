@@ -1,7 +1,9 @@
 // The Resonance scene, in Three.js: an abstract white space. In the middle lies a bed of fine
-// red, orange and purple pigment sand, and sparse neutral motes drift through the air around it. Playing makes the ground resonate: the pigment
-// sorts itself into a Chladni figure, waves roll out from each tap, and when the playing is in
-// tempo the sand lifts off the figure in thin flowing veils that curl and drift back down.
+// red, orange and purple pigment sand, and sparse neutral motes drift through the air around it.
+// Playing makes the ground resonate: the pigment sorts itself into a Chladni figure and stays on
+// the plate. Playing in time keeps it calm and crisp, and each clean bar moves it on to a new
+// figure; mistakes jolt it up and scramble it. Only the home screen's idle drift, the results
+// reveal and a lost run lift the sand into the air.
 //
 // Everything runs on the GPU:
 // - Void: a soft white gradient with no horizon and no ground; only thin ripple lines and the
@@ -154,6 +156,7 @@ uniform float uLift;
 uniform float uSettle;
 uniform float uShake;
 uniform float uHarmony;
+uniform float uJitter;
 ${SURFACE_GLSL}
 ${NOISE_GLSL}
 
@@ -183,7 +186,9 @@ void main() {
   // herd grains into clumps the way any smooth current does; at this grain size it reads as
   // shimmer, not flicker.
   vec2 jiggle = vec2(hash12(uv * 811.0 + uTime * 61.7), hash12(uv * 577.0 - uTime * 43.1)) - 0.5;
-  acc.xz += jiggle * (abs(f) + 0.08) * uEnergy * 5.0 * ground;
+  // Clean playing keeps it faint (uJitter low), so steady playing looks calm; mistakes let it
+  // grow back to full strength.
+  acc.xz += jiggle * (abs(f) + 0.08) * uEnergy * 5.0 * uJitter * ground;
 
   // A mistake shakes everything loose: grains are knocked out of the figure, in every
   // direction, and thrown a little into the air.
@@ -523,6 +528,7 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   gpu.setVariableDependencies(velVar, [posVar, velVar]);
   const simUniforms = {
     uShake: { value: 0 },
+    uJitter: { value: 1 },
     uHarmony: { value: 1 },
     uDt: { value: 1 / 60 },
     uEnergy: { value: 0 },
@@ -745,6 +751,9 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     disorder = disorderFloor + (disorder - disorderFloor) * Math.exp(-dt / 4);
     const harmony = 1 - 0.7 * disorder;
     simUniforms.uHarmony.value += (harmony - simUniforms.uHarmony.value) * (1 - Math.exp(-dt * 3));
+    // In tempo the grains barely shimmer; scrambled sand shimmers at full strength.
+    const jitter = 0.2 + 0.8 * Math.min(1, disorder * 2.5);
+    simUniforms.uJitter.value += (jitter - simUniforms.uJitter.value) * (1 - Math.exp(-dt * 4));
     pigmentUniforms.uBloom.value = bloom;
     // Playing never lifts the sand: it lies on the plate. Only the idle home drift, the results
     // reveal and a lost run raise it.
@@ -834,14 +843,19 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
       if (ambient <= 0.05) addRipple(0, 0, 0.02, 0.7, 0.5, GRADE_RGB.neutral);
     },
     strike(kind: StrikeKind, clientX?: number | null, clientY?: number | null, quarters = 1) {
-      energy = Math.min(1.3, energy + STRIKE_ENERGY[kind]);
+      const q = Math.max(0.25, Math.min(4, quarters));
+      const clean = kind === "perfect" || kind === "good" || kind === "neutral";
+      // A clean note adds energy in proportion to its length, so fast notes (triplets,
+      // sixteenths) keep the sand as calm as quarters do instead of piling up energy.
+      const share = clean ? Math.min(1, q) : 1;
+      energy = Math.min(clean ? 0.9 : 1.3, energy + STRIKE_ENERGY[kind] * share);
       resting = false;
       const at = clientX != null && clientY != null ? floorAt(clientX, clientY) : null;
       const [x, z] = at && Math.hypot(at[0], at[1]) < 2.2 ? at : [0, 0];
-      const q = Math.max(0.25, Math.min(4, quarters));
       const wavelength = 0.22 + 0.12 * Math.sqrt(q);
       const speed = 0.9 + 0.25 * Math.sqrt(q);
-      const strength = (kind === "miss" ? 0.05 : 0.035) * (0.8 + 0.35 * Math.sqrt(q));
+      // Clean fast notes send small ripples; a mistake always sends a strong one.
+      const strength = kind === "miss" ? 0.05 * (0.8 + 0.35 * Math.sqrt(q)) : 0.035 * (0.35 + 0.65 * Math.min(1, q)) * (clean ? 1 : 1.3);
       addRipple(x, z, strength, wavelength, speed, GRADE_RGB[kind]);
       // Clean taps tidy the figure and brighten the pigment a touch; mistakes jolt the sand up
       // off the plate (by how bad) and scramble the figure. Nothing here lifts the sand as a reward.

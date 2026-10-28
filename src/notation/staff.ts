@@ -979,6 +979,10 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
  * Measured reach of the music drawn in each `sys-N` group: how far above the system's y its
  * highest ink goes and how far below its lowest goes, as the maximum over all systems. Falls
  * back to typical values when the SVG can't be measured.
+ *
+ * Music-font glyphs (noteheads, rests, tuplet digits) are <text>, and a text's bounding box is
+ * the font's full line height (about 4x the glyph's ink), so glyphs are estimated from their
+ * font size and baseline instead; strokes and shapes (stems, beams, brackets, ties) are measured.
  */
 function measureReach(container: HTMLElement, systemCount: number, topMargin: number, gap: number): { ascent: number; descent: number } {
   let ascent = Number.NEGATIVE_INFINITY;
@@ -989,13 +993,25 @@ function measureReach(container: HTMLElement, systemCount: number, topMargin: nu
     let top = Number.POSITIVE_INFINITY;
     let bottom = Number.NEGATIVE_INFINITY;
     for (const g of container.querySelectorAll(`[id*="sys-${s}-g"]`)) {
-      try {
-        const box = (g as unknown as SVGGraphicsElement).getBBox();
-        if (box.width === 0 && box.height === 0) continue;
-        top = Math.min(top, box.y);
-        bottom = Math.max(bottom, box.y + box.height);
-      } catch {
-        // not measurable (detached or display:none)
+      for (const el of g.querySelectorAll("path, rect, line, text")) {
+        if (el.getAttribute("opacity") === "0") continue;
+        try {
+          if (el.tagName.toLowerCase() === "text") {
+            const base = Number(el.getAttribute("y"));
+            const size = parseFloat(getComputedStyle(el).fontSize);
+            if (!Number.isFinite(base) || !Number.isFinite(size) || !el.textContent) continue;
+            // SMuFL glyphs used here reach about half an em above the baseline and a quarter below.
+            top = Math.min(top, base - size * 0.5);
+            bottom = Math.max(bottom, base + size * 0.25);
+          } else {
+            const box = (el as unknown as SVGGraphicsElement).getBBox();
+            if (box.width === 0 && box.height === 0) continue;
+            top = Math.min(top, box.y);
+            bottom = Math.max(bottom, box.y + box.height);
+          }
+        } catch {
+          // not measurable (detached or display:none)
+        }
       }
     }
     if (Number.isFinite(top) && Number.isFinite(bottom)) {

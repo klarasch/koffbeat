@@ -34,6 +34,11 @@ export interface Lesson {
 /** A step counts as done at this accuracy or better. */
 export const PASS_ACCURACY = 85;
 
+/** Stages 3 (independence) and 4 (3 against 2) give each hand its own part to learn. */
+export function handsAreIndependent(stage: number, cross = false): boolean {
+  return stage >= 3 || cross;
+}
+
 /** Fixed pieces per lesson. */
 export const PIECES = 3;
 
@@ -43,6 +48,14 @@ const READING_STEPS: LessonStep[] = [
   { label: "Count-in", mode: "countIn", bpm: 65 },
 ];
 
+/** Hands that play in turn or in unison: nothing to learn hand by hand, so straight to both. */
+const SHARED_HANDS_STEPS: LessonStep[] = [
+  { label: "Learn", mode: "practice", bpm: 55, guide: true },
+  { label: "Together", mode: "practice", bpm: 60 },
+  { label: "Count-in", mode: "countIn", bpm: 60 },
+];
+
+/** Independent hands: each hand alone first, then together. */
 const TWO_HAND_STEPS: LessonStep[] = [
   { label: "Right hand", mode: "practice", bpm: 55, solo: 1 },
   { label: "Left hand", mode: "practice", bpm: 55, solo: 0 },
@@ -66,7 +79,7 @@ export const LESSONS: Lesson[] = [
     tier,
     stage,
     bars: 4,
-    steps: TWO_HAND_STEPS,
+    steps: handsAreIndependent(stage) ? TWO_HAND_STEPS : SHARED_HANDS_STEPS,
   })),
 ];
 

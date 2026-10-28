@@ -5,7 +5,7 @@ import "./style.css";
 import { createAudioEngine } from "./audio/engine";
 import { runCalibration } from "./input/calibration";
 import { type FreeChoice, leaveHome, renderHome } from "./game/home";
-import { firstOpenPiece, LESSONS, loadProgress, PASS_ACCURACY, pieceLevel, recordResult } from "./game/lessons";
+import { firstOpenPiece, handsAreIndependent, LESSONS, loadProgress, PASS_ACCURACY, pieceLevel, recordResult } from "./game/lessons";
 import { createScene } from "./scene/resonance";
 import { startPlay } from "./game/play";
 import { generateLevel } from "./rhythm/generate";
@@ -93,7 +93,10 @@ document.addEventListener(
   "touchend",
   (e) => {
     const now = e.timeStamp;
-    if (now - lastTouchEnd < 300) e.preventDefault();
+    // Controls are exempt (CSS touch-action already stops zoom there), so quick repeated
+    // taps on a button, like tempo +, all count.
+    const onControl = e.target instanceof Element && e.target.closest("button, select, input, [role='option']");
+    if (now - lastTouchEnd < 300 && !onControl) e.preventDefault();
     lastTouchEnd = now;
   },
   { passive: false },
@@ -164,7 +167,9 @@ function lessonPick(lessonIndex: number, pieceIndex: number, stepIndex: number, 
 function freePick(choice: FreeChoice): LevelPick {
   const again = () => freePick(choice);
   if (choice.hands === 2) {
-    return twoHandSteps(withTempo(generateTwoHandLevel({ stage: choice.stage, cross: choice.cross, ingredients: choice.ingredients, bars: choice.bars })), again);
+    const level = withTempo(generateTwoHandLevel({ stage: choice.stage, cross: choice.cross, ingredients: choice.ingredients, bars: choice.bars }));
+    // Hands in turn or in unison go straight to both hands; independent ones are learned hand by hand.
+    return handsAreIndependent(choice.stage, choice.cross) ? twoHandSteps(level, again) : { level, next: again };
   }
   return { level: withTempo(generateLevel({ tier: 1, ingredients: choice.ingredients, meter: choice.meter, bars: choice.bars })), next: again };
 }

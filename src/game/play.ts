@@ -9,7 +9,7 @@ import { attachInput } from "../input/input";
 import { type NoteState, renderStaff } from "../notation/staff";
 import { combineGrades, createLiveJudge, judgeRun, releaseWindowMs, SUSTAINED_MIN_QUARTERS } from "../rhythm/judge";
 import type { HoldState, Scene } from "../scene/resonance";
-import { levelLines } from "../rhythm/durations";
+import { barQuarters, levelLines } from "../rhythm/durations";
 import { levelOnsets, restSpans, tieFlags as levelTieFlags } from "../rhythm/onsets";
 import type { Grade, Hand, Hit, Level, Mode, Release, RunResult } from "../types";
 import { attackWords, buildEndedEarlyPanel, buildListenedPanel, buildResultsPanel, describeNoteJudgement, describeRestJudgement, releaseWords } from "./results";
@@ -234,12 +234,15 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   // A short piece gets exactly its own height.
   /** Share of the screen height the notes may take: less once the results need the room. */
   let staffShare = 0.4;
+  /** While playing, the next line is always in view too, if two lines fit in 60% of the screen. */
+  let minLines = 2;
   function fitStaffArea(): void {
     const layout = staff.layout();
     // The window shows `lines` whole lines. staff.layout measures the real ink of every line
     // (tuplet numbers, stems, ties), so the top line is fully visible with a small margin and
     // the bottom is cut just above the next line's highest element.
-    const lines = Math.max(1, Math.floor((window.innerHeight * staffShare) / layout.systemHeight));
+    const fit = (share: number) => Math.floor((window.innerHeight * share) / layout.systemHeight);
+    const lines = Math.max(1, fit(staffShare), Math.min(minLines, fit(0.6)));
     const height = Math.min(layout.contentBottom - layout.scrollTopOf(0), layout.windowHeight(lines));
     staffArea.style.height = `${height}px`;
     staffArea.style.maxHeight = "none";
@@ -303,12 +306,18 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   }
 
   const secPerQuarter = 60 / level.bpm;
-  const beatsPerBar = level.meter.beats;
+  /** Bar length in quarter notes (6/8 is 3), the unit every beat position here is counted in. */
+  const beatsPerBar = barQuarters(level.meter);
+  // The metronome clicks the written beat unit: quarters in 4/4 and 3/4, eighths in 6/8 (with
+  // beats 1 and 4 accented, so the bar is felt in two).
+  const secPerClick = secPerQuarter * (4 / level.meter.beatUnit);
+  const clicksPerBar = level.meter.beats;
+  const clickGroup = level.meter.beatUnit === 8 && clicksPerBar % 3 === 0 ? 3 : 1;
   const startTime = engine.now() + beatsPerBar * secPerQuarter + LEAD_IN_SEC;
-  const firstClickTime = engine.scheduleCountIn(startTime, beatsPerBar, secPerQuarter);
+  const firstClickTime = engine.scheduleCountIn(startTime, clicksPerBar, secPerClick, clickGroup);
 
   if (mode === "practice" || demo) {
-    engine.startMetronome(startTime, secPerQuarter, level.meter.beats, level.bars.length);
+    engine.startMetronome(startTime, secPerClick, clicksPerBar, level.bars.length, clickGroup);
   }
   // Notes the game plays itself, on the felt piano: every note when listening, otherwise the
   // other hand's line when practising one hand. stopAll cancels them with the metronome.
@@ -622,8 +631,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     const barSec = beatsPerBar * secPerQuarter;
     if (t < startTime) {
       for (let i = 0; i < dots.length; i++) {
-        const clickAt = firstClickTime + i * secPerQuarter;
-        dots[i]?.classList.toggle("lit", t >= clickAt && t < clickAt + secPerQuarter * 0.35);
+        const clickAt = firstClickTime + i * secPerClick;
+        dots[i]?.classList.toggle("lit", t >= clickAt && t < clickAt + secPerClick * 0.35);
         dots[i]?.classList.toggle("beat", t >= clickAt);
       }
       dotsRow.classList.toggle("running", t >= firstClickTime);
@@ -634,10 +643,10 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     // the meter rests and the player keeps the pulse alone.
     const pulsing = mode === "practice" && t < metronomeEnd;
     dotsRow.classList.toggle("running", pulsing);
-    const beat = Math.floor((t - startTime) / secPerQuarter);
-    const phase = (t - startTime) / secPerQuarter - beat;
+    const click = Math.floor((t - startTime) / secPerClick);
+    const phase = (t - startTime) / secPerClick - click;
     for (let i = 0; i < dots.length; i++) {
-      const on = pulsing && beat % beatsPerBar === i;
+      const on = pulsing && click % clicksPerBar === i;
       dots[i]?.classList.toggle("lit", on && phase < 0.35);
       dots[i]?.classList.toggle("beat", on);
     }
@@ -905,7 +914,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       return;
     }
 
-    const result = judgeRun(onsets, rests, startTime, level.bpm, hits, releases, { grid, matches: liveMatches, sequential });
+    const result = judgeRun(onsets, rests, startTime, level.bpm, hits, releases, { grid, matches: liveMatches, sequential, beatsPerBar });
     lastResult = result;
     logDebugTable(result);
 
@@ -933,6 +942,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     screen.classList.add("finished");
     immersive = false;
     staffShare = 0.28;
+    minLines = 1;
     fitStaffArea();
     placePlate();
 
@@ -972,6 +982,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     screen.classList.add("finished");
     immersive = false;
     staffShare = 0.28;
+    minLines = 1;
     fitStaffArea();
     placePlate();
     if (outcome === "done") scene.reveal(0.95);

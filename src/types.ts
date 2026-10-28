@@ -119,6 +119,8 @@ export interface RunResult {
   playedBpm: number;
   /** Tempo change from the first to the last bar, in percent (positive = rushed). */
   driftPercent: number;
+  /** Count-in only: the tempo the player kept in each bar (quarter-note BPM), null where unknown. */
+  tempoByBar?: (number | null)[];
 }
 
 /** Playback support level, the "mode ladder". Phase A implements practice and countIn. */

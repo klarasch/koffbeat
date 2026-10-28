@@ -101,7 +101,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   title.textContent = "Resonance";
   const tagline = document.createElement("p");
   tagline.className = "home-tagline";
-  tagline.textContent = "Read the rhythm. Play in time and the sand lifts.";
+  tagline.textContent = "Read the rhythm. Play in time and the sand draws its figures.";
   titleBlock.append(title, tagline);
   const toggles = document.createElement("div");
   toggles.className = "sound-toggles";

@@ -265,6 +265,10 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
       ? `Played ${playedBpm} bpm, ${tempoVsTargetWords(result.playedBpm, targetBpm)}.`
       : `Played ${playedBpm} bpm, ${tempoVsTargetWords(result.playedBpm, targetBpm)}. ${capitalize(driftWords(result.driftPercent))}.`;
   panel.appendChild(detail);
+  if (mode !== "practice" && result.tempoByBar) {
+    const chart = tempoChart(result.tempoByBar, targetBpm);
+    if (chart) panel.appendChild(chart);
+  }
   const goal = retry?.goal ? goalNote(result.accuracy, retry.bpm, retry.goal) : null;
   if (goal) {
     const goalLine = document.createElement("p");
@@ -413,4 +417,85 @@ export function buildListenedPanel(callbacks: { onPlay: () => void; onListen: ()
   row.append(make("Play it", "↵", callbacks.onPlay, true), make("Hear again", "H", callbacks.onListen), make("Home", "Esc", callbacks.onHome));
   panel.append(heading, text, row);
   return panel;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/**
+ * The tempo the player kept in each bar, as a line against the count-in tempo (dashed), so
+ * rushing, dragging and wavering can be seen. Null when fewer than two bars have a tempo.
+ */
+export function tempoChart(tempoByBar: (number | null)[], targetBpm: number): HTMLElement | null {
+  const known = tempoByBar.filter((b): b is number => b !== null);
+  if (known.length < 2) return null;
+  const W = 300;
+  const H = 64;
+  const PAD = 6;
+  // At least ±10% around the target is shown, so a steady run looks flat rather than magnified.
+  const lo = Math.min(targetBpm * 0.9, ...known) * 0.98;
+  const hi = Math.max(targetBpm * 1.1, ...known) * 1.02;
+  const x = (bar: number) => PAD + (tempoByBar.length === 1 ? 0 : (bar / (tempoByBar.length - 1)) * (W - 2 * PAD));
+  const y = (bpm: number) => PAD + (1 - (bpm - lo) / (hi - lo)) * (H - 2 * PAD);
+
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("class", "tempo-chart-plot");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", `Tempo by bar: ${tempoByBar.map((b) => (b === null ? "unknown" : Math.round(b))).join(", ")} bpm`);
+
+  const target = document.createElementNS(SVG_NS, "line");
+  target.setAttribute("x1", "0");
+  target.setAttribute("x2", String(W));
+  target.setAttribute("y1", String(y(targetBpm)));
+  target.setAttribute("y2", String(y(targetBpm)));
+  target.setAttribute("class", "tempo-chart-target");
+  svg.appendChild(target);
+
+  // Bars without a tempo break the line rather than bridging the gap.
+  let segment: string[] = [];
+  const flush = () => {
+    if (segment.length > 1) {
+      const line = document.createElementNS(SVG_NS, "polyline");
+      line.setAttribute("points", segment.join(" "));
+      line.setAttribute("class", "tempo-chart-line");
+      svg.appendChild(line);
+    }
+    segment = [];
+  };
+  tempoByBar.forEach((bpm, bar) => {
+    if (bpm === null) return flush();
+    segment.push(`${x(bar).toFixed(1)},${y(bpm).toFixed(1)}`);
+  });
+  flush();
+
+  const wrap = document.createElement("div");
+  wrap.className = "tempo-chart";
+  const label = document.createElement("span");
+  label.className = "option-label";
+  label.textContent = "Your tempo, bar by bar";
+  const plot = document.createElement("div");
+  plot.className = "tempo-chart-area";
+  plot.appendChild(svg);
+  // Dots as HTML, so they stay round however the plot is stretched.
+  tempoByBar.forEach((bpm, bar) => {
+    if (bpm === null) return;
+    const dot = document.createElement("span");
+    dot.className = "tempo-chart-dot";
+    dot.style.left = `${(x(bar) / W) * 100}%`;
+    dot.style.top = `${(y(bpm) / H) * 100}%`;
+    dot.title = `Bar ${bar + 1}: ${Math.round(bpm)} bpm`;
+    plot.appendChild(dot);
+  });
+  const axis = document.createElement("div");
+  axis.className = "tempo-chart-axis";
+  const first = document.createElement("span");
+  first.textContent = `bar 1: ${Math.round(known[0]!)}`;
+  const mid = document.createElement("span");
+  mid.textContent = `dashed: ${targetBpm} bpm`;
+  const last = document.createElement("span");
+  last.textContent = `bar ${tempoByBar.length}: ${Math.round(known[known.length - 1]!)}`;
+  axis.append(first, mid, last);
+  wrap.append(label, plot, axis);
+  return wrap;
 }

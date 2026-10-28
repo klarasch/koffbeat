@@ -17,15 +17,19 @@ export interface AudioEngine {
   /** Current audio clock time, in seconds. */
   now(): number;
   /** Schedules one synthesized woodblock-like click at an exact audio time. */
-  scheduleClick(time: number, accent: boolean): void;
+  /** `soft`: a quieter in-between click (the 2nd, 3rd, 5th and 6th eighths of 6/8). */
+  scheduleClick(time: number, accent: boolean, soft?: boolean): void;
   /**
    * Schedules one bar (beatsPerBar clicks) of count-in ending exactly at startTime (i.e. the
    * last click of the bar lands one beat before startTime, and startTime itself is beat 1 of
    * the run). Returns the audio time of the first scheduled click.
    */
-  scheduleCountIn(startTime: number, beatsPerBar: number, secondsPerBeat: number): number;
-  /** Starts a look-ahead-scheduled metronome for `bars` bars starting at startTime. */
-  startMetronome(startTime: number, secondsPerBeat: number, beatsPerBar: number, bars: number): void;
+  scheduleCountIn(startTime: number, beatsPerBar: number, secondsPerBeat: number, group?: number): number;
+  /**
+   * Starts a look-ahead-scheduled metronome for `bars` bars starting at startTime. With `group`
+   * above 1 (3 in 6/8) only every group-th click is full; the ones between are softer.
+   */
+  startMetronome(startTime: number, secondsPerBeat: number, beatsPerBar: number, bars: number, group?: number): void;
   /** Cancels every pending scheduled sound (metronome ticks and clicks) and stops the scheduler. */
   stopAll(): void;
   /** Plays an immediate, low-latency tactile tap sound for player input feedback. */
@@ -104,7 +108,7 @@ export function createAudioEngine(): AudioEngine {
   }
 
   /** Short filtered noise burst + tone, pitched higher on accent, for the click/metronome sound. */
-  function scheduleClick(time: number, accent: boolean): void {
+  function scheduleClick(time: number, accent: boolean, soft = false): void {
     const duration = 0.05;
     const noiseBuffer = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * duration), ctx.sampleRate);
     const data = noiseBuffer.getChannelData(0);
@@ -132,7 +136,7 @@ export function createAudioEngine(): AudioEngine {
     toneGain.gain.value = 0.35;
 
     // Percussive envelope: fast attack, quick exponential-ish decay.
-    const peak = accent ? 0.9 : 0.6;
+    const peak = accent ? 0.9 : soft ? 0.3 : 0.6;
     clickGain.gain.setValueAtTime(0, time);
     clickGain.gain.linearRampToValueAtTime(peak, time + 0.002);
     clickGain.gain.exponentialRampToValueAtTime(0.001, time + duration);
@@ -153,15 +157,21 @@ export function createAudioEngine(): AudioEngine {
     trackNode(tone);
   }
 
-  function scheduleCountIn(startTime: number, beatsPerBar: number, secondsPerBeat: number): number {
+  /** A bar's click pattern: the downbeat accented, and in grouped meters the in-between clicks soft. */
+  function clickAt(time: number, index: number, beatsPerBar: number, group: number): void {
+    const inBar = index % beatsPerBar;
+    scheduleClick(time, inBar === 0, group > 1 && inBar % group !== 0);
+  }
+
+  function scheduleCountIn(startTime: number, beatsPerBar: number, secondsPerBeat: number, group = 1): number {
     const firstClickTime = startTime - beatsPerBar * secondsPerBeat;
     for (let beat = 0; beat < beatsPerBar; beat++) {
-      scheduleClick(firstClickTime + beat * secondsPerBeat, beat === 0);
+      clickAt(firstClickTime + beat * secondsPerBeat, beat, beatsPerBar, group);
     }
     return firstClickTime;
   }
 
-  function startMetronome(startTime: number, secondsPerBeat: number, beatsPerBar: number, bars: number): void {
+  function startMetronome(startTime: number, secondsPerBeat: number, beatsPerBar: number, bars: number, group = 1): void {
     stopMetronomeTimer();
 
     const totalBeats = beatsPerBar * bars;
@@ -171,8 +181,7 @@ export function createAudioEngine(): AudioEngine {
     function scheduler(): void {
       const horizon = ctx.currentTime + SCHEDULE_AHEAD_SEC;
       while (nextBeatIndex < totalBeats && nextBeatTime < horizon) {
-        const isAccent = nextBeatIndex % beatsPerBar === 0;
-        scheduleClick(nextBeatTime, isAccent);
+        clickAt(nextBeatTime, nextBeatIndex, beatsPerBar, group);
         nextBeatIndex++;
         nextBeatTime += secondsPerBeat;
       }

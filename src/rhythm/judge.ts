@@ -362,6 +362,8 @@ export interface JudgeOptions {
    * extra tap, and a gap that clearly fits the note after next counts the note between as missed.
    */
   sequential?: boolean;
+  /** Quarter notes per bar, for the bar-by-bar tempo (sequential scoring). Defaults to 4. */
+  beatsPerBar?: number;
 }
 
 export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number, options: JudgeOptions = {}): LiveJudge {
@@ -717,6 +719,8 @@ function computeDriftPercent(onsets: Onset[], matchedPoints: MatchedPoint[]): nu
  */
 const DEVIATION_PENALTY_PER_PERCENT = 4.5;
 const LOCAL_VARIANCE_PENALTY_PER_PERCENT = 3;
+/** Count-in (next note): steadiness points lost per percent of spread between bar tempos. */
+const BAR_TEMPO_PENALTY_PER_PERCENT = 5;
 
 function computeSteadiness(matchedPoints: MatchedPoint[], bpm: number, playedBpm: number): number {
   const nominal = nominalSecPerQuarter(bpm);
@@ -985,6 +989,7 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
   let playedBpm: number;
   let driftPercent: number;
   let steadiness: number;
+  let tempoByBar: (number | null)[] | undefined;
   if (sequential) {
     // Tempo, drift and steadiness from the gaps between taps, hesitations left out. The tempo is
     // reported, not graded: steadiness is only how evenly the beat was kept from note to note.
@@ -994,10 +999,29 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
     const first = median(tempoPairs.filter((p) => p.mid <= Math.min(...beats) + span / 4).map((p) => p.spq));
     const last = median(tempoPairs.filter((p) => p.mid >= Math.max(...beats) - span / 4).map((p) => p.spq));
     driftPercent = first && last && tempoPairs.length >= 4 ? (first / last - 1) * 100 : 0;
-    const ratios = runSpq ? tempoPairs.map((p) => p.spq / runSpq) : [];
-    const mean = ratios.reduce((a, r) => a + r, 0) / Math.max(1, ratios.length);
-    const wobblePercent = ratios.length > 1 ? Math.sqrt(ratios.reduce((a, r) => a + (r - mean) ** 2, 0) / ratios.length) * 100 : 0;
-    steadiness = Math.min(100, Math.max(0, 100 - LOCAL_VARIANCE_PENALTY_PER_PERCENT * wobblePercent));
+    // The tempo of each bar: the median of the gaps inside it, so a single early or late tap
+    // (already counted in accuracy) doesn't read as a tempo change.
+    const beatsPerBar = options.beatsPerBar ?? 4;
+    const lastBeat = onsets.reduce((m, o) => Math.max(m, o.beat + o.quarters), 0);
+    const barCount = Math.max(1, Math.ceil(lastBeat / beatsPerBar - 1e-6));
+    tempoByBar = Array.from({ length: barCount }, (_, bar) => {
+      const spq = median(tempoPairs.filter((p) => Math.floor(p.mid / beatsPerBar) === bar).map((p) => p.spq));
+      return spq ? 60 / spq : null;
+    });
+    // Steadiness is how flat that line is: the spread of the bar tempos around their average.
+    const barBpms = tempoByBar.filter((b): b is number => b !== null);
+    const spread = (values: number[]): number => {
+      const mean = values.reduce((a, v) => a + v, 0) / values.length;
+      return (Math.sqrt(values.reduce((a, v) => a + (v - mean) ** 2, 0) / values.length) / mean) * 100;
+    };
+    if (barBpms.length >= 2) {
+      steadiness = 100 - BAR_TEMPO_PENALTY_PER_PERCENT * spread(barBpms);
+    } else {
+      // Too short to compare bars: the note-to-note gaps, more leniently.
+      const spqs = tempoPairs.map((p) => p.spq);
+      steadiness = spqs.length > 1 ? 100 - LOCAL_VARIANCE_PENALTY_PER_PERCENT * 0.7 * spread(spqs) : 100;
+    }
+    steadiness = Math.min(100, Math.max(0, steadiness));
   } else {
     playedBpm = computePlayedBpm(matchedPoints, bpm);
     driftPercent = computeDriftPercent(onsets, matchedPoints);
@@ -1006,5 +1030,6 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
 
   const result: RunResult = { judgements, extraHits, restJudgements, accuracy, steadiness, playedBpm, driftPercent };
   if (handAccuracy) result.handAccuracy = handAccuracy;
+  if (tempoByBar) result.tempoByBar = tempoByBar;
   return result;
 }

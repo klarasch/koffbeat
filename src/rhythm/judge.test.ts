@@ -523,3 +523,31 @@ describe("next-note scoring: final results", () => {
     expect(result.steadiness).toBeGreaterThan(95);
   });
 });
+
+describe("next-note scoring: tempo by bar", () => {
+  /** Quarters for `bars` bars of 4/4, played at the given tempo per bar plus a little tap jitter. */
+  function run(barBpms: number[], jitterMs: number) {
+    const quarters: Onset[] = [];
+    for (let b = 0; b < barBpms.length * 4; b++) quarters.push({ eventIndex: b, beat: b, quarters: 1 });
+    let t = 1;
+    const hits: Hit[] = quarters.map((o, i) => {
+      if (i > 0) t += 60 / (barBpms[Math.floor((o.beat - 0.5) / 4)] ?? 60);
+      const wobble = ((i * 7919) % 11) / 10 - 0.5; // deterministic, -0.5..0.5
+      return { time: t + (wobble * 2 * jitterMs) / 1000, zone: 0 };
+    });
+    return judgeRun(quarters, [], 1, barBpms[0] ?? 60, hits, [], { sequential: true, beatsPerBar: 4 });
+  }
+
+  it("reports each bar's tempo", () => {
+    const result = run([60, 60, 66, 66], 0);
+    expect(result.tempoByBar?.map((b) => (b === null ? null : Math.round(b)))).toEqual([60, 60, 66, 66]);
+  });
+
+  it("doesn't count ordinary tap jitter as unsteady", () => {
+    expect(run([60, 60, 60, 60, 60, 60], 20).steadiness).toBeGreaterThan(90);
+  });
+
+  it("marks a wavering tempo down", () => {
+    expect(run([60, 66, 57, 65, 58, 64], 0).steadiness).toBeLessThan(75);
+  });
+});
