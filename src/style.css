@@ -2218,6 +2218,11 @@ body,
   text-align: right;
 }
 
+.licences-link {
+  text-decoration: none;
+  color: var(--ink-dim);
+}
+
 .settings-row-arrow {
   color: var(--ink-dim);
   font-size: 18px;

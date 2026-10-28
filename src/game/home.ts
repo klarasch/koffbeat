@@ -498,6 +498,15 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   calibrateLink.innerHTML = `<span class="text-toggle-label"></span><span class="settings-row-arrow" aria-hidden="true">&rsaquo;</span>`;
   (calibrateLink.firstChild as HTMLElement).textContent = t("settings.calibrate");
   settingsRows.appendChild(calibrateLink);
+  // Third-party licences: a plain text file next to index.html, opened in a new tab.
+  const licencesLink = document.createElement("a");
+  licencesLink.className = "settings-row text-toggle licences-link";
+  licencesLink.href = `${import.meta.env.BASE_URL}licenses.txt`;
+  licencesLink.target = "_blank";
+  licencesLink.rel = "noopener";
+  licencesLink.innerHTML = `<span class="text-toggle-label"></span><span class="settings-row-arrow" aria-hidden="true">&rsaquo;</span>`;
+  (licencesLink.firstChild as HTMLElement).textContent = t("settings.licences");
+  settingsRows.appendChild(licencesLink);
 
   const settingsPage = document.createElement("div");
   settingsPage.className = "settings-page";

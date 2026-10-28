@@ -64,6 +64,7 @@ const en = {
   "settings.language": "Language",
   "settings.langName": "English",
   "settings.calibrate": "Calibrate latency",
+  "settings.licences": "Licences",
   // ---- Shared bits ----
   bpm: (p) => `${p.n} bpm`,
   bars: (p) => `${p.n} ${p.n === 1 ? "bar" : "bars"}`,
@@ -340,6 +341,7 @@ const cs: Record<Key, Entry> = {
   "settings.language": "Jazyk",
   "settings.langName": "Čeština",
   "settings.calibrate": "Kalibrace zpoždění",
+  "settings.licences": "Licence",
   // ---- Shared bits ----
   bpm: (p) => `${p.n} bpm`,
   bars: (p) => `${p.n} ${plural(Number(p.n), "takt", "takty", "taktů")}`,
