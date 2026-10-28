@@ -685,7 +685,8 @@ body,
 
 .play-cta {
   display: grid;
-  grid-template-columns: auto auto;
+  /* The word sits right against the key and arrow, however long the summary above is. */
+  grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas: "what what" "word arrow";
   justify-items: end;
   align-items: baseline;
