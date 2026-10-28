@@ -8,6 +8,8 @@ export interface Choice {
   label: string;
   /** Optional secondary text (shown in the select's list). */
   hint?: string;
+  /** Optional drawing before the label (SVG markup from our own code, never user text). */
+  icon?: string;
 }
 
 let fieldCount = 0;
@@ -335,7 +337,15 @@ export function chips(choices: Choice[], initial: string[], onChange: (values: s
     const button = document.createElement("button");
     button.type = "button";
     button.className = "chip";
-    button.textContent = choice.label;
+    if (choice.icon) {
+      button.innerHTML = choice.icon;
+      const label = document.createElement("span");
+      label.textContent = choice.label;
+      button.appendChild(label);
+    } else {
+      button.textContent = choice.label;
+    }
+    if (choice.hint) button.title = choice.hint;
     if (locked.includes(choice.value)) {
       button.disabled = true;
       button.title = t("home.alwaysIncluded");
@@ -372,7 +382,7 @@ export function chips(choices: Choice[], initial: string[], onChange: (values: s
       if (reason) unavailable.add(value);
       else unavailable.delete(value);
       button.disabled = reason !== null;
-      button.title = reason ?? "";
+      button.title = reason ?? choices[i]?.hint ?? "";
       paint();
     },
   };

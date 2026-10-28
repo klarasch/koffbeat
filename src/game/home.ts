@@ -5,9 +5,10 @@ import type { Scene } from "../scene/resonance";
 import { runCalibration } from "../input/calibration";
 import { showHowTo } from "../ui/howto";
 import { kbd } from "../ui/keys";
+import { rhythmIcon } from "../ui/pixelIcons";
 import { onTweak, tweak } from "../ui/tweaks";
 import { chips, field, segmented, select, stepper } from "./controls";
-import { lang, setLang, t } from "../i18n";
+import { type Key, lang, setLang, t } from "../i18n";
 import { describeIngredients, ingredientLabel, INGREDIENTS, type Ingredient, type MeterChoice, meterPart } from "../rhythm/generate";
 import { HAND_RELATIONS, handRelations } from "../rhythm/twoHands";
 import { firstOpenLesson, firstOpenPiece, firstOpenStep, LESSONS, loadProgress, PASS_ACCURACY, pieceDone, pieceName, PIECES, stepDone } from "./lessons";
@@ -300,7 +301,8 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
 
   // ---- Free practice ----
   const ingredientChips = chips(
-    [...INGREDIENTS.map((i) => ({ value: i.key as string, label: ingredientLabel(i.key) })), { value: CROSS_CHIP, label: t("cross.chip") }],
+    // Each rhythm as its pixel drawing and a short name (the full name is its tooltip).
+    [...INGREDIENTS.map((i) => ({ value: i.key as string, label: t(`short.${i.key}` as Key), hint: ingredientLabel(i.key), icon: rhythmIcon(i.key) })), { value: CROSS_CHIP, label: t("cross.chip"), icon: rhythmIcon("cross") }],
     cross ? [...ingredients, CROSS_CHIP] : ingredients,
     (values) => {
       ingredients = values.filter((v) => v !== CROSS_CHIP) as Ingredient[];
