@@ -43,6 +43,10 @@ const GRID_OFFSET_MAX_SEC = 0.06;
 const MIN_TEMPO_STEP_QUARTERS = 0.1;
 /** Online pulse tracking: estimate is clamped to nominal tempo ± this fraction. */
 const PULSE_CLAMP_FRACTION = 0.15;
+/** Next-note scoring: how far the player's tempo may wander from the target. */
+const SEQUENTIAL_CLAMP_FRACTION = 0.35;
+/** Next-note scoring: a tap sooner than this fraction of the expected gap is an extra tap. */
+const EXTRA_TAP_FRACTION = 0.45;
 
 /**
  * Release/hold grading. A note's target release is its predicted end (onset + quarters). The
@@ -180,13 +184,19 @@ class PulseEstimator {
   private readonly grid: boolean;
   private gridOffset = 0;
 
-  constructor(startTime: number, nominal: number, grid = false) {
+  /** Next-note scoring: the pulse is anchored fully on each tap (what's graded is the rhythm
+   * between taps), and the tempo may wander further (drift is reported, not graded). */
+  private readonly sequential: boolean;
+
+  constructor(startTime: number, nominal: number, grid = false, sequential = false) {
     this.startTime = startTime;
     this.grid = grid;
+    this.sequential = sequential && !grid;
     this.anchorTime = startTime;
     this.secPerQuarter = nominal;
-    this.min = nominal * (1 - PULSE_CLAMP_FRACTION);
-    this.max = nominal * (1 + PULSE_CLAMP_FRACTION);
+    const clamp = this.sequential ? SEQUENTIAL_CLAMP_FRACTION : PULSE_CLAMP_FRACTION;
+    this.min = nominal * (1 - clamp);
+    this.max = nominal * (1 + clamp);
   }
 
   predict(beat: number): number {
@@ -220,7 +230,7 @@ class PulseEstimator {
       return;
     }
     const predicted = this.predict(beat);
-    const corrected = this.hasHit ? predicted + PHASE_CORRECTION * (time - predicted) : time;
+    const corrected = this.hasHit && !this.sequential ? predicted + PHASE_CORRECTION * (time - predicted) : time;
     this.hasHit = true;
     // Tempo only from notes a real distance apart: two hands landing on the same beat (or a
     // hair apart in floating point) say nothing about the tempo, only about the phase.
@@ -270,6 +280,8 @@ export interface LiveHitJudgement {
   /** Count-in only: this tap was the player coming back in on a shifted beat, and the pulse was
    * re-anchored on it. */
   resynced?: boolean;
+  /** Next-note scoring: notes this tap skipped over (the gap fitted the note after), now missed. */
+  skipped?: number[];
 }
 
 /** Count-in re-entry: two stray taps whose offsets from the notes agree within this many seconds
@@ -343,13 +355,23 @@ export interface JudgeOptions {
   /** The live judge's own pairing of onsets to hits (onset index → hit index). When given, the
    * offline judgement grades exactly the attempts the player saw graded during play. */
   matches?: Map<number, number>;
+  /**
+   * Count-in only, "next note" scoring: each tap is the next note of its hand, graded by the
+   * time since the previous tap at the player's own tempo. Silence doesn't move the music on.
+   * Two exceptions keep one stumble from shifting everything after it: a tap much too soon is an
+   * extra tap, and a gap that clearly fits the note after next counts the note between as missed.
+   */
+  sequential?: boolean;
 }
 
 export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number, options: JudgeOptions = {}): LiveJudge {
   const nominal = nominalSecPerQuarter(bpm);
   const grid = options.grid === true;
-  const estimator = new PulseEstimator(startTime, nominal, grid);
+  const sequential = options.sequential === true && !grid;
+  const estimator = new PulseEstimator(startTime, nominal, grid, sequential);
   const matchedOnsets = new Set<number>();
+  /** Next-note scoring: each hand's last matched note (its beat and tap time). */
+  const lastByZone = new Map<Hand, { beat: number; time: number }>();
   const heldByZone = new Map<0 | 1, number>();
   const onsetGradeByIndex = new Map<number, Grade>();
   const missedOnsets = new Set<number>();
@@ -381,6 +403,45 @@ export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number,
     return best;
   }
 
+  /** Notes the current tap skipped over (next-note scoring). */
+  let skippedNow: number[] = [];
+
+  /** Next-note scoring: the hand's next open note, or the one after when the gap clearly fits it. */
+  function matchNext(hitTime: number, zone: Hand): MatchResult | null {
+    const open: number[] = [];
+    for (let i = 0; i < onsets.length && open.length < 2; i++) {
+      const onset = onsets[i];
+      if (!onset || matchedOnsets.has(i) || missedOnsets.has(i) || !zoneMayPlay(onsets, onset, zone)) continue;
+      if (open.length === 1 && (onsets[open[0]!]?.beat ?? 0) === onset.beat) continue;
+      open.push(i);
+    }
+    const first = open[0];
+    if (first === undefined) return null;
+    const spq = estimator.currentSecPerQuarter();
+    const errorFor = (i: number) => (hitTime - estimator.predict(onsets[i]?.beat ?? 0)) * 1000;
+    const last = lastByZone.get(zone);
+    if (!last) {
+      // The first note of this hand: nothing to measure a gap from but the count-in. A tap well
+      // before it (during the count-in) is an extra tap.
+      if (lastByZone.size === 0 && hitTime < estimator.predict(onsets[first]?.beat ?? 0) - 0.5 * spq) return null;
+      return { index: first, errorMs: errorFor(first) };
+    }
+    const gap = hitTime - last.time;
+    const expectedFirst = ((onsets[first]?.beat ?? 0) - last.beat) * spq;
+    if (gap < EXTRA_TAP_FRACTION * expectedFirst) return null;
+    const second = open[1];
+    if (second !== undefined) {
+      const expectedSecond = ((onsets[second]?.beat ?? 0) - last.beat) * spq;
+      const window = gradeWindows(gapQuartersBefore(onsets, second) * spq * 1000).ok / 1000;
+      if (Math.abs(gap - expectedSecond) < Math.abs(gap - expectedFirst) && Math.abs(gap - expectedSecond) <= window) {
+        missedOnsets.add(first);
+        skippedNow.push(first);
+        return { index: second, errorMs: errorFor(second) };
+      }
+    }
+    return { index: first, errorMs: errorFor(first) };
+  }
+
   /** The last stray tap in count-in mode, waiting for a second one that agrees with it. */
   let pendingReentry: { time: number; index: number; offsetSec: number } | null = null;
 
@@ -405,9 +466,10 @@ export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number,
 
   return {
     judgeHit(hit: Hit): LiveHitJudgement {
-      let match = matchByTime(hit.time, hit.zone);
+      skippedNow = [];
+      let match = sequential ? matchNext(hit.time, hit.zone) : matchByTime(hit.time, hit.zone);
       let resynced = false;
-      if (!match && !grid) {
+      if (!match && !grid && !sequential) {
         // Count-in: no metronome to come back to, only the player's own pulse. A stray tap may
         // be the player re-entering on a shifted beat; a second stray that agrees confirms it,
         // and the pulse is re-anchored there.
@@ -442,11 +504,15 @@ export function createLiveJudge(onsets: Onset[], startTime: number, bpm: number,
       // Two hands share one pulse, so one hand's stumble must not knock the other hand's notes
       // off: on a two-hand level only confident attacks (perfect or good) steer the pulse.
       const steers = !resynced && (!twoLines || isFirst || grade === "perfect" || grade === "good");
-      if (onset && steers) estimator.update(onset.beat, hit.time);
+      // Next-note scoring: a hesitation (or a rush) far off the beat moves the anchor to this tap,
+      // so the rhythm after it is measured from here, but says nothing about the tempo.
+      if (onset && sequential && grade === "miss") estimator.resync(onset.beat, hit.time);
+      else if (onset && steers) estimator.update(onset.beat, hit.time);
       onsetGradeByIndex.set(match.index, grade);
       heldByZone.set(hit.zone, match.index);
+      if (onset) lastByZone.set(hit.zone, { beat: onset.beat, time: hit.time });
 
-      return { onsetIndex: match.index, errorMs: match.errorMs, grade, resynced };
+      return { onsetIndex: match.index, errorMs: match.errorMs, grade, resynced, skipped: skippedNow };
     },
     judgeRelease(release: Release): LiveReleaseJudgement {
       return releaseHeld(release.zone, release.time);
@@ -810,8 +876,23 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
   // In grid mode every time is judged against the click, shifted only by the player's median
   // offset (clamped, as in the live judge); otherwise against the locally fitted own pulse.
   const gridOffset = grid ? clampedMedianOffset(matchedPoints, startTime, nominal) : 0;
+  const sequential = options.sequential === true && !grid;
+  const byBeat = [...matchedPoints].sort((a, b) => a.beat - b.beat);
+  /** Next-note scoring: from the previous tap, at the local tempo (the rhythm between taps). */
+  const predictFromPrevious = (beat: number, excludeOnsetIndex: number | null): number => {
+    let previous: MatchedPoint | undefined;
+    for (const p of byBeat) {
+      if (p.beat >= beat - 1e-9) break;
+      if (p.onsetIndex !== excludeOnsetIndex) previous = p;
+    }
+    if (!previous) return predictTimeAt(matchedPoints, beat, excludeOnsetIndex, startTime, nominal);
+    const around = matchedPoints.filter((p) => p.onsetIndex !== excludeOnsetIndex && Math.abs(p.beat - beat) <= LOCAL_FIT_WIDE_WINDOW_QUARTERS);
+    const fit = around.length >= 2 ? weightedLinearFit(around, beat) : null;
+    const spq = fit && fit.b > nominal * 0.5 && fit.b < nominal * 2 ? fit.b : nominal;
+    return previous.time + (beat - previous.beat) * spq;
+  };
   const predict = (beat: number, excludeOnsetIndex: number | null = null): number =>
-    grid ? startTime + beat * nominal + gridOffset : predictTimeAt(matchedPoints, beat, excludeOnsetIndex, startTime, nominal);
+    grid ? startTime + beat * nominal + gridOffset : sequential ? predictFromPrevious(beat, excludeOnsetIndex) : predictTimeAt(matchedPoints, beat, excludeOnsetIndex, startTime, nominal);
 
   const releaseTimes = computeReleaseTimes(onsets, onsetToHit, hits, releases);
 
@@ -871,7 +952,9 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
   }
   const playedBpm = computePlayedBpm(matchedPoints, bpm);
   const driftPercent = computeDriftPercent(onsets, matchedPoints);
-  const steadiness = computeSteadiness(matchedPoints, bpm, playedBpm);
+  // Next-note scoring reports the tempo (and drift) separately, so steadiness is only how evenly
+  // the beat was kept from note to note.
+  const steadiness = computeSteadiness(matchedPoints, bpm, sequential ? bpm : playedBpm);
 
   const result: RunResult = { judgements, extraHits, restJudgements, accuracy, steadiness, playedBpm, driftPercent };
   if (handAccuracy) result.handAccuracy = handAccuracy;

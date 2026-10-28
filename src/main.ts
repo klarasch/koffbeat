@@ -48,6 +48,22 @@ engine.chime = (quality: number) => {
 };
 // The plate tap sound has its own switch: on phone speakers it trails the finger by
 // ~0.2 s, which some players find distracting.
+const SCORING_KEY = "resonance.countInScoring";
+function nextNoteScoring(): boolean {
+  try {
+    return localStorage.getItem(SCORING_KEY) !== "time";
+  } catch {
+    return true;
+  }
+}
+function setNextNoteScoring(on: boolean): void {
+  try {
+    localStorage.setItem(SCORING_KEY, on ? "next" : "time");
+  } catch {
+    // Not persisted; harmless.
+  }
+}
+
 const TAP_SOUND_KEY = "resonance.tapSound";
 function tapSoundOn(): boolean {
   try {
@@ -222,6 +238,8 @@ function showHome(): void {
     sounds: [
       { label: "Ambience", isOn: ambienceOn, set: setAmbienceOn },
       { label: "Tap sound", isOn: tapSoundOn, set: setTapSoundOn },
+      // For trying the two count-in scorings side by side (temporary).
+      { label: "Count-in by next note", isOn: nextNoteScoring, set: setNextNoteScoring },
     ],
     onLesson: (lessonIndex, stepIndex) => beginLevel(lessonPick(lessonIndex, stepIndex), "practice"),
     onFree: (choice) => beginLevel(freePick(choice), choice.mode),
@@ -272,7 +290,7 @@ async function doBeginLevel(pick: LevelPick, mode: Mode, listen: boolean): Promi
         if (pick.lesson) recordResult(pick.lesson.id, pick.lesson.step, accuracy);
       },
     },
-    { solo: pick.solo, demo: listen, steps: pick.steps, nextLabel: pick.nextLabel },
+    { solo: pick.solo, demo: listen, steps: pick.steps, nextLabel: pick.nextLabel, countInScoring: nextNoteScoring() ? "next" : "time" },
   );
 }
 

@@ -450,3 +450,59 @@ describe("createLiveJudge", () => {
     expect(implicit.releaseGrade).not.toBeNull();
   });
 });
+
+describe("next-note scoring (count-in)", () => {
+  const options = { sequential: true };
+  const timeOf = (beat: number, scale = 1) => startTime + beat * secPerQuarter * scale;
+
+  it("takes each tap as the next note, even after a long pause", () => {
+    const judge = createLiveJudge(onsets, startTime, bpm, options);
+    expect(judge.judgeHit({ time: timeOf(0), zone: 0 }).onsetIndex).toBe(0);
+    expect(judge.judgeHit({ time: timeOf(1), zone: 0 }).onsetIndex).toBe(1);
+    // A 3-beat hesitation: still the next note (graded late), not a jump ahead.
+    const late = judge.judgeHit({ time: timeOf(5), zone: 0 });
+    expect(late.onsetIndex).toBe(2);
+    expect(late.grade).toBe("miss");
+    // …and the rhythm after it is measured from that tap.
+    const after = judge.judgeHit({ time: timeOf(6), zone: 0 });
+    expect(after.onsetIndex).toBe(3);
+    expect(after.grade).toBe("perfect");
+  });
+
+  it("treats a tap much too soon as an extra tap", () => {
+    const judge = createLiveJudge(onsets, startTime, bpm, options);
+    judge.judgeHit({ time: timeOf(0), zone: 0 });
+    expect(judge.judgeHit({ time: timeOf(0.2), zone: 0 }).onsetIndex).toBeNull();
+    expect(judge.judgeHit({ time: timeOf(1), zone: 0 }).onsetIndex).toBe(1);
+  });
+
+  it("counts a skipped note as missed when the gap fits the note after it", () => {
+    const judge = createLiveJudge(onsets, startTime, bpm, options);
+    judge.judgeHit({ time: timeOf(0), zone: 0 });
+    judge.judgeHit({ time: timeOf(1), zone: 0 });
+    const result = judge.judgeHit({ time: timeOf(3), zone: 0 });
+    expect(result.onsetIndex).toBe(3);
+    expect(result.skipped).toEqual([2]);
+    expect(result.grade).toBe("perfect");
+  });
+
+  it("grades steady playing that speeds up as accurate, reporting the drift instead", () => {
+    // Gradually 15% faster over the piece: every gap is right for the tempo of the moment.
+    const hits: Hit[] = [];
+    let t = startTime;
+    onsets.forEach((o, i) => {
+      if (i > 0) t += ((o.beat - (onsets[i - 1]?.beat ?? 0)) * secPerQuarter) / (1 + (0.15 * i) / onsets.length);
+      hits.push({ time: t, zone: 0 });
+    });
+    const judge = createLiveJudge(onsets, startTime, bpm, options);
+    const matches = new Map<number, number>();
+    hits.forEach((h, i) => {
+      const r = judge.judgeHit(h);
+      if (r.onsetIndex !== null) matches.set(r.onsetIndex, i);
+    });
+    expect(matches.size).toBe(onsets.length);
+    const result = judgeRun(onsets, rests, startTime, bpm, hits, [], { ...options, matches });
+    expect(result.accuracy).toBeGreaterThan(85);
+    expect(result.driftPercent).toBeGreaterThan(5);
+  });
+});

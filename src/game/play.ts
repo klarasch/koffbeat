@@ -26,6 +26,8 @@ export interface PlayCallbacks {
 }
 
 export interface PlayOptions {
+  /** Count-in scoring: "next" (each tap is the next note) or "time" (nearest note on the pulse). */
+  countInScoring?: "next" | "time";
   /** Two-hand levels: practise one hand; the other is played for you and isn't judged. */
   solo?: Hand;
   /** Play the exercise back correctly instead of judging the player. */
@@ -321,7 +323,12 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   // highlight follow that clock, and every tap is an attempt at the next open note.
   const clockDriven = true;
   const grid = mode === "practice";
-  const liveJudge = createLiveJudge(onsets, startTime, level.bpm, { grid });
+  // Count-in, next-note scoring: the music only moves on when the player plays; silence is
+  // waiting, not missing (see JudgeOptions.sequential).
+  const sequential = mode === "countIn" && !demo && options.countInScoring !== "time";
+  const liveJudge = createLiveJudge(onsets, startTime, level.bpm, { grid, sequential });
+  /** Next-note scoring: notes the player skipped over (judged missed when the tap came). */
+  const skippedTimeline = new Set<number>();
   /** Live pairing of onset → hit index, handed to the final judgement. */
   const liveMatches = new Map<number, number>();
   const hits: Hit[] = [];
@@ -518,6 +525,15 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     }
     strayInARow = 0;
 
+    for (const skippedOnset of judged.skipped ?? []) {
+      const index = timelineIndexForOnset.get(skippedOnset);
+      const item = index === undefined ? undefined : timeline[index];
+      if (index === undefined || !item) continue;
+      skippedTimeline.add(index);
+      setTimelineState(item, "miss");
+      missedInARow++;
+    }
+
     matchedCount++;
     liveMatches.set(judged.onsetIndex, hits.length - 1);
     coherence = coherence * 0.7 + GRADE_VALUE[judged.grade] * 0.3;
@@ -687,14 +703,27 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
    */
   function updateClock(): void {
     const heard = audibleTime();
-    const beatNow = heard < startTime ? -1 : liveJudge.beatAt(heard - offsetSec);
+    let beatNow = heard < startTime ? -1 : liveJudge.beatAt(heard - offsetSec);
     if (beatNow < 0) return;
+    if (sequential) {
+      // The music waits on the next note the player hasn't played yet.
+      for (let i = settledUpTo; i < timeline.length; i++) {
+        const item = timeline[i];
+        if (item?.kind === "note" && !matchedTimeline.has(i) && !skippedTimeline.has(i)) {
+          beatNow = Math.min(beatNow, item.beat + 0.01);
+          break;
+        }
+      }
+    }
 
     while (settledUpTo < timeline.length) {
       const item = timeline[settledUpTo];
       if (!item || beatNow < item.beat + closesAfterBeats(settledUpTo)) break;
       if (item.kind === "note" && demo) {
         setTimelineState(item, "done");
+      } else if (item.kind === "note" && sequential) {
+        // Only the player settles notes here: played, or skipped over (already marked missed).
+        if (!matchedTimeline.has(settledUpTo) && !skippedTimeline.has(settledUpTo)) break;
       } else if (item.kind === "note" && !matchedTimeline.has(settledUpTo)) {
         setTimelineState(item, "miss");
         liveJudge.markMissed(item.onsetIndex);
@@ -776,7 +805,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     updateBeatDots();
     updateHold();
     if (clockDriven) updateClock();
-    else checkSilence(t);
+    if (!clockDriven || sequential) checkSilence(t);
     if (ended) return;
 
     if (t >= endTime) {
@@ -874,7 +903,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       return;
     }
 
-    const result = judgeRun(onsets, rests, startTime, level.bpm, hits, releases, { grid, matches: liveMatches });
+    const result = judgeRun(onsets, rests, startTime, level.bpm, hits, releases, { grid, matches: liveMatches, sequential });
     lastResult = result;
     logDebugTable(result);
 
