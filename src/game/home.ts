@@ -34,6 +34,11 @@ export function leaveHome(): void {
 const FIGURE_CYCLE_MS = 15000;
 
 /** The plate floats behind the hero, gently ringing and drifting through figures. */
+/** Home on a wide screen: sand on the left, choices on the right (matches style.css). */
+function isHomeSideBySide(): boolean {
+  return window.innerWidth >= 900 && window.innerWidth >= window.innerHeight;
+}
+
 /** A narrow, upright screen: the sand becomes a quiet backdrop instead of a framed picture. */
 export function isPhoneBackdrop(): boolean {
   return window.innerWidth <= 640 && window.innerWidth < window.innerHeight * 0.9;
@@ -48,18 +53,21 @@ function startHomeScene(scene: Scene, slot: HTMLElement): void {
   scene.setDim(0.15);
 
   const place = () => {
-    // Phones: the sand lies quietly behind the whole screen and stays put while the choices scroll.
-    if (isPhoneBackdrop()) {
-      scene.setDim(tweak("sandHome"));
-      scene.setPlate(window.innerWidth / 2, window.innerHeight * 0.42, window.innerWidth * 0.72);
+    // Wide screens: the sand in its own column on the left, framed from above like a picture
+    // (as on the results), the choices on the right.
+    if (isHomeSideBySide()) {
+      scene.setSteep(true);
+      scene.setDim(0.15);
+      const rect = slot.getBoundingClientRect();
+      const radius = Math.max(60, Math.min(rect.width * 0.4, rect.height * 0.45, 520));
+      scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height * 0.5, radius);
       return;
     }
-    scene.setDim(0.15);
-    const rect = slot.getBoundingClientRect();
-    // Upright phones look down on the plate more steeply (resonance.ts), so it takes more height.
-    const portrait = window.innerWidth < window.innerHeight * 0.9;
-    const radius = Math.min(rect.width * 0.46, rect.height * (portrait ? 0.6 : 0.95), 460);
-    scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height / 2, radius);
+    // Phones and tablets: the sand lies quietly behind the whole screen, large, and stays put
+    // while the choices scroll over it.
+    scene.setSteep(false);
+    scene.setDim(tweak("sandHome"));
+    scene.setPlate(window.innerWidth / 2, window.innerHeight * 0.42, Math.min(window.innerWidth * 0.72, 560));
   };
   place();
   const observer = new ResizeObserver(place);
@@ -76,6 +84,7 @@ function startHomeScene(scene: Scene, slot: HTMLElement): void {
     observer.disconnect();
     window.removeEventListener("scroll", place);
     window.removeEventListener("resize", place);
+    scene.setSteep(false);
     offTweak();
     clearInterval(timer);
     scene.setAmbient(0);
@@ -258,7 +267,6 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   const lessonFields = document.createElement("div");
   lessonFields.className = "home-fields";
   const lessonField = field("Lesson", lessonSelect.el);
-  lessonField.classList.add("difficulty-field");
   lessonFields.append(lessonField, pieceField, stepField, field("Tempo", lessonTempoControl.el));
 
   // ---- Free practice ----
@@ -302,7 +310,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   // Independent hands: play both, or practise one alone (the other is played for you).
   const partControl = segmented(
     [
-      { value: "both", label: "Both hands" },
+      { value: "both", label: "Both" },
       { value: "right", label: "Right" },
       { value: "left", label: "Left" },
     ],
@@ -347,7 +355,16 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   const partField = field("Play", partControl.el);
   const freeFields = document.createElement("div");
   freeFields.className = "home-fields";
-  freeFields.append(field("Hands", handsControl.el), relateField, partField, ingredientsField, meterField, field("Length", lengthControl.el), field("Mode", modeControl.el), field("Tempo", tempoControl.el));
+  const handsField = field("Hands", handsControl.el);
+  const lengthField = field("Length", lengthControl.el);
+  // Classes for the home grid (style.css): Hands and Play share a row, Length widens when
+  // there is no meter to choose.
+  handsField.classList.add("hands-field");
+  partField.classList.add("part-field");
+  relateField.classList.add("relate-field");
+  meterField.classList.add("meter-field");
+  lengthField.classList.add("length-field");
+  freeFields.append(handsField, partField, relateField, ingredientsField, meterField, lengthField, field("Mode", modeControl.el), field("Tempo", tempoControl.el));
 
   const note = document.createElement("p");
   note.className = "panel-note";
