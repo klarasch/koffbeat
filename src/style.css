@@ -232,9 +232,10 @@ body,
   position: sticky;
   bottom: 0;
   z-index: 5;
-  margin: 0 calc(-1 * clamp(18px, 5vw, 56px)) calc(-1 * clamp(18px, 4vh, 44px));
-  padding: 26px clamp(18px, 5vw, 56px) calc(clamp(12px, 2.5vh, 22px) + env(safe-area-inset-bottom));
-  background: linear-gradient(to top, var(--void) 76%, rgba(246, 244, 240, 0));
+  margin: auto calc(-1 * clamp(18px, 5vw, 56px)) calc(-1 * clamp(18px, 4vh, 44px));
+  padding: 56px clamp(18px, 5vw, 56px) calc(clamp(12px, 2.5vh, 22px) + env(safe-area-inset-bottom));
+  /* A long, soft fade at the top, so sand passing behind it never meets a hard edge. */
+  background: linear-gradient(to bottom, rgba(246, 244, 240, 0), rgba(246, 244, 240, 0.8) 40px, var(--void) 72px);
 }
 
 @media (max-width: 560px) {
@@ -335,11 +336,14 @@ body,
 }
 
 .home-plate-slot {
-  flex: 1;
-  min-height: 120px;
+  flex: 0 0 auto;
+  height: clamp(120px, 22vh, 260px);
 }
 
+/* The dock takes the rest of the height, so Play (its last child) always sits at the bottom of
+   the screen rather than as a band across the middle. */
 .home-dock {
+  flex: 1 0 auto;
   width: 100%;
   padding: 0 clamp(18px, 5vw, 56px) clamp(18px, 4vh, 44px);
   display: flex;
@@ -1664,51 +1668,12 @@ body,
   }
 }
 
-/* Home on phones and tablets: the sand is a backdrop behind the choices (home.ts), so no slot
-   of its own, just a little air under the title. */
-@media not all and (min-width: 900px) and (min-aspect-ratio: 1/1) {
+/* Home on phones: the sand is a backdrop behind the choices (home.ts), so no slot of its own,
+   just a little air under the title. */
+@media (max-width: 640px) and (max-aspect-ratio: 9/10) {
   .home-plate-slot {
     min-height: 40px;
     flex: 0 0 40px;
-  }
-}
-
-/* Home on wide screens: the sand in its own column on the left, the choices on the right with
-   Play pinned under them; only the choices scroll. */
-@media (min-width: 900px) and (min-aspect-ratio: 1/1) {
-  .home {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(480px, 640px);
-    grid-template-rows: auto minmax(0, 1fr);
-    overflow: hidden;
-  }
-
-  .home-top {
-    grid-column: 1 / -1;
-  }
-
-  .home-plate-slot {
-    grid-column: 1;
-    grid-row: 2;
-    min-height: 0;
-  }
-
-  .home-dock {
-    grid-column: 2;
-    grid-row: 2;
-    min-height: 0;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding-top: 8px;
-    padding-left: 0;
-    /* The column itself scrolls, so Play's bar must reach its very bottom edge. */
-    padding-bottom: 0;
-  }
-
-  .home-dock .home-footer {
-    margin: 0;
-    padding-left: 0;
-    padding-right: 0;
   }
 }
 

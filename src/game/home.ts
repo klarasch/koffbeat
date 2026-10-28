@@ -7,7 +7,7 @@ import { onTweak, tweak } from "../ui/tweaks";
 import { chips, field, segmented, select, stepper } from "./controls";
 import { describeIngredients, INGREDIENTS, type Ingredient, type MeterChoice } from "../rhythm/generate";
 import { HAND_RELATIONS } from "../rhythm/twoHands";
-import { firstOpenLesson, firstOpenPiece, firstOpenStep, handsAreIndependent, LESSONS, loadProgress, PASS_ACCURACY, pieceDone, PIECES, stepDone } from "./lessons";
+import { firstOpenLesson, firstOpenPiece, firstOpenStep, LESSONS, loadProgress, PASS_ACCURACY, pieceDone, PIECES, stepDone } from "./lessons";
 import type { Mode } from "../types";
 
 export interface HomeOptions {
@@ -34,11 +34,6 @@ export function leaveHome(): void {
 const FIGURE_CYCLE_MS = 15000;
 
 /** The plate floats behind the hero, gently ringing and drifting through figures. */
-/** Home on a wide screen: sand on the left, choices on the right (matches style.css). */
-function isHomeSideBySide(): boolean {
-  return window.innerWidth >= 900 && window.innerWidth >= window.innerHeight;
-}
-
 /** A narrow, upright screen: the sand becomes a quiet backdrop instead of a framed picture. */
 export function isPhoneBackdrop(): boolean {
   return window.innerWidth <= 640 && window.innerWidth < window.innerHeight * 0.9;
@@ -53,21 +48,19 @@ function startHomeScene(scene: Scene, slot: HTMLElement): void {
   scene.setDim(0.15);
 
   const place = () => {
-    // Wide screens: the sand in its own column on the left, framed from above like a picture
-    // (as on the results), the choices on the right.
-    if (isHomeSideBySide()) {
-      scene.setSteep(true);
-      scene.setDim(0.15);
-      const rect = slot.getBoundingClientRect();
-      const radius = Math.max(60, Math.min(rect.width * 0.4, rect.height * 0.45, 520));
-      scene.setPlate(rect.left + rect.width / 2, rect.top + rect.height * 0.5, radius);
+    // Phones: the sand lies quietly behind the whole screen and stays put while the choices scroll.
+    if (isPhoneBackdrop()) {
+      scene.setDim(tweak("sandHome"));
+      scene.setPlate(window.innerWidth / 2, window.innerHeight * 0.42, window.innerWidth * 0.72);
       return;
     }
-    // Phones and tablets: the sand lies quietly behind the whole screen, large, and stays put
-    // while the choices scroll over it.
-    scene.setSteep(false);
-    scene.setDim(tweak("sandHome"));
-    scene.setPlate(window.innerWidth / 2, window.innerHeight * 0.42, Math.min(window.innerWidth * 0.72, 560));
+    // Larger screens: the sand sits above the choices, large, and flows on behind them (the glass
+    // blurs it). It stays put while the choices scroll, so it is placed as if unscrolled.
+    scene.setDim(0.15);
+    const rect = slot.getBoundingClientRect();
+    const scrolled = slot.parentElement?.scrollTop ?? 0;
+    const radius = Math.min(window.innerWidth * 0.3, rect.height * 1.1, 420);
+    scene.setPlate(rect.left + rect.width / 2, rect.top + scrolled + rect.height * 0.62, radius);
   };
   place();
   const observer = new ResizeObserver(place);
@@ -84,7 +77,6 @@ function startHomeScene(scene: Scene, slot: HTMLElement): void {
     observer.disconnect();
     window.removeEventListener("scroll", place);
     window.removeEventListener("resize", place);
-    scene.setSteep(false);
     offTweak();
     clearInterval(timer);
     scene.setAmbient(0);
@@ -307,7 +299,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
       paint();
     },
   );
-  // Independent hands: play both, or practise one alone (the other is played for you).
+  // Two hands: play both, or practise one alone (the other is played for you).
   const partControl = segmented(
     [
       { value: "both", label: "Both" },
@@ -387,7 +379,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
     lessonFields.hidden = !lessons;
     freeFields.hidden = lessons;
     relateField.hidden = hands !== 2;
-    partField.hidden = !(hands === 2 && handsAreIndependent(stage, cross));
+    partField.hidden = hands !== 2;
     // Two-hand exercises are written in 4/4.
     meterField.hidden = hands === 2;
     ingredientChips.setDisabled(CROSS_CHIP, hands === 2 ? null : "Needs two hands");

@@ -5,7 +5,7 @@ import "./style.css";
 import { createAudioEngine } from "./audio/engine";
 import { runCalibration } from "./input/calibration";
 import { type FreeChoice, leaveHome, renderHome } from "./game/home";
-import { firstOpenPiece, handsAreIndependent, LESSONS, loadProgress, PASS_ACCURACY, pieceLevel, recordResult } from "./game/lessons";
+import { firstOpenPiece, LESSONS, loadProgress, PASS_ACCURACY, pieceLevel, recordResult } from "./game/lessons";
 import { createScene } from "./scene/resonance";
 import { startPlay } from "./game/play";
 import { generateLevel } from "./rhythm/generate";
@@ -131,7 +131,7 @@ interface LevelPick {
   nextLabel?: string;
   /** The mode this pick is played in, when it decides it (a lesson step does). */
   mode?: Mode;
-  /** Free practice, independent hands: the exercise offers playing one hand alone. */
+  /** Free practice, two hands: the exercise offers playing one hand alone. */
   handChoice?: boolean;
   /** A lesson step: where its result is recorded. */
   lesson?: { index: number; piece: number; step: number };
@@ -187,10 +187,9 @@ function freePick(choice: FreeChoice): LevelPick {
   const again = () => freePick(choice);
   if (choice.hands === 2) {
     const level = withTempo(generateTwoHandLevel({ stage: choice.stage, cross: choice.cross, ingredients: choice.ingredients, bars: choice.bars }));
-    // Independent hands: the hand(s) chosen on home, and another choice on the results.
-    const independent = handsAreIndependent(choice.stage, choice.cross);
-    const solo: Hand | undefined = !independent || choice.part === "both" ? undefined : choice.part === "right" ? 1 : 0;
-    return { level, next: again, solo, handChoice: independent, nextLabel: "New exercise" };
+    // Any two-hand piece: the hand(s) chosen on home, and another choice on the results.
+    const solo: Hand | undefined = choice.part === "both" ? undefined : choice.part === "right" ? 1 : 0;
+    return { level, next: again, solo, handChoice: true, nextLabel: "New exercise" };
   }
   return { level: withTempo(generateLevel({ tier: 1, ingredients: choice.ingredients, meter: choice.meter, bars: choice.bars })), next: again, nextLabel: "New exercise" };
 }
