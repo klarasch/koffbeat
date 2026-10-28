@@ -36,7 +36,17 @@ export interface StaffView {
    * Vertical layout in px: the margin above the first line, the height of one line (system,
    * including every hand's staff) and the total height of the whole page.
    */
-  layout(): { top: number; systemHeight: number; total: number };
+  layout(): {
+    top: number;
+    systemHeight: number;
+    total: number;
+    /** Scroll offset (px) of the line `line`, so its highest ink sits WINDOW margin below the window's top. */
+    scrollTopOf(line: number): number;
+    /** Height of a window showing exactly `lines` whole lines from a `scrollTopOf` position, cut clear of the next line. */
+    windowHeight(lines: number): number;
+    /** Bottom of the last line's ink: a window never needs to extend past it. */
+    contentBottom: number;
+  };
   /**
    * Toggles whether the viewport can be scrolled by touch/wheel. During play the position is
    * driven only by `revealEvent` (never by the player dragging); on the results screen the
@@ -111,8 +121,13 @@ const FALLBACK_WIDTH = 360;
 const BARLINE_SPACE_MULTIPLIER = 1;
 /** Gap between the thin and thick strokes of a final barline. */
 const FINAL_BARLINE_GAP = 4;
-/** Scroll a little above a revealed system's top, so it doesn't sit flush against the viewport edge. */
-const REVEAL_LEAD = 10;
+/** Clear space kept above a line's highest ink (tuplet numbers, stems) when it is scrolled to the top. */
+const WINDOW_MARGIN = 5;
+/** Minimum clear space between one line's lowest ink and the next line's highest. */
+const SYSTEM_CLEARANCE = 4;
+/** Used where the SVG can't be measured (no layout, e.g. under jsdom): typical reach around a system's y. */
+const FALLBACK_ASCENT = 22;
+const FALLBACK_DESCENT = 60;
 
 // The percussion notehead sits on the single stave line regardless of "pitch"; "b/4" is just
 // a conventional key that VexFlow accepts for any clef.
@@ -340,7 +355,11 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
   }
   /** Rows within a system, top to bottom: the right hand above the left, as on a piano staff. */
   const rowOfHand = (hand: number) => (handCount === 2 ? 1 - hand : 0);
-  const systemGap = SYSTEM_GAP + (handCount - 1) * LINE_GAP;
+  /** Distance between systems: grows in `build` only if the drawn music of neighbouring lines would overlap. */
+  let systemGap = SYSTEM_GAP + (handCount - 1) * LINE_GAP;
+  /** Measured reach of the drawn music above a system's y and below it (max over all systems). */
+  let ascent = FALLBACK_ASCENT;
+  let descent = FALLBACK_DESCENT;
   /** Every event in index order, with its hand. */
   const flatEvents: { ev: RhythmEvent; hand: number }[] = handLines.flatMap((bars, hand) => bars.flat().map((ev) => ({ ev, hand })));
 
@@ -417,7 +436,7 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     return last ? last.x : 0;
   }
 
-  function build(): void {
+  function build(allowRegrow = true): void {
     if (destroyed) return;
     container.innerHTML = "";
     nextMarkers.clear();
@@ -466,6 +485,8 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       const sum = barIndices.reduce((acc, i) => acc + (barMinWidths[i] ?? 0), 0);
       const stretch = sum > 0 ? system.targetWidth / sum : 1;
       const systemY = TOP_MARGIN + s * systemGap;
+      // Everything drawn for this system sits in one group, so its real extent can be measured.
+      ctx.openGroup("system", `sys-${s}-g`);
       // Two hands: a brace in front of the system, pushing the first bar in a little.
       let xCursor = handCount > 1 ? BRACE_WIDTH : 0;
       let firstStaves: Stave[] = [];
@@ -573,6 +594,7 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
           ctx.restore();
         }
       }
+      ctx.closeGroup();
     }
 
     // Ties, including across barlines: walk the flattened events again to know which pairs tie.
@@ -587,10 +609,16 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       const lastMeta = newEventMeta[flatIndex + 1];
       if (firstNote && lastNote && firstMeta && lastMeta) {
         if (firstMeta.line === lastMeta.line) {
+          ctx.openGroup("system", `sys-${firstMeta.line}-g`);
           new StaveTie({ firstNote, lastNote }).setContext(ctx).draw();
+          ctx.closeGroup();
         } else {
+          ctx.openGroup("system", `sys-${firstMeta.line}-g`);
           new StaveTie({ firstNote, lastNote: null }).setContext(ctx).draw();
+          ctx.closeGroup();
+          ctx.openGroup("system", `sys-${lastMeta.line}-g`);
           new StaveTie({ firstNote: null, lastNote }).setContext(ctx).draw();
+          ctx.closeGroup();
         }
       }
     });
@@ -604,6 +632,20 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
 
     eventMeta = newEventMeta;
     bars = newBars;
+
+    // Measure how far the drawn music really reaches above and below each system (tuplet
+    // numbers and brackets, beams, stems, ties, rests, brace). If neighbouring lines would
+    // overlap, space the systems further apart and draw again; the scroll window is then
+    // cut from these numbers instead of guesses.
+    const reach = measureReach(container, systems.length, TOP_MARGIN, systemGap);
+    ascent = reach.ascent;
+    descent = reach.descent;
+    const neededGap = Math.ceil(ascent + descent + SYSTEM_CLEARANCE);
+    if (allowRegrow && neededGap > systemGap && systems.length > 1) {
+      systemGap = neededGap;
+      build(false);
+      return;
+    }
 
     const svgEl = container.querySelector("svg");
     shadows = [];
@@ -877,12 +919,22 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
       }
     },
     layout() {
-      return { top: TOP_MARGIN, systemHeight: systemGap, total: TOP_MARGIN + Math.max(1, Math.max(...eventMeta.map((m) => m?.line ?? 0)) + 1) * systemGap + BOTTOM_MARGIN };
+      const lineCount = Math.max(1, Math.max(...eventMeta.map((m) => m?.line ?? 0)) + 1);
+      const scrollTopOf = (line: number) => Math.max(0, Math.round(TOP_MARGIN + line * systemGap - ascent - WINDOW_MARGIN));
+      return {
+        top: TOP_MARGIN,
+        systemHeight: systemGap,
+        total: TOP_MARGIN + lineCount * systemGap + BOTTOM_MARGIN,
+        scrollTopOf,
+        // From line s's top margin to just above line s+n's highest ink (at worst `ascent` above its y).
+        windowHeight: (lines: number) => Math.floor(lines * systemGap + WINDOW_MARGIN - SYSTEM_CLEARANCE / 2),
+        contentBottom: TOP_MARGIN + (lineCount - 1) * systemGap + descent + WINDOW_MARGIN,
+      };
     },
     revealEvent(eventIndex: number): void {
       const meta = eventMeta[eventIndex];
       if (!meta) return;
-      const target = Math.max(0, TOP_MARGIN + meta.line * systemGap - REVEAL_LEAD);
+      const target = view.layout().scrollTopOf(meta.line);
       if (typeof container.scrollTo === "function") {
         try {
           container.scrollTo({ top: target, behavior: "smooth" });
@@ -921,4 +973,37 @@ export function renderStaff(container: HTMLElement, level: Level, opts?: RenderS
     },
   };
   return view;
+}
+
+/**
+ * Measured reach of the music drawn in each `sys-N` group: how far above the system's y its
+ * highest ink goes and how far below its lowest goes, as the maximum over all systems. Falls
+ * back to typical values when the SVG can't be measured.
+ */
+function measureReach(container: HTMLElement, systemCount: number, topMargin: number, gap: number): { ascent: number; descent: number } {
+  let ascent = Number.NEGATIVE_INFINITY;
+  let descent = Number.NEGATIVE_INFINITY;
+  let measured = false;
+  for (let s = 0; s < systemCount; s++) {
+    const y = topMargin + s * gap;
+    let top = Number.POSITIVE_INFINITY;
+    let bottom = Number.NEGATIVE_INFINITY;
+    for (const g of container.querySelectorAll(`[id*="sys-${s}-g"]`)) {
+      try {
+        const box = (g as unknown as SVGGraphicsElement).getBBox();
+        if (box.width === 0 && box.height === 0) continue;
+        top = Math.min(top, box.y);
+        bottom = Math.max(bottom, box.y + box.height);
+      } catch {
+        // not measurable (detached or display:none)
+      }
+    }
+    if (Number.isFinite(top) && Number.isFinite(bottom)) {
+      measured = true;
+      ascent = Math.max(ascent, y - top);
+      descent = Math.max(descent, bottom - y);
+    }
+  }
+  if (!measured) return { ascent: FALLBACK_ASCENT, descent: FALLBACK_DESCENT };
+  return { ascent: Math.max(0, ascent), descent };
 }

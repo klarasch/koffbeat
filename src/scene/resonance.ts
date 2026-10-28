@@ -33,8 +33,6 @@ export interface Scene {
   setHold(hold: { progress: number; state: HoldState } | null): void;
   /** True while the music is in a rest: the sand settles and the ground calms. */
   setRest(active: boolean): void;
-  /** 0..1: how in-tempo and clean the playing is. High lifts the sand; low blurs the figure. */
-  setCoherence(value: number): void;
   /** Background energy that keeps the sand gently moving (the home screen's idle state). */
   setAmbient(level: number): void;
   /** 0..1: how much the scene fades back behind UI. */
@@ -43,8 +41,8 @@ export interface Scene {
   scatter(): void;
   /** End of a run: the sand rises and settles into the figure. `quality` is 0..1. */
   reveal(quality: number): void;
-  /** A run of precise playing reached a milestone: the figure blooms and rises. */
-  celebrate(): void;
+  /** The run is lost: the sand is flung up off the plate and drifts there until `reset`. */
+  fling(): void;
   /** Clear the reveal, hold and rest state. */
   reset(): void;
   /** Numbers for debugging in the browser console. */
@@ -191,7 +189,7 @@ void main() {
   // direction, and thrown a little into the air.
   vec2 knock = vec2(hash12(uv * 313.0 + uTime * 17.3), hash12(uv * 271.0 - uTime * 29.9)) - 0.5;
   acc.xz += knock * uShake * 34.0;
-  acc.y += (hash12(uv * 97.0 + uTime) - 0.3) * uShake * 6.0 * ground;
+  acc.y += (0.3 + 0.7 * hash12(uv * 97.0 + uTime)) * uShake * 6.0 * ground;
 
   // In the air: an even, gentle breeze that slowly turns, so veils drift without pooling.
   vec2 breeze = vec2(cos(uTime * 0.07), sin(uTime * 0.05)) * 0.05;
@@ -414,12 +412,11 @@ function noopScene(): Scene {
     release() {},
     setHold() {},
     setRest() {},
-    setCoherence() {},
     setAmbient() {},
     setDim() {},
     scatter() {},
     reveal() {},
-    celebrate() {},
+    fling() {},
     reset() {},
   };
 }
@@ -613,20 +610,22 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   let plateInit = false;
   let energy = 0;
   let ambient = 0;
-  let coherence = 1;
   let lift = 0;
   let dimTarget = 0;
   let reveal = 0;
   let revealTarget = 0;
   let resting = false;
-  /** 0..1: how precise the playing has been lately (rises on clean taps, collapses on mistakes). */
-  let harmony = 1;
+  /** 0..1: how scrambled the figure is: mistakes add to it, time and clean taps take it away. */
+  let disorder = 0;
+  /** Disorder never recovers below this (the results screen shows how the run went). */
+  let disorderFloor = 0;
+  /** 0..1: the lost-run state, with the sand flung up and drifting. */
+  let flung = 0;
   let shake = 0;
   let bloom = 0;
   let settle = 0;
   let hold: { progress: number; state: HoldState } | null = null;
   let holdVis = 0;
-  let holdLift = 0;
   let figure = 0;
   let prevFigure = 0;
   let morph = 1;
@@ -738,17 +737,18 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     settle += ((resting ? 1 : 0) - settle) * (1 - Math.exp(-dt * 5));
 
     if (hold && hold.state !== "over") energy = Math.max(energy, 0.45 + 0.25 * hold.progress);
-    holdLift += ((hold && hold.state !== "over" ? 0.35 + 0.65 * hold.progress : 0) - holdLift) * (1 - Math.exp(-dt * (hold ? 2.5 : 4)));
     energy *= Math.exp(-dt * (reducedMotion ? 3 : 1.4 + settle * 2.5));
-    const tempo = coherence * coherence;
     shake *= Math.exp(-dt * 3.5);
     bloom *= Math.exp(-dt * 2.2);
     simUniforms.uShake.value = reducedMotion ? shake * 0.3 : shake;
+    // Mistakes scramble the figure; it recovers on its own over a few seconds.
+    disorder = disorderFloor + (disorder - disorderFloor) * Math.exp(-dt / 4);
+    const harmony = 1 - 0.7 * disorder;
     simUniforms.uHarmony.value += (harmony - simUniforms.uHarmony.value) * (1 - Math.exp(-dt * 3));
     pigmentUniforms.uBloom.value = bloom;
-    // Lift rises with energy and precision together; a broken run keeps the sand on the floor.
-    const tempoLift = tempo * (0.25 + 0.75 * harmony);
-    const liftTarget = (reducedMotion ? 0.35 : 1) * (Math.min(1, energy) * tempoLift * (1 - settle * 0.85) + holdLift * tempoLift * 0.9 + ambient * 0.45 + reveal * 0.6);
+    // Playing never lifts the sand: it lies on the plate. Only the idle home drift, the results
+    // reveal and a lost run raise it.
+    const liftTarget = (reducedMotion ? 0.35 : 1) * (ambient * 0.45 + reveal * 0.6 + flung * 0.8);
     // Rising is slow and elegant; falling back a little quicker.
     lift += (liftTarget - lift) * (1 - Math.exp(-dt * (liftTarget > lift ? 1.8 : 2.6)));
     holdVis += ((hold ? 1 : 0) - holdVis) * (1 - Math.exp(-dt * (hold ? 20 : 5)));
@@ -775,14 +775,15 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     }
 
     // Imprecision blurs the figure with a competing mode, sooner and harder than before.
-    const noiseW = Math.pow(1 - Math.min(coherence, harmony), 0.6) * 0.9;
+    const noiseW = Math.pow(disorder, 0.8) * 0.9;
     shared.uModeW.value.set(morph * (1 - noiseW), (1 - morph) * (1 - noiseW), noiseW);
     shared.uStanding.value = 0.01 * Math.min(1, Math.max(energy, ambient * 0.4)) * (1 - settle);
     shared.uTime.value = time;
 
     simUniforms.uDt.value = dt;
     // Idle sorting is a little stronger than idle lifting, so the figure forms between drifts.
-    simUniforms.uEnergy.value = Math.max(energy, ambient * 1.8) * (1 - settle * 0.7);
+    // While the figure morphs the grains need energy to travel to the new lines.
+    simUniforms.uEnergy.value = Math.max(energy, ambient * 1.8, (1 - morph) * 0.9) * (1 - settle * 0.7);
     simUniforms.uLift.value = lift;
     simUniforms.uSettle.value = settle;
     gpu.compute();
@@ -829,6 +830,8 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
       shared.uModeB.value.copy(modeVec(prevFigure));
       shared.uModeA.value.copy(modeVec(figure));
       shared.uModeN.value.copy(modeVec(index + 5));
+      // A soft ripple through the sand on the plate marks the change (the home screen has its own).
+      if (ambient <= 0.05) addRipple(0, 0, 0.02, 0.7, 0.5, GRADE_RGB.neutral);
     },
     strike(kind: StrikeKind, clientX?: number | null, clientY?: number | null, quarters = 1) {
       energy = Math.min(1.3, energy + STRIKE_ENERGY[kind]);
@@ -840,24 +843,23 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
       const speed = 0.9 + 0.25 * Math.sqrt(q);
       const strength = (kind === "miss" ? 0.05 : 0.035) * (0.8 + 0.35 * Math.sqrt(q));
       addRipple(x, z, strength, wavelength, speed, GRADE_RGB[kind]);
+      // Clean taps tidy the figure and brighten the pigment a touch; mistakes jolt the sand up
+      // off the plate (by how bad) and scramble the figure. Nothing here lifts the sand as a reward.
       if (kind === "perfect") {
-        harmony = Math.min(1, harmony + 0.1);
-        bloom = Math.min(1.2, bloom + 0.7);
+        disorder = Math.max(disorderFloor, disorder - 0.12);
+        bloom = Math.min(1.2, bloom + 0.5);
       } else if (kind === "good") {
-        harmony = Math.min(1, harmony + 0.05);
-        bloom = Math.min(1.2, bloom + 0.35);
+        disorder = Math.max(disorderFloor, disorder - 0.08);
+        bloom = Math.min(1.2, bloom + 0.25);
       } else if (kind === "ok") {
-        harmony = Math.max(0, harmony - 0.15);
-        shake = Math.max(shake, 0.35);
+        disorder = Math.min(1, disorder + 0.15);
+        shake = Math.max(shake, 0.4);
+        energy = Math.max(energy, 0.8);
       } else if (kind === "miss") {
-        harmony *= 0.45;
-        shake = 1;
+        disorder = Math.min(1, disorder + 0.45);
+        shake = Math.max(shake, 1);
+        energy = Math.max(energy, 1);
       }
-    },
-    celebrate() {
-      bloom = 1.6;
-      energy = Math.min(1.3, energy + 0.6);
-      addRipple(0, 0, 0.06, 0.7, 0.55, GRADE_RGB.perfect);
     },
     release(kind: StrikeKind = "neutral") {
       addRipple(0, 0, 0.02, 0.5, 0.7, GRADE_RGB[kind]);
@@ -868,8 +870,11 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     setRest(active: boolean) {
       resting = active;
     },
-    setCoherence(value: number) {
-      coherence = Math.min(1, Math.max(0, value));
+    fling() {
+      flung = 1;
+      shake = 1.6;
+      disorder = Math.max(disorder, 0.7);
+      resting = false;
     },
     setAmbient(level: number) {
       ambient = reducedMotion ? level * 0.4 : level;
@@ -881,7 +886,8 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     reveal(quality: number) {
       const q = Math.min(1, Math.max(0, quality));
       revealTarget = 0.3 + 0.7 * q;
-      coherence = q;
+      disorderFloor = (1 - q) * 0.5;
+      disorder = Math.max(disorder, disorderFloor);
       resting = false;
       energy = Math.max(energy, 0.5);
       ambient = reducedMotion ? 0.08 : 0.22;
@@ -891,8 +897,9 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
       revealTarget = 0;
       hold = null;
       resting = false;
-      coherence = 1;
-      harmony = 0.7;
+      disorder = 0;
+      disorderFloor = 0;
+      flung = 0;
       shake = 0;
     },
   };
