@@ -169,6 +169,12 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
 
     const startButton = createButton("Start", "primary");
     const skipButton = createButton("Skip for now", "secondary");
+    // While a round runs, the only way out: stops it and leaves calibration.
+    const cancelButton = createButton("Cancel", "secondary");
+    const cancelRow = document.createElement("div");
+    cancelRow.className = "cal-actions";
+    cancelRow.append(cancelButton);
+    cancelRow.hidden = true;
 
     // Taps go to their own pad. Reusing the Start button as the tap target meant every tap also
     // "clicked" Start, restarting the round on top of the one still playing.
@@ -207,11 +213,13 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
       progressBars.push(bar);
     }
 
-    container.append(label, heading, explanation, statusLine, progress, tapPad, startRow, resultBox);
+    container.append(label, heading, explanation, statusLine, progress, tapPad, cancelRow, startRow, resultBox);
 
     let lastOffsetSec = 0;
     let detach: (() => void) | null = null;
     let running = false;
+    /** Set by Cancel (or Escape) to end the running round early. */
+    let cancelled = false;
 
     startButton.addEventListener("click", () => {
       if (running) return;
@@ -227,6 +235,18 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
     };
     skipButton.addEventListener("click", skip);
     skipAfterButton.addEventListener("click", skip);
+    const cancel = (): void => {
+      if (running) cancelled = true;
+      else skip();
+    };
+    cancelButton.addEventListener("click", cancel);
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancel();
+      }
+    };
+    window.addEventListener("keydown", onKey);
 
     retryButton.addEventListener("click", () => {
       resultBox.hidden = true;
@@ -240,6 +260,7 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
     });
 
     function finish(offset: number): void {
+      window.removeEventListener("keydown", onKey);
       container.classList.remove("cal");
       resolve(offset);
     }
@@ -250,7 +271,9 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
      */
     async function startRound(): Promise<void> {
       running = true;
+      cancelled = false;
       startRow.hidden = true;
+      cancelRow.hidden = false;
       resultBox.hidden = true;
       statusLine.textContent = "Listen…";
 
@@ -297,7 +320,7 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
           const recent = usableTaps.slice(-TAPS_NEEDED);
           progressBars.forEach((bar, i) => bar.classList.toggle("on", i < recent.length));
           if (recent.length >= TAPS_NEEDED) result = computeOffset(recent, clickTimes);
-          if (result.ok || t >= endTime) {
+          if (result.ok || t >= endTime || cancelled) {
             clearInterval(timer);
             done();
           }
@@ -309,7 +332,12 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
       detach = null;
       tapPad.hidden = true;
       progress.hidden = true;
+      cancelRow.hidden = true;
       running = false;
+      if (cancelled) {
+        skip();
+        return;
+      }
 
       lastOffsetSec = result.ok ? result.offsetSec : loadOffset();
       const offsetMs = Math.round(result.offsetSec * 1000);
