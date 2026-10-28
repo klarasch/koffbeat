@@ -131,7 +131,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   const titleBlock = document.createElement("div");
   const title = document.createElement("h1");
   title.className = "home-title";
-  title.textContent = "Resonance";
+  title.textContent = "Koffbeat";
   const tagline = document.createElement("p");
   tagline.className = "home-tagline";
   tagline.textContent = "Read the rhythm. Play in time and the sand draws its figures.";
