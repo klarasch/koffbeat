@@ -2,6 +2,7 @@
 // the home screen's button. Styled like latency calibration (the cal-* classes in style.css).
 
 import { t, type Key } from "../i18n";
+import { kbd, setTextWithKeys } from "./keys";
 
 const SEEN_KEY = "resonance.seenHowTo";
 
@@ -73,9 +74,9 @@ export function showHowTo(beforePlay = false): Promise<void> {
 
     const actions = document.createElement("div");
     actions.className = "cal-actions";
-    const back = button(t("howto.back"), "secondary");
-    const next = button("", "primary");
-    const skip = button(t("howto.skip"), "secondary howto-skip");
+    const back = button(t("howto.back"), "secondary", "←");
+    const next = button("", "primary", "→");
+    const skip = button(t("howto.skip"), "secondary howto-skip", "Esc");
     actions.append(back, next, skip);
 
     page.append(label, heading, text, progress, actions);
@@ -87,11 +88,11 @@ export function showHowTo(beforePlay = false): Promise<void> {
       const last = index === list.length - 1;
       label.textContent = t("howto.label", { i: index + 1, n: list.length });
       heading.textContent = t(card.title);
-      text.textContent = t(card.text);
+      setTextWithKeys(text, t(card.text));
       bars.forEach((bar, i) => bar.classList.toggle("on", i <= index));
       back.hidden = index === 0;
       skip.hidden = last;
-      next.textContent = last ? t(beforePlay ? "howto.play" : "howto.done") : t("howto.next");
+      next.firstChild!.textContent = last ? t(beforePlay ? "howto.play" : "howto.done") : t("howto.next");
     }
 
     function go(delta: number): void {
@@ -129,10 +130,10 @@ export function showHowTo(beforePlay = false): Promise<void> {
   });
 }
 
-function button(label: string, kind: string): HTMLButtonElement {
+function button(label: string, kind: string, key: string): HTMLButtonElement {
   const el = document.createElement("button");
   el.type = "button";
   el.className = `cal-button ${kind}`;
-  el.textContent = label;
+  el.append(document.createTextNode(label), kbd(key, "howto-key"));
   return el;
 }

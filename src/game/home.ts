@@ -404,7 +404,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   const play = document.createElement("button");
   play.type = "button";
   play.className = "play-cta";
-  play.innerHTML = `<span class="play-cta-word"></span><span class="play-cta-arrow" aria-hidden="true">→</span><span class="play-cta-what"></span>`;
+  play.innerHTML = `<span class="play-cta-word"></span><span class="play-cta-arrow" aria-hidden="true"><kbd class="kbd">↵</kbd>→</span><span class="play-cta-what"></span>`;
   const playWhat = play.lastChild as HTMLElement;
   (play.firstChild as HTMLElement).textContent = t("home.playWord");
 

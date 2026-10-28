@@ -1,6 +1,7 @@
 import type { AudioEngine } from "../audio/engine";
 import { t } from "../i18n";
 import { attachInput } from "./input";
+import { setTextWithKeys } from "../ui/keys";
 
 /** Result of matching tapped times against the click grid used to elicit them. */
 export interface CalibrationResult {
@@ -163,7 +164,7 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
 
     const explanation = document.createElement("p");
     explanation.className = "cal-text";
-    explanation.textContent = t("cal.text");
+    setTextWithKeys(explanation, t("cal.text"));
 
     const statusLine = document.createElement("p");
     statusLine.className = "cal-status";

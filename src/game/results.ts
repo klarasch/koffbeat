@@ -1,6 +1,7 @@
 // Builds the results overlay shown after a run: two headline scores, tempo detail, and the
 // Retry / next / Home actions. Pure DOM builder — timing and judging happen in play.ts.
 
+import { setTextWithKeys } from "../ui/keys";
 import { type Key, t } from "../i18n";
 import type { Grade, Mode, OnsetJudgement, RunResult } from "../types";
 import { stepper } from "./controls";
@@ -214,7 +215,7 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
     const noTaps = document.createElement("p");
     noTaps.className = "results-detail";
     const touch = typeof matchMedia === "function" && matchMedia("(hover: none)").matches;
-    noTaps.textContent = t(touch ? "res.noTapsTouch" : "res.noTapsKeys");
+    setTextWithKeys(noTaps, t(touch ? "res.noTapsTouch" : "res.noTapsKeys"));
     return bentoPanel([cell([noTaps])], buildButtons(callbacks, retry));
   }
 

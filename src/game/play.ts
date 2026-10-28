@@ -140,23 +140,26 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   // once the run is over (the results' own actions cover the rest).
   const runControls = document.createElement("div");
   runControls.className = "run-controls";
-  const iconButton = (label: string, svg: string, onClick: () => void): HTMLButtonElement => {
+  const iconButton = (label: string, key: string, svg: string, onClick: () => void): HTMLButtonElement => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "icon-button";
     button.setAttribute("aria-label", label);
-    button.title = label;
-    button.innerHTML = svg;
+    button.setAttribute("aria-keyshortcuts", key);
+    button.title = `${label} (${key})`;
+    button.innerHTML = `${svg}<kbd class="kbd">${key}</kbd>`;
     button.addEventListener("click", onClick);
     return button;
   };
   const restartButton = iconButton(
     t(demo ? "play.startOver" : "play.restart"),
+    "R",
     `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5 12a7 7 0 1 0 2.05-4.95M5 4v4h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
     () => leave(() => (demo ? callbacks.onListen() : callbacks.onRetry())),
   );
   const stopButton = iconButton(
     t("play.stop"),
+    "Esc",
     `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="currentColor"/></svg>`,
     () => finish("stopped"),
   );
@@ -235,8 +238,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   zoneLeft.className = "tap-zone tap-zone-left";
   const zoneLeftLabel = document.createElement("span");
   zoneLeftLabel.className = "tap-zone-label";
-  // The key in brackets is for keyboards only; touch screens hide it (.key-hint).
-  const zoneLabel = (words: string, key: string) => `${words}<span class="key-hint"> (${key})</span>`;
+  // The key box is for keyboards only; touch screens hide it (.kbd).
+  const zoneLabel = (words: string, key: string) => `${words} <kbd class="kbd">${key}</kbd>`;
   zoneLeftLabel.innerHTML = demo ? "" : twoHands ? (solo === 1 ? "" : zoneLabel(t("play.zoneLeft"), "F")) : zoneLabel(t("play.zoneTap"), "F");
   zoneLeft.appendChild(zoneLeftLabel);
   const zoneRight = document.createElement("div");
