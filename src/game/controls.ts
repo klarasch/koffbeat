@@ -133,7 +133,11 @@ export function select(choices: Choice[], initial: string, onChange: (value: str
       commit(choice.value);
       close(true);
     });
-    li.addEventListener("pointermove", () => setActive(choice.value));
+    // Mouse only: on touch, pointermove fires while the finger scrolls the list, and
+    // following it (with scrollIntoView) fought the scroll.
+    li.addEventListener("pointermove", (event) => {
+      if (event.pointerType === "mouse" && active !== choice.value) setActive(choice.value, false);
+    });
     list.appendChild(li);
     return li;
   });
@@ -152,10 +156,10 @@ export function select(choices: Choice[], initial: string, onChange: (value: str
     const activeIndex = choices.findIndex((c) => c.value === active);
     if (activeIndex >= 0) list.setAttribute("aria-activedescendant", items[activeIndex]!.id);
   }
-  function setActive(value: string): void {
+  function setActive(value: string, reveal = true): void {
     active = value;
     paint();
-    items[choices.findIndex((c) => c.value === value)]?.scrollIntoView({ block: "nearest" });
+    if (reveal) items[choices.findIndex((c) => c.value === value)]?.scrollIntoView({ block: "nearest" });
   }
   function commit(value: string): void {
     if (value !== current) {

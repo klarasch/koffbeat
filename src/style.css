@@ -601,6 +601,9 @@ body,
   top: calc(100% + 4px);
   max-height: min(320px, 50vh);
   overflow-y: auto;
+  /* Scrolling to its end must not scroll the page under it (that would close it). */
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   margin: 0;
   padding: 4px 0;
   list-style: none;
