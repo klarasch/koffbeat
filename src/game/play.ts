@@ -30,11 +30,18 @@ export interface PlayOptions {
   solo?: Hand;
   /** Play the exercise back correctly instead of judging the player. */
   demo?: boolean;
+  /** Play-along: the game quietly plays the player's own notes too (with the metronome). */
+  guide?: boolean;
+  /** A lesson step's goal, so the results can say how a slower run compares. */
+  goal?: { bpm: number; pass: number };
   /** Where this run sits in a sequence of steps (e.g. right hand, left hand, together). */
   steps?: { labels: string[]; current: number };
   /** Label of the results' main "next" action (default "Next level"). */
   nextLabel?: string;
 }
+
+/** How loud the guide plays the player's own notes (0-1). */
+const GUIDE_VELOCITY = 0.25;
 
 /** How long after the count-in's last click ends do we still accept hits, in quarter notes. */
 const END_MARGIN_QUARTERS = 2;
@@ -100,7 +107,7 @@ interface TimelineRest {
 type TimelineItem = TimelineNote | TimelineRest;
 
 export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Scene, level: Level, mode: Mode, callbacks: PlayCallbacks, options: PlayOptions = {}): void {
-  const { solo, demo = false } = options;
+  const { solo, demo = false, guide = false } = options;
   container.innerHTML = "";
 
   const screen = document.createElement("div");
@@ -120,7 +127,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   const twoHands = levelLines(level).length > 1;
   // Hands the player plays: both on a two-hand level, unless practising one of them.
   const hands: Hand[] = solo !== undefined && twoHands ? [solo] : twoHands ? [0, 1] : [0];
-  (titleEl.lastChild as HTMLElement).textContent = `${level.bpm} bpm, ${demo ? "listening" : mode === "practice" ? "practice" : "count-in"}`;
+  (titleEl.lastChild as HTMLElement).textContent = `${level.bpm} bpm, ${demo ? "listening" : mode === "practice" ? (guide ? "play along" : "practice") : "count-in"}`;
   const escHint = document.createElement("span");
   escHint.className = "esc-hint";
   escHint.textContent = demo ? "Esc to stop" : "Esc to stop, R to retry";
@@ -307,8 +314,9 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   for (const o of allOnsets) {
     const line = (o.line ?? 0) as Hand;
     const playedByGame = demo || !hands.includes(line);
-    if (!playedByGame) continue;
-    engine.scheduleNote(ZONE_PITCH[line], demo ? 0.75 : 0.45, startTime + o.beat * secPerQuarter, o.quarters * secPerQuarter * 0.92);
+    // A guide plays the player's own notes too, but only just audibly.
+    if (!playedByGame && !(guide && mode === "practice")) continue;
+    engine.scheduleNote(ZONE_PITCH[line], demo ? 0.75 : playedByGame ? 0.45 : GUIDE_VELOCITY, startTime + o.beat * secPerQuarter, o.quarters * secPerQuarter * 0.92);
   }
 
   const offsetSec = loadOffset();
@@ -911,7 +919,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       onHome: () => leave(callbacks.onHome),
       onListen: () => leave(callbacks.onListen),
     };
-    const retryTempo = { bpm: level.bpm, nextLabel: options.nextLabel };
+    const retryTempo = { bpm: level.bpm, nextLabel: options.nextLabel, goal: options.goal };
     resultsOverlay.innerHTML = "";
     if (outcome === "done") {
       callbacks.onComplete?.(result.accuracy);

@@ -24,6 +24,9 @@ import {
 /** What each stage asks of the hands, index 0 = stage 1. */
 export const TWO_HAND_STAGES: string[] = ["Call and response", "Unison", "Independence", "3 against 2"];
 
+/** The ways the hands can relate in free practice (stages 1-3); "3 against 2" is a rhythm option, see `cross`. */
+export const HAND_RELATIONS: string[] = TWO_HAND_STAGES.slice(0, 3).map((name) => (name === "Independence" ? "Independent" : name));
+
 const METER = { beats: 4, beatUnit: 4 } as const;
 const DEFAULT_BPM = 65;
 
@@ -135,6 +138,26 @@ function threeAgainstTwo(rng: Rng, bars: number, pal: Palette): [Bars, Bars] {
   return [left, right];
 }
 
+/**
+ * Puts cross-rhythm bars into a piece built by one of the relations: the third bar of every
+ * four becomes a full bar of 3:2, one hand in quarter-note triplets over the other's
+ * quarters/eighths (the triplet hand swaps each phrase). The bar before loses any tie into it.
+ */
+function addCrossBars(rng: Rng, pal: Palette, left: Bars, right: Bars): void {
+  const duple = dupleVocabulary(pal);
+  for (let at = 2, p = 0; at < left.length; at += 4, p++) {
+    const triplets = [...tripletQuarters(), ...tripletQuarters()];
+    const other = duple ? buildBarEvents(rng, duple, { kind: "4/4", disallowLeadingRest: true }) : quarters();
+    const [tripletHand, dupleHand] = p % 2 === 0 ? [right, left] : [left, right];
+    tripletHand[at] = triplets;
+    dupleHand[at] = other;
+    for (const hand of [left, right]) {
+      const before = hand[at - 1]?.at(-1);
+      if (before?.tie) delete before.tie;
+    }
+  }
+}
+
 export interface TwoHandOptions {
   /** 1–4, see {@link TWO_HAND_STAGES}. */
   stage: number;
@@ -144,6 +167,8 @@ export interface TwoHandOptions {
   ingredients?: Ingredient[];
   /** With `ingredients`: the one to practise most (defaults to the highest-tier one). */
   focus?: Ingredient;
+  /** Stages 1-3: add cross-rhythm (3 against 2) bars to the piece. */
+  cross?: boolean;
   bars: 4 | 8 | 16;
   bpm?: number;
   seed?: number;
@@ -158,9 +183,11 @@ export function generateTwoHandLevel(opts: TwoHandOptions): Level {
   const tier = Math.min(MAX_TWO_HAND_TIER, Math.max(1, Math.round(opts.tier ?? DEFAULT_TIER)));
   const pal = opts.ingredients ? ingredientPalette(opts.ingredients, opts.focus) : tierPalette(tier);
   const [left, right] = build(rng, opts.bars, pal);
-  const stageName = TWO_HAND_STAGES[stage - 1]?.toLowerCase();
+  const cross = Boolean(opts.cross) && stage < 4;
+  if (cross) addCrossBars(rng, pal, left, right);
+  const stageName = (TWO_HAND_STAGES[stage - 1] ?? "").toLowerCase() + (cross ? " with 3 against 2" : "");
   return {
-    id: opts.ingredients ? `gen-2h-s${stage}-i-${seed}` : `gen-2h-s${stage}-t${tier}-${seed}`,
+    id: `${opts.ingredients ? `gen-2h-s${stage}-i-${seed}` : `gen-2h-s${stage}-t${tier}-${seed}`}${cross ? "-x" : ""}`,
     title: `Two hands: ${stageName}, ${opts.ingredients ? describeIngredients(pal.ingredients).toLowerCase() : TIER_NAMES[tier - 1]?.toLowerCase()}`,
     meter: METER,
     bpm: opts.bpm ?? DEFAULT_BPM,

@@ -1,16 +1,20 @@
-// The lesson path: an ordered list of lessons, each introducing one idea, each played in a few
-// steps that take away help one at a time. Progress (the best accuracy per step) is kept on
-// this device. Pure data and storage; main.ts turns a lesson step into a playable level.
+// The lesson path: an ordered list of lessons, each introducing one idea. Every lesson has a few
+// fixed pieces (the same music every time, so there is something to practise), and each piece is
+// played in steps that take away help one at a time. Progress (the best accuracy per step of
+// each piece) is kept on this device. Pure data and storage; main.ts turns a step into a
+// playable level.
 
-import { TIER_NAMES } from "../rhythm/generate";
-import { TWO_HAND_STAGES } from "../rhythm/twoHands";
-import type { Hand, Mode } from "../types";
+import { generateLevel, TIER_NAMES } from "../rhythm/generate";
+import { generateTwoHandLevel, TWO_HAND_STAGES } from "../rhythm/twoHands";
+import type { Hand, Level, Mode } from "../types";
 
 export interface LessonStep {
   label: string;
   mode: Mode;
+  /** The suggested tempo: a step counts as done only at this tempo or faster. */
   bpm: number;
-  bars: 4 | 8 | 16;
+  /** Play-along: the game plays every note quietly with you (after a first listen). */
+  guide?: boolean;
   /** Two-hand lessons: practise this hand alone (the other is played for you). */
   solo?: Hand;
 }
@@ -22,23 +26,28 @@ export interface Lesson {
   tier: number;
   /** Two-hand lessons: how the hands relate (see TWO_HAND_STAGES). */
   stage?: number;
+  /** Bars in each piece; all steps of a lesson play the same piece. */
+  bars: 4 | 8 | 16;
   steps: LessonStep[];
 }
 
 /** A step counts as done at this accuracy or better. */
 export const PASS_ACCURACY = 85;
 
+/** Fixed pieces per lesson. */
+export const PIECES = 3;
+
 const READING_STEPS: LessonStep[] = [
-  { label: "Learn", mode: "practice", bpm: 55, bars: 4 },
-  { label: "Practice", mode: "practice", bpm: 65, bars: 8 },
-  { label: "Count-in", mode: "countIn", bpm: 65, bars: 8 },
+  { label: "Learn", mode: "practice", bpm: 55, guide: true },
+  { label: "Practice", mode: "practice", bpm: 65 },
+  { label: "Count-in", mode: "countIn", bpm: 65 },
 ];
 
 const TWO_HAND_STEPS: LessonStep[] = [
-  { label: "Right hand", mode: "practice", bpm: 55, bars: 4, solo: 1 },
-  { label: "Left hand", mode: "practice", bpm: 55, bars: 4, solo: 0 },
-  { label: "Together", mode: "practice", bpm: 60, bars: 4 },
-  { label: "Count-in", mode: "countIn", bpm: 60, bars: 4 },
+  { label: "Right hand", mode: "practice", bpm: 55, solo: 1 },
+  { label: "Left hand", mode: "practice", bpm: 55, solo: 0 },
+  { label: "Together", mode: "practice", bpm: 60 },
+  { label: "Count-in", mode: "countIn", bpm: 60 },
 ];
 
 /** Two-hand lessons: each stage with a reading tier the hands are comfortable with by then. */
@@ -50,20 +59,44 @@ const TWO_HAND_LESSONS: [stage: number, tier: number][] = [
 ];
 
 export const LESSONS: Lesson[] = [
-  ...TIER_NAMES.map((name, i): Lesson => ({ id: `read-${i + 1}`, title: name, tier: i + 1, steps: READING_STEPS })),
+  ...TIER_NAMES.map((name, i): Lesson => ({ id: `read-${i + 1}`, title: name, tier: i + 1, bars: 8, steps: READING_STEPS })),
   ...TWO_HAND_LESSONS.map(([stage, tier]): Lesson => ({
     id: `hands-${stage}`,
     title: `Two hands: ${TWO_HAND_STAGES[stage - 1]?.toLowerCase()}`,
     tier,
     stage,
+    bars: 4,
     steps: TWO_HAND_STEPS,
   })),
 ];
 
-const PROGRESS_KEY = "resonance.lessonProgress";
+/**
+ * The seed of a piece (0-based): a hash of the lesson id and piece number, so the same piece
+ * comes back every time (for as long as the generator itself is unchanged).
+ */
+export function pieceSeed(lessonId: string, piece: number): number {
+  let h = 0x811c9dc5;
+  for (const ch of `${lessonId}#${piece + 1}`) {
+    h ^= ch.codePointAt(0)!;
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0) & 0x7fffffff;
+}
 
-/** Best accuracy per lesson step: lesson id → one number per step (0 = not played). */
+/** The notes of a lesson piece at `bpm`; identical for every step of the lesson. */
+export function pieceLevel(lesson: Lesson, piece: number, bpm: number): Level {
+  const seed = pieceSeed(lesson.id, piece);
+  return lesson.stage
+    ? generateTwoHandLevel({ stage: lesson.stage, tier: lesson.tier, bars: lesson.bars, bpm, seed })
+    : generateLevel({ tier: lesson.tier, bars: lesson.bars, bpm, seed });
+}
+
+const PROGRESS_KEY = "resonance.lessonProgress2";
+
+/** Best accuracy per step at the goal tempo: "lessonId/piece" → one number per step (0 = not done). */
 export type Progress = Record<string, number[]>;
+
+const progressKey = (lesson: Lesson, piece: number) => `${lesson.id}/${piece}`;
 
 export function loadProgress(): Progress {
   try {
@@ -74,12 +107,20 @@ export function loadProgress(): Progress {
   }
 }
 
-/** Keeps the best accuracy for a lesson step. */
-export function recordResult(lessonId: string, stepIndex: number, accuracy: number): void {
+/** Does a run at `bpm` count towards the step? Slower than the suggestion shows accuracy only. */
+export function countsForStep(step: LessonStep, bpm: number): boolean {
+  return bpm >= step.bpm;
+}
+
+/** Keeps the best accuracy for a step of a piece, if it was played at the goal tempo or faster. */
+export function recordResult(lesson: Lesson, piece: number, stepIndex: number, accuracy: number, bpm: number): void {
+  const step = lesson.steps[stepIndex];
+  if (!step || !countsForStep(step, bpm)) return;
   const progress = loadProgress();
-  const steps = progress[lessonId] ?? [];
+  const key = progressKey(lesson, piece);
+  const steps = progress[key] ?? [];
   steps[stepIndex] = Math.max(steps[stepIndex] ?? 0, Math.round(accuracy));
-  progress[lessonId] = steps;
+  progress[key] = steps;
   try {
     localStorage.setItem(PROGRESS_KEY, JSON.stringify(progress));
   } catch {
@@ -87,17 +128,29 @@ export function recordResult(lessonId: string, stepIndex: number, accuracy: numb
   }
 }
 
-export function stepDone(progress: Progress, lesson: Lesson, stepIndex: number): boolean {
-  return (progress[lesson.id]?.[stepIndex] ?? 0) >= PASS_ACCURACY;
+export function stepDone(progress: Progress, lesson: Lesson, piece: number, stepIndex: number): boolean {
+  return (progress[progressKey(lesson, piece)]?.[stepIndex] ?? 0) >= PASS_ACCURACY;
 }
 
+/** A piece is finished when all its steps are done. */
+export function pieceDone(progress: Progress, lesson: Lesson, piece: number): boolean {
+  return lesson.steps.every((_, i) => stepDone(progress, lesson, piece, i));
+}
+
+/** A lesson is done when one of its pieces is finished. */
 export function lessonDone(progress: Progress, lesson: Lesson): boolean {
-  return lesson.steps.every((_, i) => stepDone(progress, lesson, i));
+  return Array.from({ length: PIECES }, (_, piece) => pieceDone(progress, lesson, piece)).some(Boolean);
 }
 
-/** The first step not yet done (or the last step, when all are). */
-export function firstOpenStep(progress: Progress, lesson: Lesson): number {
-  const open = lesson.steps.findIndex((_, i) => !stepDone(progress, lesson, i));
+/** The first piece not yet finished (or the first piece, when all are). */
+export function firstOpenPiece(progress: Progress, lesson: Lesson): number {
+  const open = Array.from({ length: PIECES }, (_, piece) => piece).find((piece) => !pieceDone(progress, lesson, piece));
+  return open ?? 0;
+}
+
+/** The first step of a piece not yet done (or the last step, when all are). */
+export function firstOpenStep(progress: Progress, lesson: Lesson, piece: number): number {
+  const open = lesson.steps.findIndex((_, i) => !stepDone(progress, lesson, piece, i));
   return open === -1 ? lesson.steps.length - 1 : open;
 }
 

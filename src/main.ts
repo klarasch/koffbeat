@@ -5,7 +5,7 @@ import "./style.css";
 import { createAudioEngine } from "./audio/engine";
 import { runCalibration } from "./input/calibration";
 import { type FreeChoice, leaveHome, renderHome } from "./game/home";
-import { LESSONS, recordResult } from "./game/lessons";
+import { firstOpenPiece, LESSONS, loadProgress, PASS_ACCURACY, pieceLevel, recordResult } from "./game/lessons";
 import { createScene } from "./scene/resonance";
 import { startPlay } from "./game/play";
 import { generateLevel } from "./rhythm/generate";
@@ -124,35 +124,39 @@ interface LevelPick {
   /** The mode this pick is played in, when it decides it (a lesson step does). */
   mode?: Mode;
   /** A lesson step: where its result is recorded. */
-  lesson?: { id: string; step: number };
-}
-
-function randomSeed(): number {
-  return Math.floor(Math.random() * 0x7fffffff);
+  lesson?: { index: number; piece: number; step: number };
+  /** Play-along: the game quietly plays the player's notes too. */
+  guide?: boolean;
+  /** Start by hearing the exercise (then "your turn"). */
+  listenFirst?: boolean;
+  /** A lesson step's goal tempo and passing accuracy. */
+  goal?: { bpm: number; pass: number };
 }
 
 /**
- * A lesson step as a playable exercise. Reading lessons deal fresh music for each step;
- * two-hand lessons keep the same exercise through right hand, left hand and together.
+ * A step of a lesson piece as a playable exercise. Every step of a piece plays the same fixed
+ * notes (see lessons.ts); only the help differs. `bpm` is the tempo chosen for the step.
  */
-function lessonPick(lessonIndex: number, stepIndex: number, seed: number = randomSeed()): LevelPick | null {
+function lessonPick(lessonIndex: number, pieceIndex: number, stepIndex: number, bpm?: number): LevelPick | null {
   const lesson = LESSONS[lessonIndex];
   if (!lesson) return null;
   const step = lesson.steps[stepIndex];
-  if (!step) return lessonPick(lessonIndex + 1, 0);
-  const generated = lesson.stage
-    ? generateTwoHandLevel({ stage: lesson.stage, tier: lesson.tier, bars: step.bars, bpm: step.bpm, seed })
-    : generateLevel({ tier: lesson.tier, bars: step.bars, bpm: step.bpm, seed });
-  const level = { ...generated, title: `${lesson.title}: ${step.label.toLowerCase()}` };
+  if (!step) return lessonPick(lessonIndex + 1, firstOpenPiece(loadProgress(), LESSONS[lessonIndex + 1] ?? lesson), 0);
+  const level = { ...pieceLevel(lesson, pieceIndex, bpm ?? step.bpm), title: `${lesson.title}, piece ${pieceIndex + 1}: ${step.label.toLowerCase()}` };
   const lastStep = stepIndex === lesson.steps.length - 1;
   return {
     level,
     mode: step.mode,
     solo: step.solo,
+    guide: step.guide,
+    // Play-along starts with hearing the piece.
+    listenFirst: step.guide,
+    goal: { bpm: step.bpm, pass: PASS_ACCURACY },
     steps: { labels: lesson.steps.map((s) => s.label), current: stepIndex },
     nextLabel: lastStep ? "Next lesson" : `Next: ${lesson.steps[stepIndex + 1]?.label.toLowerCase()}`,
-    lesson: { id: lesson.id, step: stepIndex },
-    next: () => (lastStep ? lessonPick(lessonIndex + 1, 0) : lessonPick(lessonIndex, stepIndex + 1, lesson.stage ? seed : undefined)),
+    lesson: { index: lessonIndex, piece: pieceIndex, step: stepIndex },
+    // The next step suggests its own tempo.
+    next: () => (lastStep ? lessonPick(lessonIndex + 1, firstOpenPiece(loadProgress(), LESSONS[lessonIndex + 1] ?? lesson), 0) : lessonPick(lessonIndex, pieceIndex, stepIndex + 1)),
   };
 }
 
@@ -160,7 +164,7 @@ function lessonPick(lessonIndex: number, stepIndex: number, seed: number = rando
 function freePick(choice: FreeChoice): LevelPick {
   const again = () => freePick(choice);
   if (choice.hands === 2) {
-    return twoHandSteps(withTempo(generateTwoHandLevel({ stage: choice.stage, ingredients: choice.ingredients, bars: choice.bars })), again);
+    return twoHandSteps(withTempo(generateTwoHandLevel({ stage: choice.stage, cross: choice.cross, ingredients: choice.ingredients, bars: choice.bars })), again);
   }
   return { level: withTempo(generateLevel({ tier: 1, ingredients: choice.ingredients, meter: choice.meter, bars: choice.bars })), next: again };
 }
@@ -223,7 +227,10 @@ function showHome(): void {
       { label: "Ambience", isOn: ambienceOn, set: setAmbienceOn },
       { label: "Tap sound", isOn: tapSoundOn, set: setTapSoundOn },
     ],
-    onLesson: (lessonIndex, stepIndex) => beginLevel(lessonPick(lessonIndex, stepIndex), "practice"),
+    onLesson: (lessonIndex, pieceIndex, stepIndex, bpm) => {
+      const pick = lessonPick(lessonIndex, pieceIndex, stepIndex, bpm);
+      beginLevel(pick, "practice", pick?.listenFirst);
+    },
     onFree: (choice) => beginLevel(freePick(choice), choice.mode),
   });
 }
@@ -263,16 +270,20 @@ async function doBeginLevel(pick: LevelPick, mode: Mode, listen: boolean): Promi
       onRetry: (bpm) => beginLevel(bpm ? { ...pick, level: { ...pick.level, bpm } } : pick, mode),
       onNext: () => {
         const next = pick.next();
-        // The next step of the same exercise keeps the tempo it's being practised at.
-        if (next && next.level.id === pick.level.id) next.level = { ...next.level, bpm: pick.level.bpm };
-        beginLevel(next, mode);
+        // The next step of the same free-practice exercise keeps the tempo it's being practised at
+        // (a lesson step suggests its own).
+        if (next && !next.lesson && next.level.id === pick.level.id) next.level = { ...next.level, bpm: pick.level.bpm };
+        beginLevel(next, mode, next?.listenFirst);
       },
       onListen: () => beginLevel(pick, mode, true),
       onComplete: (accuracy) => {
-        if (pick.lesson) recordResult(pick.lesson.id, pick.lesson.step, accuracy);
+        if (pick.lesson) {
+          const lesson = LESSONS[pick.lesson.index];
+          if (lesson) recordResult(lesson, pick.lesson.piece, pick.lesson.step, accuracy, pick.level.bpm);
+        }
       },
     },
-    { solo: pick.solo, demo: listen, steps: pick.steps, nextLabel: pick.nextLabel },
+    { solo: pick.solo, demo: listen, guide: pick.guide, goal: pick.goal, steps: pick.steps, nextLabel: pick.nextLabel },
   );
 }
 
