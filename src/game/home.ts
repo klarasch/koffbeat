@@ -38,7 +38,6 @@ function startHomeScene(scene: Scene, slot: HTMLElement): void {
   let figure = Math.floor(Math.random() * 12);
   scene.reset();
   scene.setFigure(figure);
-  scene.setCoherence(1);
   scene.setAmbient(0.32);
   scene.setDim(0.15);
 

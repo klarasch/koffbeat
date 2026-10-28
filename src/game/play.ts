@@ -54,12 +54,6 @@ const LOST_STRAY_TAPS = 5;
 /** …or this many bars of silence past the note that was due. */
 const LOST_SILENT_BARS = 2;
 
-/** Every this many clean taps in a row, the sand blooms into a richer figure. */
-const STREAK_MILESTONE = 8;
-
-/** Each 4-bar phrase draws the sand toward a new figure. */
-const BARS_PER_FIGURE = 4;
-const GRADE_VALUE: Record<Grade, number> = { perfect: 1, good: 0.85, ok: 0.55, miss: 0 };
 
 /**
  * Tap pitches: the drone's root and fifth, one per hand zone (left D4, right A3). No melody:
@@ -221,13 +215,10 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   placePlate();
 
   const baseFigure = figureSeed(level.id);
-  let currentFigure = baseFigure;
-  let coherence = 1;
   // The sand keeps whatever figure it last settled into; the piece's own figure takes over
-  // as the player plays.
+  // as the player plays, and moves on to the next one each time a bar is played cleanly.
   scene.reset();
   scene.setFigure(baseFigure);
-  scene.setCoherence(1);
   scene.setAmbient(0);
   scene.setDim(0);
 
@@ -239,16 +230,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   /** Share of the screen height the notes may take: less once the results need the room. */
   let staffShare = 0.4;
   function fitStaffArea(): void {
-    const { top, systemHeight, total } = staff.layout();
-    // The view scrolls so the current line starts LEAD px from the top (staff.revealEvent), so
-    // exactly `lines` lines fit in lines × systemHeight + LEAD, with nothing of the next one.
-    const LEAD = 10;
-    const lines = Math.max(1, Math.floor((window.innerHeight * staffShare) / systemHeight));
-    // The last line's bottom breathing room is left out: the next line's upward stems and
-    // brackets reach into it, and their tips would show at the bottom edge.
-    const TAIL = 26;
-    const height = Math.min(total - (top - LEAD), lines * systemHeight + LEAD - TAIL);
-    staffArea.style.height = `${height + 8}px`;
+    const layout = staff.layout();
+    // The window shows `lines` whole lines. staff.layout measures the real ink of every line
+    // (tuplet numbers, stems, ties), so the top line is fully visible with a small margin and
+    // the bottom is cut just above the next line's highest element.
+    const lines = Math.max(1, Math.floor((window.innerHeight * staffShare) / layout.systemHeight));
+    const height = Math.min(layout.contentBottom - layout.scrollTopOf(0), layout.windowHeight(lines));
+    staffArea.style.height = `${height}px`;
     staffArea.style.maxHeight = "none";
     staffArea.style.flexShrink = "0";
     // Room below the music, so even the last line can scroll to the top of the window (without
@@ -258,7 +246,13 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     const current = timeline[Math.min(nextPointer, timeline.length - 1)];
     if (current) staff.revealEvent(primaryEventIndex(current));
   }
-  window.addEventListener("resize", fitStaffArea);
+  // The staff rebuilds itself on a width change (its observer runs after layout), so refit once
+  // more a frame later in case the line spacing changed with it.
+  const onWindowResize = (): void => {
+    fitStaffArea();
+    requestAnimationFrame(() => requestAnimationFrame(fitStaffArea));
+  };
+  window.addEventListener("resize", onWindowResize);
   const allOnsets = levelOnsets(level);
   const allRests = restSpans(level);
   // Practising one hand: only its notes and rests are played and judged; the other hand's line
@@ -288,7 +282,14 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     if (item.kind === "note") timelineIndexForOnset.set(item.onsetIndex, i);
   });
 
+  /** Bars (0-based) with a miss, an "ok" or an extra tap in them: they don't change the figure. */
+  const dirtyBars = new Set<number>();
+  function markBarDirty(beat: number): void {
+    dirtyBars.add(Math.max(0, Math.floor(beat / beatsPerBar)));
+  }
+
   function setTimelineState(item: TimelineItem, state: NoteState): void {
+    if (state === "miss" || state === "ok") markBarDirty(item.beat);
     if (item.kind === "note") {
       for (const eventIndex of item.eventIndices) staff.setState(eventIndex, state);
     } else {
@@ -360,8 +361,6 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   let lastPress: { x: number | null; y: number | null } = { x: null, y: null };
   let allTappedAt: number | null = null;
   let missedInARow = 0;
-  let cleanStreak = 0;
-  let streakFigures = 0;
   let strayInARow = 0;
 
   let nextPointer = 0;
@@ -479,8 +478,6 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
     endHold(onsetIndex);
     if (releaseGrade !== null) {
       // A sustained note's release lands like a second strike: a clean release keeps the figure.
-      coherence = coherence * 0.8 + GRADE_VALUE[releaseGrade] * 0.2;
-      scene.setCoherence(coherence);
       if (releaseGrade === "miss") scene.strike("miss");
     }
     const timelineIndex = timelineIndexForOnset.get(onsetIndex);
@@ -516,8 +513,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       const inOwnRest = current?.kind === "rest" && (!twoHands || current.hand === hit.zone);
       if (current && inOwnRest) spoilRest(current);
       showGradeFlash("miss", inOwnRest ? "that's a rest" : otherHandDue(hit) ? "other hand" : "extra tap");
-      coherence *= 0.8;
-      scene.setCoherence(coherence);
+      markBarDirty(liveJudge.beatAt(hit.time));
       scene.strike("miss", lastPress.x, lastPress.y);
       strayInARow++;
       checkLost();
@@ -536,30 +532,11 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
 
     matchedCount++;
     liveMatches.set(judged.onsetIndex, hits.length - 1);
-    coherence = coherence * 0.7 + GRADE_VALUE[judged.grade] * 0.3;
-    scene.setCoherence(coherence);
     const onset = onsets[judged.onsetIndex];
+    if (onset && (judged.grade === "ok" || judged.grade === "miss")) markBarDirty(onset.beat);
     scene.strike(judged.grade, lastPress.x, lastPress.y, onset?.quarters ?? 1);
 
-    // A run of clean taps is rewarded: every STREAK_MILESTONE in a row the figure blooms and
-    // moves on to the next, richer pattern. Anything less than good breaks the run.
-    if (judged.grade === "perfect" || judged.grade === "good") {
-      cleanStreak++;
-      if (cleanStreak % STREAK_MILESTONE === 0) {
-        streakFigures++;
-        scene.celebrate();
-      }
-    } else {
-      cleanStreak = 0;
-    }
-
     if (onset) {
-      const barIndex = Math.floor(onset.beat / beatsPerBar);
-      const figure = baseFigure + Math.floor(barIndex / BARS_PER_FIGURE) + streakFigures;
-      if (figure !== currentFigure) {
-        currentFigure = figure;
-        scene.setFigure(figure);
-      }
       if (onset.quarters > SUSTAINED_MIN_QUARTERS) {
         const durationSec = Math.max(0.05, liveJudge.predictTime(onset.beat + onset.quarters) - hit.time);
         const window = releaseWindowMs(onset.quarters * liveJudge.secPerQuarter() * 1000);
@@ -685,6 +662,9 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   /** Each hand's karaoke position: the timeline index of its item due now. */
   const nowByHand = new Map<Hand, number>();
   let shownBar = -1;
+  /** How many bars have been closed out (every note in them settled), and how many were clean. */
+  let closedBars = 0;
+  let figureStep = 0;
 
   /** Beats after its onset at which a note's chance to be played has passed. */
   function closesAfterBeats(index: number): number {
@@ -761,7 +741,6 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       // Listening: the sand answers every note as if it were played perfectly.
       if (demo && item?.kind === "note") {
         const onset = onsets[item.onsetIndex];
-        scene.setCoherence(1);
         scene.strike("perfect", null, null, onset?.quarters ?? 1);
       }
       moved = true;
@@ -770,6 +749,21 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       nextPointer = Math.max(...nowByHand.values());
       // While the music rests (in every hand), the sand settles flat.
       scene.setRest([...nowByHand.values()].every((i) => timeline[i]?.kind === "rest"));
+    }
+
+    // A bar whose notes are all settled and none went wrong moves the sand on to the next figure.
+    while (closedBars < level.bars.length) {
+      const bar = closedBars;
+      const endBeat = (bar + 1) * beatsPerBar;
+      if (beatNow < endBeat) break;
+      let itemsInBar = 0;
+      while (itemsInBar < timeline.length && (timeline[itemsInBar]?.beat ?? Infinity) < endBeat) itemsInBar++;
+      if (settledUpTo < itemsInBar) break;
+      closedBars++;
+      if (!dirtyBars.has(bar)) {
+        figureStep++;
+        scene.setFigure(baseFigure + figureStep);
+      }
     }
 
     const bar = Math.min(level.bars.length - 1, Math.floor(beatNow / beatsPerBar));
@@ -952,9 +946,9 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       resultsOverlay.appendChild(buildResultsPanel(result, level.bpm, mode, panelCallbacks, retryTempo));
     } else {
       // No reveal: the sand just settles back into the void.
-      scene.setCoherence(0.3);
-      scene.setRest(true);
       scene.setAmbient(0.12);
+      if (outcome === "lost") scene.fling();
+      else scene.setRest(true);
       engine.setAmbience(0.5, 2);
       const title = outcome === "lost" ? "Lost the beat" : "Stopped";
       const detail = outcome === "lost" ? (lostReason ?? "") : "You stopped the exercise.";
@@ -988,7 +982,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
 
   /** Leaving the screen for good: the plate stops following this layout. */
   function leave(then: () => void): void {
-    window.removeEventListener("resize", fitStaffArea);
+    window.removeEventListener("resize", onWindowResize);
     teardown();
     plateObserver.disconnect();
     window.removeEventListener("keydown", handleKey);
