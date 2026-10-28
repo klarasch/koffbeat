@@ -34,7 +34,12 @@ export function leaveHome(): void {
   homeCleanup = null;
 }
 
-const FIGURE_CYCLE_MS = 15000;
+const FIGURE_CYCLE_MS = 24000;
+/**
+ * The figures home cycles through: the ones that settle into clean lines. The densest ones
+ * (scene figures 3, 4, 7, 8, 9 and 10) never settle fully and keep twinkling, so home skips them.
+ */
+const HOME_FIGURES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
 /** The icon's ink pixels, from the grid in scripts/make-icons.py. */
 const ICON_PATH = "M8 2h2v1h-2zM8 3h3v1h-3zM8 4h4v1h-4zM8 5h1v1h-1zM10 5h2v1h-2zM8 6h1v1h-1zM11 6h1v1h-1zM8 7h1v1h-1zM11 7h1v1h-1zM8 8h1v1h-1zM10 8h1v1h-1zM8 9h1v1h-1zM5 10h4v1h-4zM4 11h5v1h-5zM4 12h5v1h-5zM10 12h2v1h-2zM5 13h4v1h-4zM10 13h2v1h-2z";
@@ -47,9 +52,10 @@ export function isPhoneBackdrop(): boolean {
 
 function startHomeScene(scene: Scene, slot: HTMLElement): void {
   leaveHome();
-  let figure = Math.floor(Math.random() * 12);
+  let step = Math.floor(Math.random() * HOME_FIGURES.length);
+  const figureAt = (i: number): number => HOME_FIGURES[i % HOME_FIGURES.length]!;
   scene.reset();
-  scene.setFigure(figure);
+  scene.setFigure(figureAt(step));
   scene.setAmbient(0.32);
   scene.setDim(0.15);
 
@@ -79,8 +85,8 @@ function startHomeScene(scene: Scene, slot: HTMLElement): void {
   window.addEventListener("resize", place);
   const offTweak = onTweak(place);
   const timer = setInterval(() => {
-    figure += 1;
-    scene.setFigure(figure);
+    step += 1;
+    scene.setFigure(figureAt(step));
   }, FIGURE_CYCLE_MS);
 
   homeCleanup = () => {

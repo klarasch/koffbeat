@@ -120,7 +120,7 @@ vec2 curl(vec2 p) {
 const SURFACE_GLSL = /* glsl */ `
 uniform float uTime;
 uniform vec4 uRipples[${MAX_RIPPLES}];     // x, z, age (s), strength
-uniform vec2 uRippleShape[${MAX_RIPPLES}]; // wavelength, speed
+uniform vec3 uRippleShape[${MAX_RIPPLES}]; // wavelength, speed, push (how hard it moves the sand)
 uniform float uStanding;
 uniform vec3 uModeA;
 uniform vec3 uModeB;
@@ -141,7 +141,7 @@ float surface(vec2 p) {
   for (int i = 0; i < ${MAX_RIPPLES}; i++) {
     vec4 r = uRipples[i];
     if (r.w <= 0.0) continue;
-    vec2 shape = uRippleShape[i];
+    vec3 shape = uRippleShape[i];
     float d = length(p - r.xy);
     float front = r.z * shape.y;
     float k = 6.2831853 / shape.x;
@@ -162,6 +162,7 @@ uniform float uSettle;
 uniform float uShake;
 uniform float uHarmony;
 uniform float uJitter;
+uniform float uBand;
 ${SURFACE_GLSL}
 ${NOISE_GLSL}
 
@@ -183,10 +184,20 @@ void main() {
   vec2 e = vec2(0.004, 0.0);
   vec2 grad = vec2(chladni(p + e.xy) - chladni(p - e.xy), chladni(p + e.yx) - chladni(p - e.yx)) / (2.0 * e.x);
 
+  // How far the grain is from the nearest still line (in plate units), and which way it lies.
+  // Pulling by distance, not by the raw field, keeps the pull the same for every figure: dense,
+  // steep figures no longer overshoot their lines and make the grains bounce across them.
+  float slope = length(grad);
+  vec2 toward = -grad / max(slope, 1e-4);
+  float dist = f / max(slope, 2.0);
+  // Grains rest anywhere inside a band around the line, so the figure is drawn in soft,
+  // textured strokes instead of single-grain lines. Outside the band they are pulled in.
+  float off = sign(dist) * min(max(abs(dist) - uBand, 0.0), 0.15);
+  float inBand = 1.0 - smoothstep(uBand * 0.7, uBand * 1.3, abs(dist));
+
   vec3 acc = vec3(0.0);
-  // On the ground: drift toward the still lines, stirred by a smooth (never random) shimmer.
-  // Precise playing (harmony) sorts the sand into a crisper figure.
-  acc.xz += -f * grad * 3.2 * (0.7 + 0.8 * uHarmony) * uEnergy * ground;
+  // On the ground: drift toward the still lines. Precise playing (harmony) sorts the sand faster.
+  acc.xz += toward * off * 120.0 * (0.7 + 0.8 * uHarmony) * uEnergy * ground;
   // A tiny jiggle where the ground vibrates. Uncorrelated from grain to grain, so it can never
   // herd grains into clumps the way any smooth current does; at this grain size it reads as
   // shimmer, not flicker.
@@ -206,7 +217,7 @@ void main() {
   acc.xz += breeze * air * (0.4 + uLift);
   // Lifted sand keeps its shape: the figure's pull still acts in the air, so the whole figure
   // rises intact instead of breaking into clouds.
-  acc.xz += -f * grad * 2.2 * max(uEnergy, 0.35) * air;
+  acc.xz += toward * off * 90.0 * max(uEnergy, 0.35) * air;
 
   // Ripples push and lift grains as they pass, like a wave through dry sand.
   for (int i = 0; i < ${MAX_RIPPLES}; i++) {
@@ -215,7 +226,7 @@ void main() {
     vec2 d = p - r.xy;
     float dist = length(d) + 1e-4;
     float front = r.z * uRippleShape[i].y;
-    float ring = exp(-pow((dist - front) / (uRippleShape[i].x * 0.35), 2.0)) * exp(-r.z * 1.6) * r.w;
+    float ring = exp(-pow((dist - front) / (uRippleShape[i].x * 0.35), 2.0)) * exp(-r.z * 1.6) * r.w * uRippleShape[i].z;
     acc.xz += d / dist * ring * 0.5;
     acc.y += ring * 2.0;
   }
@@ -234,6 +245,8 @@ void main() {
 
   vel.xyz += acc * uDt;
   vel.xz *= exp(-uDt * mix(2.5, mix(6.0, 12.0, uSettle), ground));
+  // Sand that has reached its band comes to rest there, as on a real plate: friction stops it.
+  vel.xz *= exp(-uDt * 18.0 * inBand * ground);
   vel.w = floorY;
   gl_FragColor = vel;
 }
@@ -482,7 +495,9 @@ function polarGround(rings: number, segments: number, inner: number, outer: numb
 type Tier = "full" | "light" | "lite";
 const TIERS: Tier[] = ["full", "light", "lite"];
 /** The tier this device settled on last time, so a slow machine starts light instead of stuttering. */
-const TIER_KEY = "resonance.sandTier";
+const TIER_KEY = "resonance.sandTier2";
+/** The first version saved tiers too eagerly (a busy moment was enough); those are ignored. */
+const OLD_TIER_KEY = "resonance.sandTier";
 
 function isTier(value: unknown): value is Tier {
   return typeof value === "string" && (TIERS as string[]).includes(value);
@@ -511,6 +526,7 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   let storedTier: string | null = null;
   try {
     storedTier = localStorage.getItem(TIER_KEY);
+    localStorage.removeItem(OLD_TIER_KEY);
   } catch {
     // Storage blocked: start at full and adapt.
   }
@@ -538,7 +554,7 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   // Render resolution adapts within the tier, stepping down when frames run long.
   const dpr = Math.max(1, window.devicePixelRatio || 1);
   const ratiosFor = (t: Tier): number[] =>
-    (t === "full" ? [1.25, 1, 0.8] : t === "light" ? [1, 0.8, 0.65] : [0.6, 0.5]).filter((r) => r <= dpr);
+    (t === "full" ? [1.25, 1, 0.8] : t === "light" ? [1, 0.8] : [0.8, 0.65]).filter((r) => r <= dpr);
   let RATIOS = ratiosFor(tier);
   let ratioStep = 0;
   renderer.setPixelRatio(RATIOS[0] ?? 1);
@@ -565,7 +581,7 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
 
   // ---- Shared uniforms ----
   const ripples = Array.from({ length: MAX_RIPPLES }, () => new THREE.Vector4(0, 0, 0, 0));
-  const rippleShape = Array.from({ length: MAX_RIPPLES }, () => new THREE.Vector2(0.4, 0.8));
+  const rippleShape = Array.from({ length: MAX_RIPPLES }, () => new THREE.Vector3(0.4, 0.8, 1));
   const rippleColor = Array.from({ length: MAX_RIPPLES }, () => new THREE.Vector3(0.5, 0.5, 0.5));
   const shared = {
     uTime: { value: 0 },
@@ -599,6 +615,8 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     uEnergy: { value: 0 },
     uLift: { value: 0 },
     uSettle: { value: 0 },
+    /** Half-width of the band the sand rests in around each line (plate units). */
+    uBand: { value: 0.016 },
   };
   let gpu: GPUComputationRenderer | null = null;
   let posVar!: Variable;
@@ -746,11 +764,12 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   let idleRippleAt = 0;
   let drift = 0;
 
-  function addRipple(x: number, z: number, strength: number, wavelength: number, speed: number, rgb: [number, number, number]): void {
+  /** `push` scales how hard the wave moves the sand (its line on the ground is unaffected). */
+  function addRipple(x: number, z: number, strength: number, wavelength: number, speed: number, rgb: [number, number, number], push = 1): void {
     const i = rippleCursor;
     rippleCursor = (rippleCursor + 1) % MAX_RIPPLES;
     ripples[i]!.set(x, z, 0, strength);
-    rippleShape[i]!.set(wavelength, speed);
+    rippleShape[i]!.set(wavelength, speed, push);
     rippleColor[i]!.set(rgb[0], rgb[1], rgb[2]);
   }
 
@@ -797,13 +816,17 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   // itself steps down. A tier change waits for a screen without playing (home, results), since
   // rebuilding the simulation can hitch for a moment.
   // Measured in time, not frames, so a machine managing only a few frames a second still
-  // adapts within seconds.
+  // adapts within seconds. "Slow" means frames missed against the display's own pace, so a
+  // display or power mode that runs at 30 Hz is not mistaken for a slow machine.
   let slowMs = 0;
   let fastMs = 0;
-  /** A running average of the time per display refresh. */
-  let avgTick = 16;
+  /** The display's pace: the shortest recent refresh interval, creeping up slowly over time. */
+  let baseTick = 1000 / 60;
+  let lastTick = performance.now();
+  /** A running average of drawn-frame time per refresh, relative to the display's pace. */
+  let avgLoad = 1;
   /** No measuring until this time: shader compiles and page load make the first frames slow. */
-  let graceUntil = performance.now() + 2000;
+  let graceUntil = performance.now() + 2500;
   /** After stepping down this session, never step back up (no back and forth). */
   let steppedDown = false;
   let pendingTier: Tier | null = null;
@@ -813,13 +836,24 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     resize();
   }
   function adaptQuality(tickMs: number, frameMs: number, now: number): void {
-    if (document.hidden || now < graceUntil) return;
-    avgTick += (tickMs - avgTick) * 0.1;
-    if (tickMs > 22) slowMs += frameMs;
-    else if (tickMs < 14) fastMs += frameMs;
-    if (slowMs > 1500) {
-      // Far too slow (under ~20 fps): a sharper picture will not save it, so go to a lighter tier.
-      const severe = avgTick > 45;
+    // Only judge while the page is in front: a covered or background window is throttled by the
+    // browser without being hidden, and a single long stall (a tab switch, a hiccup) says nothing.
+    if (document.hidden || !document.hasFocus() || now < graceUntil || frameMs > 250) return;
+    const load = tickMs / baseTick;
+    avgLoad += (load - avgLoad) * 0.05;
+    // Slowness has to be sustained: good frames wear it down, so scattered slow frames among
+    // good ones never add up. Likewise a slow frame sets back the count toward a sharper step.
+    if (load > 1.45) {
+      slowMs += frameMs;
+      fastMs = Math.max(0, fastMs - frameMs * 4);
+    } else {
+      slowMs = Math.max(0, slowMs - frameMs * 0.5);
+      if (load < 1.15) fastMs += frameMs;
+    }
+    if (slowMs > 2500) {
+      // Far too slow (missing more than every other frame on average): a sharper picture will
+      // not save it, so go straight to a lighter tier.
+      const severe = avgLoad > 2.4;
       if (ratioStep < RATIOS.length - 1 && !(severe && tier !== "lite")) setRatio(ratioStep + 1);
       else if (tier !== "lite" && !pinned && !pendingTier) {
         pendingTier = TIERS[TIERS.indexOf(tier) + 1]!;
@@ -830,10 +864,6 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     } else if (fastMs > 10000) {
       if (ratioStep > 0) setRatio(ratioStep - 1);
       else if (tier !== "full" && !pinned && !software && !steppedDown) pendingTier = TIERS[TIERS.indexOf(tier) - 1]!;
-      slowMs = 0;
-      fastMs = 0;
-    }
-    if (slowMs + fastMs > 20000) {
       slowMs = 0;
       fastMs = 0;
     }
@@ -876,6 +906,9 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   let ticks = 0;
   function frame(now: number): void {
     ticks++;
+    const interval = now - lastTick;
+    lastTick = now;
+    if (interval > 4 && interval < 100) baseTick = Math.min(interval, baseTick + interval * 0.0005);
     // Home and results run an idle drift (ambient); play never does.
     const idle = ambient > 0.05 && !hold && energy < 0.05;
     const halfRate = idle || tier === "lite";
@@ -917,12 +950,16 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     const harmony = 1 - 0.7 * disorder;
     simUniforms.uHarmony.value += (harmony - simUniforms.uHarmony.value) * (1 - Math.exp(-dt * 3));
     // In tempo the grains barely shimmer; scrambled sand shimmers at full strength.
-    const jitter = 0.2 + 0.8 * Math.min(1, disorder * 2.5);
+    // On the idle screens (home, results) there is no jiggle at all: grains only glide.
+    const jitter = (ambient > 0.05 ? 0 : 0.15) + 0.85 * Math.min(1, disorder * 2.5);
     simUniforms.uJitter.value += (jitter - simUniforms.uJitter.value) * (1 - Math.exp(-dt * 4));
+    // Clean playing draws the figure in finer strokes; sloppy playing smears them wider.
+    const band = ambient > 0.05 ? 0.016 : 0.011 + 0.02 * disorder;
+    simUniforms.uBand.value += (band - simUniforms.uBand.value) * (1 - Math.exp(-dt * 2));
     pigmentUniforms.uBloom.value = bloom;
     // Playing never lifts the sand: it lies on the plate. Only the idle home drift, the results
     // reveal and a lost run raise it.
-    const liftTarget = (reducedMotion ? 0.35 : 1) * (ambient * 0.45 + reveal * 0.6 + flung * 0.8);
+    const liftTarget = (reducedMotion ? 0.35 : 1) * (ambient * 0.1 + reveal * 0.6 + flung * 0.8);
     // Rising is slow and elegant; falling back a little quicker.
     lift += (liftTarget - lift) * (1 - Math.exp(-dt * (liftTarget > lift ? 1.8 : 2.6)));
     holdVis += ((hold ? 1 : 0) - holdVis) * (1 - Math.exp(-dt * (hold ? 20 : 5)));
@@ -931,10 +968,10 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
 
     // Idle (home): the occasional slow drop on the bed, and the camera drifts very slowly.
     if (ambient > 0.05 && time > idleRippleAt) {
-      idleRippleAt = time + 2.5 + Math.random() * 3;
+      idleRippleAt = time + 5 + Math.random() * 4;
       const a = Math.random() * Math.PI * 2;
       const rr = Math.random() * 0.8;
-      addRipple(Math.cos(a) * rr, Math.sin(a) * rr, 0.012 + Math.random() * 0.008, 0.35, 0.5, GRADE_RGB.neutral);
+      addRipple(Math.cos(a) * rr, Math.sin(a) * rr, 0.012 + Math.random() * 0.008, 0.35, 0.5, GRADE_RGB.neutral, 0.25);
     }
     drift += ((ambient > 0.05 && !reducedMotion ? 1 : 0) - drift) * (1 - Math.exp(-dt * 0.5));
     const az = Math.sin(time * 0.035) * 0.16 * drift;
@@ -951,7 +988,8 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     // Imprecision blurs the figure with a competing mode, sooner and harder than before.
     const noiseW = Math.pow(disorder, 0.8) * 0.9;
     shared.uModeW.value.set(morph * (1 - noiseW), (1 - morph) * (1 - noiseW), noiseW);
-    shared.uStanding.value = 0.01 * Math.min(1, Math.max(energy, ambient * 0.4)) * (1 - settle);
+    // The plate rings only while it is played; on the idle screens the sand lies still.
+    shared.uStanding.value = 0.01 * Math.min(1, energy) * (1 - settle);
     shared.uTime.value = time;
 
     simUniforms.uDt.value = dt;
@@ -966,8 +1004,8 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     texU.uVelocities.value = sim.getCurrentRenderTarget(velVar).texture;
 
     fitCamera();
-    // Fewer grains are drawn a little larger, so the figure still reads as a full line.
-    const grainWorld = (mobile ? 0.0085 : 0.0062) * Math.pow(BASE_COUNT / COUNT, 0.4);
+    // Fine grains; fewer grains are drawn only a touch larger, so lighter tiers stay fine too.
+    const grainWorld = (mobile ? 0.0065 : 0.0046) * Math.pow(BASE_COUNT / COUNT, 0.15);
     pigmentUniforms.uSize.value = grainWorld * camera.projectionMatrix.elements[5]! * renderer.domElement.height * 0.5;
     moteUniforms.uSize.value = (mobile ? 0.011 : 0.009) * camera.projectionMatrix.elements[5]! * renderer.domElement.height * 0.5;
     moteUniforms.uStir.value = Math.min(1, energy);
@@ -1023,15 +1061,18 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
       shared.uModeA.value.copy(modeVec(figure));
       shared.uModeN.value.copy(modeVec(index + 5));
       // A soft ripple through the sand on the plate marks the change (the home screen has its own).
-      if (ambient <= 0.05) addRipple(0, 0, 0.02, 0.7, 0.5, GRADE_RGB.neutral);
+      if (ambient <= 0.05) addRipple(0, 0, 0.02, 0.7, 0.5, GRADE_RGB.neutral, 0.4);
     },
     strike(kind: StrikeKind, clientX?: number | null, clientY?: number | null, quarters = 1) {
       const q = Math.max(0.25, Math.min(4, quarters));
       const clean = kind === "perfect" || kind === "good" || kind === "neutral";
       // A clean note adds energy in proportion to its length, so fast notes (triplets,
       // sixteenths) keep the sand as calm as quarters do instead of piling up energy.
-      const share = clean ? Math.min(1, q) : 1;
-      energy = Math.min(clean ? 0.9 : 1.3, energy + STRIKE_ENERGY[kind] * share);
+      // Everything a note does to the sand is weighed by its length, so a bar of sixteenths
+      // stirs it about as much as a bar of quarters, for clean notes and mistakes alike.
+      const len = Math.min(1, q);
+      const share = clean ? len : 1;
+      energy = Math.min(clean ? 0.6 + 0.3 * len : 1.3, energy + STRIKE_ENERGY[kind] * share);
       resting = false;
       const at = clientX != null && clientY != null ? floorAt(clientX, clientY) : null;
       const [x, z] = at && Math.hypot(at[0], at[1]) < 2.2 ? at : [0, 0];
@@ -1039,7 +1080,9 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
       const speed = 0.9 + 0.25 * Math.sqrt(q);
       // Clean fast notes send small ripples; a mistake always sends a strong one.
       const strength = kind === "miss" ? 0.05 * (0.8 + 0.35 * Math.sqrt(q)) : 0.035 * (0.35 + 0.65 * Math.min(1, q)) * (clean ? 1 : 1.3);
-      addRipple(x, z, strength, wavelength, speed, GRADE_RGB[kind]);
+      // The line is always drawn; only its push on the sand is weighed. Clean taps barely move it.
+      const push = clean ? 0.6 * len : kind === "ok" ? 0.5 + 0.5 * len : 1;
+      addRipple(x, z, strength, wavelength, speed, GRADE_RGB[kind], push);
       // Clean taps tidy the figure and brighten the pigment a touch; mistakes jolt the sand up
       // off the plate (by how bad) and scramble the figure. Nothing here lifts the sand as a reward.
       if (kind === "perfect") {
@@ -1049,12 +1092,12 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
         disorder = Math.max(disorderFloor, disorder - 0.08);
         bloom = Math.min(1.2, bloom + 0.25);
       } else if (kind === "ok") {
-        disorder = Math.min(1, disorder + 0.15);
-        shake = Math.max(shake, 0.4);
-        energy = Math.max(energy, 0.8);
+        disorder = Math.min(1, disorder + 0.15 * (0.4 + 0.6 * len));
+        shake = Math.max(shake, 0.4 * (0.5 + 0.5 * len));
+        energy = Math.max(energy, 0.6 + 0.2 * len);
       } else if (kind === "miss") {
-        disorder = Math.min(1, disorder + 0.45);
-        shake = Math.max(shake, 1);
+        disorder = Math.min(1, disorder + 0.45 * (0.6 + 0.4 * len));
+        shake = Math.max(shake, 0.7 + 0.3 * len);
         energy = Math.max(energy, 1);
       }
     },
