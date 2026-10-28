@@ -2286,62 +2286,6 @@ body,
   }
 }
 
-/* "How to play" (src/ui/howto.ts): the calibration page's layout, over frosted paper so the
-   sand still shows faintly behind. */
-.howto {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  background: rgba(246, 244, 240, 0.82);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
-  animation: rise 0.35s var(--ease) both;
-}
-
-.howto-page {
-  justify-content: center;
-}
-
-.howto .cal-heading {
-  font-size: clamp(32px, 7vw, 56px);
-}
-
-.howto .cal-text {
-  min-height: 4.5em;
-}
-
-/* Skip sits apart from Back and Next, at the far end of the row. */
-.howto .howto-skip {
-  margin-left: auto;
-  border-color: transparent;
-  background: transparent;
-  color: var(--ink-dim);
-}
-
-/* A run that ended early, or just after listening: only a heading, a line and the actions. The
-   block is as tall as that, centred in the space, rather than stretched with a gap inside. */
-.results-panel.ended-early {
-  justify-content: center;
-}
-
-.results-panel.ended-early > .bento {
-  flex: 0 1 auto;
-}
-
-.results-panel.ended-early .bento-grow {
-  flex: 0 0 auto;
-}
-
-.howto-key {
-  margin-left: 8px;
-}
-
-.cal-button.primary .howto-key {
-  border-color: rgba(246, 244, 240, 0.35);
-  background: transparent;
-  box-shadow: none;
-  color: rgba(246, 244, 240, 0.8);
-}
 
 /* ---------- Arcade controls ----------
    Hard 2 px ink edges, square corners, labels in mono capitals; what's chosen is filled with
@@ -2525,4 +2469,233 @@ body,
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+/* ---------- How to play (src/ui/howto.ts) ----------
+   One framed card of a fixed size over frosted paper: a pixel drawing of the idea, a title, a
+   few lines, and the buttons pinned to the bottom, so nothing moves between cards. */
+.howto {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+  background: rgba(246, 244, 240, 0.8);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  animation: rise 0.3s var(--ease) both;
+}
+
+.howto-card {
+  width: min(560px, 100%);
+  height: min(500px, 100%);
+  display: flex;
+  flex-direction: column;
+  border: 2px solid var(--ink);
+  background: var(--void);
+}
+
+.howto-top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 10px 10px 18px;
+  border-bottom: 2px solid var(--ink);
+}
+
+.howto-name {
+  font-family: var(--pixel);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.howto-pips {
+  display: flex;
+  gap: 4px;
+  flex: 1 1 auto;
+}
+
+.howto-pip {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--ink);
+}
+
+.howto-pip.on {
+  background: var(--ink);
+}
+
+.howto-skip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.howto-art-slot {
+  flex: none;
+  height: 150px;
+  display: grid;
+  place-items: center;
+  margin: 18px 18px 0;
+  background: rgba(42, 30, 52, 0.05);
+}
+
+.howto-title {
+  margin: 22px 22px 0;
+  font-size: clamp(24px, 5vw, 30px);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+.howto-text {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  margin: 10px 22px 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+
+.howto-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 18px 18px;
+}
+
+.howto-key {
+  margin-left: 8px;
+}
+
+.cal-button.primary .howto-key {
+  border-color: rgba(246, 244, 240, 0.4);
+  background: transparent;
+  box-shadow: none;
+  color: rgba(246, 244, 240, 0.85);
+}
+
+/* The drawings */
+.howto-art {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 18px;
+  color: rgba(42, 30, 52, 0.35);
+}
+
+.howto-art .px-icon {
+  width: auto;
+  height: 78px;
+}
+
+.art-note {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.art-note.lit {
+  color: var(--accent);
+}
+
+.art-bar {
+  width: 112px;
+  height: 6px;
+  background: var(--accent);
+  align-self: flex-start;
+}
+
+.art-hold {
+  align-items: flex-start;
+  gap: 72px;
+}
+
+.art-hands {
+  align-items: stretch;
+  gap: 4px;
+  width: 80%;
+  height: 100px;
+}
+
+.art-half {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 2px solid var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.art-modes {
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+}
+
+.art-step {
+  padding: 10px 12px;
+  border: 2px solid var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.art-step.lit {
+  background: var(--ink);
+  color: var(--void);
+}
+
+.art-arrow {
+  color: var(--ink-dim);
+}
+
+.art-sand svg {
+  display: block;
+  height: 120px;
+  width: auto;
+}
+
+.art-sand rect {
+  fill: var(--accent);
+}
+
+.art-sand rect.warm {
+  fill: #e0703a;
+}
+
+@media (max-width: 480px) {
+  .art-step {
+    padding: 8px 6px;
+    font-size: 10px;
+  }
+
+  .art-hold {
+    gap: 48px;
+  }
+
+  .art-bar {
+    width: 84px;
+  }
 }
