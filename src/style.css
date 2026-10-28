@@ -2041,6 +2041,33 @@ body,
   gap: 6px;
 }
 
+/* Home's rhythm chips on an even grid whose columns meet the panel's own, so both edges line
+   up with the fields around them: 2 a row on one column, 4 on two (one per field column on
+   four), and 6 beside Hands (two per field column). */
+.home-panel .rhythms-field .chips {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.home-panel .rhythms-field .chip {
+  min-width: 0;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (min-width: 720px) {
+  .home-panel .rhythms-field .chips {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1100px) {
+  .home-panel .one-hand > .rhythms-field .chips {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
 .chip {
   height: 36px;
   padding: 0 12px;
