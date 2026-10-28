@@ -349,6 +349,10 @@ export function createAudioEngine(): AudioEngine {
   tapBus.connect(feltTone);
   feltTone.connect(master);
 
+  /** The damper when a note ends: a quick fade (time constant), and when it is silent. */
+  const RELEASE_TAU = 0.06;
+  const RELEASE_SEC = 0.45;
+
   /** Partials: [ratio, level, wave, seconds to fade to a whisper]. */
   const FELT_PARTIALS: [number, number, OscillatorType, number][] = [
     [1, 0.8, "triangle", 6],
@@ -356,14 +360,26 @@ export function createAudioEngine(): AudioEngine {
     [3, 0.1, "sine", 0.6],
   ];
 
-  function startTone(freq: number, velocity: number, when: number): number {
+  /**
+   * Starts a felt-piano tone at `when`. With `end`, the whole note is booked at once: it settles
+   * like a held key and is damped at `end` (the same release as noteOff), so it sounds exactly
+   * as long as a tap held for that time.
+   */
+  function startTone(freq: number, velocity: number, when: number, end?: number): number {
     const t = Math.max(when, ctx.currentTime);
     const v = Math.max(0.05, Math.min(1, velocity));
     const out = ctx.createGain();
     out.gain.setValueAtTime(0, t);
     out.gain.linearRampToValueAtTime(0.26 * v, t + 0.012);
-    out.gain.exponentialRampToValueAtTime(0.12 * v, t + 0.6);
-    out.gain.exponentialRampToValueAtTime(0.07 * v, t + 4);
+    if (end === undefined) {
+      out.gain.exponentialRampToValueAtTime(0.12 * v, t + 0.6);
+      out.gain.exponentialRampToValueAtTime(0.07 * v, t + 4);
+    } else {
+      // Only target curves here: a ramp booked after the damper would win over it and keep
+      // the note ringing past its end.
+      out.gain.setTargetAtTime(0.12 * v, t + 0.012, 0.2);
+      out.gain.setTargetAtTime(0.0001, Math.max(end, t + 0.05), RELEASE_TAU);
+    }
     out.connect(tapBus);
 
     const oscillators: OscillatorNode[] = [];
@@ -406,14 +422,13 @@ export function createAudioEngine(): AudioEngine {
   }
 
   function scheduleNote(freq: number, velocity: number, when: number, duration: number): void {
-    const id = startTone(freq, velocity, when);
+    const end = Math.max(when + 0.05, when + duration);
+    const id = startTone(freq, velocity, when, end);
     const voice = voices.get(id);
     if (!voice) return;
     voices.delete(id);
-    const end = Math.max(when + 0.05, when + duration);
-    voice.out.gain.setTargetAtTime(0.0001, end, 0.08);
     for (const osc of voice.oscillators) {
-      osc.stop(end + 0.6);
+      osc.stop(end + RELEASE_SEC);
       trackNode(osc);
     }
   }
@@ -431,10 +446,10 @@ export function createAudioEngine(): AudioEngine {
     g.cancelScheduledValues(t);
     g.setValueAtTime(Math.max(g.value, 0.0001), t);
     // A piano damper: quick, but not a click.
-    g.exponentialRampToValueAtTime(0.0001, t + 0.4);
+    g.setTargetAtTime(0.0001, t, RELEASE_TAU);
     for (const osc of voice.oscillators) {
       try {
-        osc.stop(t + 0.5);
+        osc.stop(t + RELEASE_SEC);
       } catch {
         // Already stopped.
       }
