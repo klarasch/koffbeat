@@ -2519,3 +2519,10 @@ body,
   border-radius: 0;
   background: rgba(251, 250, 247, 0.6);
 }
+
+.cal-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
