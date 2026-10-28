@@ -2451,3 +2451,71 @@ body,
 .home-panel .rhythms-field .chip:disabled.selected {
   opacity: 0.55;
 }
+
+/* ---------- One rule for the two styles ----------
+   What you press or choose is arcade (above and here); what you read stays clean. Containers
+   keep their frosted glass but lose the soft rounding, so square controls sit in near-square
+   frames. */
+.bento,
+.select-list {
+  border-radius: 4px;
+}
+
+@media not all and (max-width: 640px) and (max-aspect-ratio: 9/10) {
+  .settings-page {
+    border-radius: 4px;
+  }
+}
+
+.kbd,
+.kbd-big {
+  border-radius: 2px;
+}
+
+@media (hover: hover) {
+  .run-controls .icon-button {
+    border-radius: 0;
+  }
+}
+
+/* Buttons on the calibration and How to play pages, and the calibration pad. */
+.cal-button {
+  height: 44px;
+  padding: 0 20px;
+  border: 2px solid var(--ink);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.cal-button.primary {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--void);
+}
+
+.cal-button.secondary {
+  background: transparent;
+  border-color: var(--ink);
+}
+
+@media (hover: hover) {
+  .cal-button.secondary:hover {
+    background: rgba(42, 30, 52, 0.07);
+  }
+
+  .cal-button.primary:hover {
+    background: #3d2d4b;
+  }
+}
+
+.cal-pad {
+  border: 2px solid var(--ink);
+  border-radius: 0;
+  background: rgba(251, 250, 247, 0.6);
+}
