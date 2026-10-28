@@ -280,6 +280,9 @@ interface System {
 /** Printed sight-reading sheets rarely exceed 4 bars a line; wider lines are harder to track. */
 const MAX_BARS_PER_SYSTEM = 4;
 
+/** A lone bar up to this much wider than the line is squeezed to fit rather than cut off or scrolled. */
+const MAX_SQUEEZE = 0.62;
+
 function packSystems(barMinWidths: number[], availableWidth: number): System[] {
   const systems: System[] = [];
   let current: number[] = [];
@@ -288,15 +291,20 @@ function packSystems(barMinWidths: number[], availableWidth: number): System[] {
   for (let i = 0; i < barMinWidths.length; i++) {
     const w = barMinWidths[i] ?? 0;
     if (current.length > 0 && (currentSum + w > availableWidth || current.length >= MAX_BARS_PER_SYSTEM)) {
-      systems.push({ barIndices: current, targetWidth: Math.max(availableWidth, currentSum) });
+      systems.push({ barIndices: current, targetWidth: fitWidth(currentSum, availableWidth) });
       current = [];
       currentSum = 0;
     }
     current.push(i);
     currentSum += w;
   }
-  if (current.length > 0) systems.push({ barIndices: current, targetWidth: Math.max(availableWidth, currentSum) });
+  if (current.length > 0) systems.push({ barIndices: current, targetWidth: fitWidth(currentSum, availableWidth) });
   return systems;
+}
+
+/** The line is as wide as the screen; a bar too wide for it is squeezed (notes sit a little closer) down to MAX_SQUEEZE. */
+function fitWidth(minWidth: number, availableWidth: number): number {
+  return Math.max(availableWidth, minWidth * MAX_SQUEEZE);
 }
 
 /**

@@ -336,7 +336,7 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
       paint();
     },
   );
-  const relateControl = segmented(
+  const relateControl = select(
     handRelations().map((name, i) => ({ value: String(i + 1), label: name })),
     String(stage),
     (value) => {

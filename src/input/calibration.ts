@@ -164,7 +164,7 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
 
     const explanation = document.createElement("p");
     explanation.className = "cal-text";
-    setTextWithKeys(explanation, t("cal.text"));
+    setTextWithKeys(explanation, t(window.matchMedia("(pointer: coarse)").matches ? "cal.textTouch" : "cal.text"));
 
     const statusLine = document.createElement("p");
     statusLine.className = "cal-status";
