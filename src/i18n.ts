@@ -287,7 +287,7 @@ const cs: Record<Key, Entry> = {
   "home.left": "Levá",
   "home.length": "Délka",
   "home.mode": "Režim",
-  "home.modePractice": "S metronomem",
+  "home.modePractice": "Metronom",
   "home.modeCountIn": "Odpočítat",
   "home.needsTwoHands": "Potřebuje obě ruce",
   "home.alwaysIncluded": "Vždy zahrnuto",
@@ -351,7 +351,7 @@ const cs: Record<Key, Entry> = {
   "title.piece": (p) => `${p.lesson}, cvičení ${p.piece}: ${p.step}`,
   // ---- Lesson steps ----
   "step.learn": "Přehrát",
-  "step.practice": "S metronomem",
+  "step.practice": "Metronom",
   "step.countIn": "Odpočítat",
   "step.together": "Spolu",
   "step.right": "Pravá ruka",
