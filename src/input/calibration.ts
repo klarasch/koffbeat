@@ -173,10 +173,10 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
     const skipButton = createButton(t("cal.skipForNow"), "secondary");
     // While a round runs, the only way out: stops it and leaves calibration.
     const cancelButton = createButton(t("cal.cancel"), "secondary");
-    const cancelRow = document.createElement("div");
-    cancelRow.className = "cal-actions";
-    cancelRow.append(cancelButton);
-    cancelRow.hidden = true;
+    cancelButton.hidden = true;
+    // Cancel sits with the status, at the top, like Stop on the play screen.
+    const statusRow = document.createElement("div");
+    statusRow.className = "cal-status-row";
 
     // Taps go to their own pad. Reusing the Start button as the tap target meant every tap also
     // "clicked" Start, restarting the round on top of the one still playing.
@@ -215,7 +215,8 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
       progressBars.push(bar);
     }
 
-    container.append(label, heading, explanation, statusLine, progress, tapPad, cancelRow, startRow, resultBox);
+    statusRow.append(statusLine, cancelButton);
+    container.append(label, heading, explanation, statusRow, progress, tapPad, startRow, resultBox);
 
     let lastOffsetSec = 0;
     let detach: (() => void) | null = null;
@@ -275,7 +276,7 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
       running = true;
       cancelled = false;
       startRow.hidden = true;
-      cancelRow.hidden = false;
+      cancelButton.hidden = false;
       resultBox.hidden = true;
       statusLine.textContent = t("cal.listen");
 
@@ -334,7 +335,7 @@ export function runCalibration(engine: AudioEngine, container: HTMLElement): Pro
       detach = null;
       tapPad.hidden = true;
       progress.hidden = true;
-      cancelRow.hidden = true;
+      cancelButton.hidden = true;
       running = false;
       if (cancelled) {
         skip();
