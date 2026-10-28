@@ -2031,37 +2031,6 @@ body,
   outline-offset: 1px;
 }
 
-/* Right hand, Left hand, Together: where this exercise sits in its lesson. */
-.step-indicator {
-  display: flex;
-  gap: 14px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--ink-faint);
-}
-
-.step-indicator li.done {
-  color: var(--ink-dim);
-}
-
-.step-indicator li[aria-current="step"] {
-  color: var(--ink);
-  box-shadow: inset 0 -1.5px 0 var(--accent);
-  padding-bottom: 2px;
-}
-
-@media (max-width: 560px) {
-  .step-indicator li:not([aria-current="step"]) {
-    display: none;
-  }
-}
-
-
 /* Count-in results: the tempo kept in each bar, against the count-in tempo. */
 .tempo-chart {
   display: flex;

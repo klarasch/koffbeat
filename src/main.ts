@@ -130,8 +130,6 @@ interface LevelPick {
   next: () => LevelPick | null;
   /** Two-hand steps: practise this hand alone (the other is played for you). */
   solo?: Hand;
-  /** Where this pick sits in a sequence of steps, for the step indicator. */
-  steps?: { labels: string[]; current: number };
   /** Label for the results' main "next" action. */
   nextLabel?: string;
   /** The mode this pick is played in, when it decides it (a lesson step does). */
@@ -167,7 +165,6 @@ function lessonPick(lessonIndex: number, pieceIndex: number, stepIndex: number, 
     // Play-along starts with hearing the piece.
     listenFirst: step.guide,
     goal: { bpm: step.bpm, pass: PASS_ACCURACY },
-    steps: { labels: lesson.steps.map((s) => s.label), current: stepIndex },
     nextLabel: lastStep ? t("next.lesson") : t("next.step", { step: lesson.steps[stepIndex + 1]?.label.toLowerCase() ?? "" }),
     lesson: { index: lessonIndex, piece: pieceIndex, step: stepIndex },
     // The next step suggests its own tempo.
@@ -309,7 +306,6 @@ async function doBeginLevel(pick: LevelPick, mode: Mode, listen: boolean): Promi
       demo: listen,
       guide: pick.guide,
       goal: pick.goal,
-      steps: pick.steps,
       nextLabel: pick.nextLabel,
       // Switching hands restarts the same exercise with that hand alone (or both).
       // The hand chosen there carries on into the next exercise too.

@@ -37,8 +37,6 @@ export interface PlayOptions {
   guide?: boolean;
   /** A lesson step's goal, so the results can say how a slower run compares. */
   goal?: { bpm: number; pass: number };
-  /** Where this run sits in a sequence of steps (e.g. right hand, left hand, together). */
-  steps?: { labels: string[]; current: number };
   /** Label of the results' main "next" action (default "Next level"). */
   nextLabel?: string;
   /** Two hands in free practice: a switch to play both hands or one alone (restarts the exercise). */
@@ -138,19 +136,6 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   const hands: Hand[] = solo !== undefined && twoHands ? [solo] : twoHands ? [0, 1] : [0];
   (titleEl.lastChild as HTMLElement).textContent = t("play.meta", { bpm: level.bpm, what: t(demo ? "play.metaListening" : mode === "practice" ? (guide ? "play.metaAlong" : "play.metaPractice") : "play.metaCountIn") });
   topbar.append(homeButton, titleEl);
-  if (options.steps) {
-    const steps = document.createElement("ol");
-    steps.className = "step-indicator";
-    steps.setAttribute("aria-label", t("play.steps"));
-    options.steps.labels.forEach((label, i) => {
-      const li = document.createElement("li");
-      li.textContent = label;
-      if (i === options.steps?.current) li.setAttribute("aria-current", "step");
-      if (i < (options.steps?.current ?? 0)) li.classList.add("done");
-      steps.appendChild(li);
-    });
-    topbar.appendChild(steps);
-  }
   // While playing: restart and stop, as icons so they fit on a phone. The back arrow takes over
   // once the run is over (the results' own actions cover the rest).
   const runControls = document.createElement("div");

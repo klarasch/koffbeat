@@ -119,7 +119,6 @@ const en = {
   "next.exercise": "New exercise",
   // ---- Play ----
   "play.home": "Home",
-  "play.steps": "Steps",
   "play.meta": (p) => `${p.bpm} bpm, ${p.what}`,
   "play.metaListening": "listening",
   "play.metaAlong": "play along",
@@ -383,7 +382,6 @@ const cs: Record<Key, Entry> = {
   "next.exercise": "Nové cvičení",
   // ---- Play ----
   "play.home": "Domů",
-  "play.steps": "Kroky",
   "play.meta": (p) => `${p.bpm} bpm, ${p.what}`,
   "play.metaListening": "poslech",
   "play.metaAlong": "s nápovědou",
