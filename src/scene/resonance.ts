@@ -474,10 +474,52 @@ function polarGround(rings: number, segments: number, inner: number, outer: numb
   return geo;
 }
 
+/**
+ * How much sand the device can carry. Full is the whole scene; light has a quarter of the grains;
+ * lite is for weak or software-only graphics: a few thousand larger grains, a low render
+ * resolution and 30 frames a second. Every tier plays the same figures, ripples and hold ring.
+ */
+type Tier = "full" | "light" | "lite";
+const TIERS: Tier[] = ["full", "light", "lite"];
+/** The tier this device settled on last time, so a slow machine starts light instead of stuttering. */
+const TIER_KEY = "resonance.sandTier";
+
+function isTier(value: unknown): value is Tier {
+  return typeof value === "string" && (TIERS as string[]).includes(value);
+}
+
+/** True when the browser draws WebGL on the processor (no usable graphics chip). */
+function softwareRendering(): boolean {
+  try {
+    const probe = document.createElement("canvas");
+    const gl = probe.getContext("webgl2", { failIfMajorPerformanceCaveat: true });
+    if (!gl) return true;
+    const info = gl.getExtension("WEBGL_debug_renderer_info");
+    const name = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : "";
+    gl.getExtension("WEBGL_lose_context")?.loseContext();
+    return /swiftshader|llvmpipe|softpipe|software|basic render/i.test(name);
+  } catch {
+    return false;
+  }
+}
+
 export function createScene(canvas: HTMLCanvasElement): Scene {
+  // `?sand=full|light|lite` pins a tier (for testing); otherwise it is picked here and adapts.
+  const forcedTier = new URLSearchParams(window.location.search).get("sand");
+  const pinned = isTier(forcedTier);
+  const software = !pinned && softwareRendering();
+  let storedTier: string | null = null;
+  try {
+    storedTier = localStorage.getItem(TIER_KEY);
+  } catch {
+    // Storage blocked: start at full and adapt.
+  }
+  let tier: Tier = pinned ? (forcedTier as Tier) : software ? "lite" : isTier(storedTier) ? storedTier : "full";
+
   let renderer: THREE.WebGLRenderer;
   try {
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "high-performance" });
+    // Antialiasing only shows on hard edges, which the sand has none of; weak tiers skip its cost.
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: tier === "full", alpha: true, powerPreference: "high-performance" });
     renderer.setClearColor(0x000000, 0);
   } catch (err) {
     console.warn("resonance: WebGL unavailable", err);
@@ -487,12 +529,17 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
 
   const reducedMotion = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
   const mobile = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
-  const SIM_W = 256;
-  const SIM_H = mobile ? 128 : 256;
-  const COUNT = SIM_W * SIM_H;
+  const simSize = (t: Tier): [number, number] => (t === "full" ? [256, mobile ? 128 : 256] : t === "light" ? [128, 128] : [96, 96]);
+  const moteCount = (t: Tier): number => (t === "full" ? (mobile ? 1400 : 2600) : t === "light" ? 1200 : 500);
+  const BASE_COUNT = simSize("full")[0] * simSize("full")[1];
+  let [SIM_W, SIM_H] = simSize(tier);
+  let COUNT = SIM_W * SIM_H;
 
-  // Render resolution adapts: up to 1.5x, stepping down when frames run long.
-  const RATIOS = [1.25, 1, 0.8].filter((r) => r <= Math.max(1, window.devicePixelRatio || 1));
+  // Render resolution adapts within the tier, stepping down when frames run long.
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const ratiosFor = (t: Tier): number[] =>
+    (t === "full" ? [1.25, 1, 0.8] : t === "light" ? [1, 0.8, 0.65] : [0.6, 0.5]).filter((r) => r <= dpr);
+  let RATIOS = ratiosFor(tier);
   let ratioStep = 0;
   renderer.setPixelRatio(RATIOS[0] ?? 1);
   renderer.autoClear = true;
@@ -534,10 +581,6 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   const revealU = { value: 0 };
 
   // ---- GPGPU pigment ----
-  const gpu = new GPUComputationRenderer(SIM_W, SIM_H, renderer);
-  if (!renderer.extensions.has("EXT_color_buffer_float")) gpu.setDataType(THREE.HalfFloatType);
-  const pos0 = gpu.createTexture();
-  const vel0 = gpu.createTexture();
   function fillScatter(data: Float32Array): void {
     for (let i = 0; i < COUNT; i++) {
       const a = Math.random() * Math.PI * 2;
@@ -548,11 +591,6 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
       data[i * 4 + 3] = Math.random();
     }
   }
-  fillScatter(pos0.image.data as unknown as Float32Array);
-  const posVar: Variable = gpu.addVariable("texturePosition", POSITION_SHADER, pos0);
-  const velVar: Variable = gpu.addVariable("textureVelocity", VELOCITY_SHADER, vel0);
-  gpu.setVariableDependencies(posVar, [posVar, velVar]);
-  gpu.setVariableDependencies(velVar, [posVar, velVar]);
   const simUniforms = {
     uShake: { value: 0 },
     uJitter: { value: 1 },
@@ -562,9 +600,40 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     uLift: { value: 0 },
     uSettle: { value: 0 },
   };
-  Object.assign(velVar.material.uniforms, shared, simUniforms);
-  Object.assign(posVar.material.uniforms, { uDt: simUniforms.uDt });
-  const gpuError = gpu.init();
+  let gpu: GPUComputationRenderer | null = null;
+  let posVar!: Variable;
+  let velVar!: Variable;
+  /**
+   * Builds the simulation at the current SIM_W x SIM_H. With `from`, the grains keep where they
+   * are: the new textures sample the old ones, so a tier change carries the figure over intact.
+   */
+  function buildSim(from?: { pos: THREE.Texture; vel: THREE.Texture }): string | null {
+    const next = new GPUComputationRenderer(SIM_W, SIM_H, renderer);
+    if (!renderer.extensions.has("EXT_color_buffer_float")) next.setDataType(THREE.HalfFloatType);
+    const pos0 = next.createTexture();
+    fillScatter(pos0.image.data as unknown as Float32Array);
+    const p = next.addVariable("texturePosition", POSITION_SHADER, pos0);
+    const v = next.addVariable("textureVelocity", VELOCITY_SHADER, next.createTexture());
+    next.setVariableDependencies(p, [p, v]);
+    next.setVariableDependencies(v, [p, v]);
+    Object.assign(v.material.uniforms, shared, simUniforms);
+    Object.assign(p.material.uniforms, { uDt: simUniforms.uDt });
+    const err = next.init();
+    if (err !== null) {
+      next.dispose();
+      return err;
+    }
+    if (from) {
+      for (const target of p.renderTargets) next.renderTexture(from.pos, target);
+      for (const target of v.renderTargets) next.renderTexture(from.vel, target);
+    }
+    gpu?.dispose();
+    gpu = next;
+    posVar = p;
+    velVar = v;
+    return null;
+  }
+  const gpuError = buildSim();
   if (gpuError !== null) {
     console.warn("resonance: GPU simulation unavailable", gpuError);
     renderer.dispose();
@@ -583,17 +652,21 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   sky.renderOrder = -1;
   scene.add(sky);
 
-  const refs = new Float32Array(COUNT * 2);
-  for (let y = 0; y < SIM_H; y++) {
-    for (let x = 0; x < SIM_W; x++) {
-      const i = y * SIM_W + x;
-      refs[i * 2] = (x + 0.5) / SIM_W;
-      refs[i * 2 + 1] = (y + 0.5) / SIM_H;
+  /** One point per simulated grain, each pointing at its texel. */
+  function buildPigmentGeo(): THREE.BufferGeometry {
+    const refs = new Float32Array(COUNT * 2);
+    for (let y = 0; y < SIM_H; y++) {
+      for (let x = 0; x < SIM_W; x++) {
+        const i = y * SIM_W + x;
+        refs[i * 2] = (x + 0.5) / SIM_W;
+        refs[i * 2 + 1] = (y + 0.5) / SIM_H;
+      }
     }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(COUNT * 3), 3));
+    geo.setAttribute("aRef", new THREE.BufferAttribute(refs, 2));
+    return geo;
   }
-  const pigmentGeo = new THREE.BufferGeometry();
-  pigmentGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(COUNT * 3), 3));
-  pigmentGeo.setAttribute("aRef", new THREE.BufferAttribute(refs, 2));
   const texU = { uPositions: { value: null as THREE.Texture | null }, uVelocities: { value: null as THREE.Texture | null } };
 
   // ---- Ground ----
@@ -614,7 +687,7 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   // ---- Pigment ----
   const pigmentUniforms = { ...texU, uSize: { value: 10 }, uDim: dimU, uReveal: revealU, uBloom: { value: 0 }, uHarmony: simUniforms.uHarmony };
   const pigment = new THREE.Points(
-    pigmentGeo,
+    buildPigmentGeo(),
     new THREE.ShaderMaterial({ vertexShader: PIGMENT_VERT, fragmentShader: PIGMENT_FRAG, uniforms: pigmentUniforms, transparent: true, depthWrite: false }),
   );
   pigment.frustumCulled = false;
@@ -622,7 +695,8 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   scene.add(pigment);
 
   // ---- Motes ----
-  const MOTES = mobile ? 1400 : 2600;
+  // Allocated for the full scene; lighter tiers draw only the first few.
+  const MOTES = moteCount("full");
   const moteData = new Float32Array(MOTES * 4);
   for (let i = 0; i < MOTES; i++) {
     moteData[i * 4] = (Math.random() - 0.5) * 12;
@@ -633,6 +707,7 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   const moteGeo = new THREE.BufferGeometry();
   moteGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(MOTES * 3), 3));
   moteGeo.setAttribute("aMote", new THREE.BufferAttribute(moteData, 4));
+  moteGeo.setDrawRange(0, moteCount(tier));
   const moteUniforms = { uTime: shared.uTime, uSize: { value: 8 }, uStir: { value: 0 }, uDim: dimU };
   const motes = new THREE.Points(
     moteGeo,
@@ -718,49 +793,107 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   }
 
   // ---- Adaptive quality ----
-  let slowFrames = 0;
-  let fastFrames = 0;
-  function adaptQuality(frameMs: number): void {
-    if (document.hidden) return;
-    if (frameMs > 22) slowFrames++;
-    else if (frameMs < 14) fastFrames++;
-    if (slowFrames > 90 && ratioStep < RATIOS.length - 1) {
-      ratioStep++;
-      renderer.setPixelRatio(RATIOS[ratioStep]!);
-      resize();
-      slowFrames = 0;
-      fastFrames = 0;
-    } else if (fastFrames > 600 && ratioStep > 0) {
-      ratioStep--;
-      renderer.setPixelRatio(RATIOS[ratioStep]!);
-      resize();
-      slowFrames = 0;
-      fastFrames = 0;
+  // First the render resolution steps down within the tier; when that is not enough the tier
+  // itself steps down. A tier change waits for a screen without playing (home, results), since
+  // rebuilding the simulation can hitch for a moment.
+  // Measured in time, not frames, so a machine managing only a few frames a second still
+  // adapts within seconds.
+  let slowMs = 0;
+  let fastMs = 0;
+  /** A running average of the time per display refresh. */
+  let avgTick = 16;
+  /** No measuring until this time: shader compiles and page load make the first frames slow. */
+  let graceUntil = performance.now() + 2000;
+  /** After stepping down this session, never step back up (no back and forth). */
+  let steppedDown = false;
+  let pendingTier: Tier | null = null;
+  function setRatio(step: number): void {
+    ratioStep = step;
+    renderer.setPixelRatio(RATIOS[ratioStep]!);
+    resize();
+  }
+  function adaptQuality(tickMs: number, frameMs: number, now: number): void {
+    if (document.hidden || now < graceUntil) return;
+    avgTick += (tickMs - avgTick) * 0.1;
+    if (tickMs > 22) slowMs += frameMs;
+    else if (tickMs < 14) fastMs += frameMs;
+    if (slowMs > 1500) {
+      // Far too slow (under ~20 fps): a sharper picture will not save it, so go to a lighter tier.
+      const severe = avgTick > 45;
+      if (ratioStep < RATIOS.length - 1 && !(severe && tier !== "lite")) setRatio(ratioStep + 1);
+      else if (tier !== "lite" && !pinned && !pendingTier) {
+        pendingTier = TIERS[TIERS.indexOf(tier) + 1]!;
+        steppedDown = true;
+      }
+      slowMs = 0;
+      fastMs = 0;
+    } else if (fastMs > 10000) {
+      if (ratioStep > 0) setRatio(ratioStep - 1);
+      else if (tier !== "full" && !pinned && !software && !steppedDown) pendingTier = TIERS[TIERS.indexOf(tier) - 1]!;
+      slowMs = 0;
+      fastMs = 0;
     }
-    if (slowFrames + fastFrames > 1200) {
-      slowFrames = 0;
-      fastFrames = 0;
+    if (slowMs + fastMs > 20000) {
+      slowMs = 0;
+      fastMs = 0;
+    }
+  }
+  function applyTier(next: Tier): void {
+    const prev = { tier, w: SIM_W, h: SIM_H };
+    const from = { pos: gpu!.getCurrentRenderTarget(posVar).texture, vel: gpu!.getCurrentRenderTarget(velVar).texture };
+    [SIM_W, SIM_H] = simSize(next);
+    COUNT = SIM_W * SIM_H;
+    if (buildSim(from) !== null) {
+      [SIM_W, SIM_H] = [prev.w, prev.h];
+      COUNT = SIM_W * SIM_H;
+      return;
+    }
+    tier = next;
+    pigment.geometry.dispose();
+    pigment.geometry = buildPigmentGeo();
+    moteGeo.setDrawRange(0, moteCount(tier));
+    // Carry on at the nearest resolution no sharper than the current one.
+    const current = renderer.getPixelRatio();
+    RATIOS = ratiosFor(tier);
+    const step = RATIOS.findIndex((r) => r <= current + 1e-6);
+    setRatio(step < 0 ? RATIOS.length - 1 : step);
+    graceUntil = performance.now() + 2000;
+    slowMs = 0;
+    fastMs = 0;
+    try {
+      localStorage.setItem(TIER_KEY, tier);
+    } catch {
+      // Storage blocked: the next visit adapts again.
     }
   }
 
   // ---- Frame loop ----
   let last = performance.now();
   const startedAt = last;
-  /** Nothing is being played (home, results): half the frame rate is plenty and saves power. */
+  /** Every other display refresh is skipped on idle screens (and always in the lite tier). */
   let skipNext = false;
+  /** Display refreshes since the last drawn frame, so frame times compare at any frame rate. */
+  let ticks = 0;
   function frame(now: number): void {
+    ticks++;
     // Home and results run an idle drift (ambient); play never does.
     const idle = ambient > 0.05 && !hold && energy < 0.05;
-    if (idle && skipNext) {
+    const halfRate = idle || tier === "lite";
+    if (halfRate && skipNext) {
       skipNext = false;
       requestAnimationFrame(frame);
       return;
     }
-    skipNext = idle;
+    skipNext = halfRate;
+    if (pendingTier && ambient > 0.05) {
+      applyTier(pendingTier);
+      pendingTier = null;
+    }
     const frameMs = now - last;
     const dt = Math.min(1 / 30, Math.max(1 / 240, frameMs / 1000));
     last = now;
-    if (!idle) adaptQuality(frameMs);
+    adaptQuality(frameMs / ticks, frameMs, now);
+    ticks = 0;
     const time = (now - startedAt) / 1000;
 
     const ease = 1 - Math.exp(-dt * 6);
@@ -827,12 +960,14 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
     simUniforms.uEnergy.value = Math.max(energy, ambient * 1.8, (1 - morph) * 0.9) * (1 - settle * 0.7);
     simUniforms.uLift.value = lift;
     simUniforms.uSettle.value = settle;
-    gpu.compute();
-    texU.uPositions.value = gpu.getCurrentRenderTarget(posVar).texture;
-    texU.uVelocities.value = gpu.getCurrentRenderTarget(velVar).texture;
+    const sim = gpu!;
+    sim.compute();
+    texU.uPositions.value = sim.getCurrentRenderTarget(posVar).texture;
+    texU.uVelocities.value = sim.getCurrentRenderTarget(velVar).texture;
 
     fitCamera();
-    const grainWorld = mobile ? 0.0085 : 0.0062;
+    // Fewer grains are drawn a little larger, so the figure still reads as a full line.
+    const grainWorld = (mobile ? 0.0085 : 0.0062) * Math.pow(BASE_COUNT / COUNT, 0.4);
     pigmentUniforms.uSize.value = grainWorld * camera.projectionMatrix.elements[5]! * renderer.domElement.height * 0.5;
     moteUniforms.uSize.value = (mobile ? 0.011 : 0.009) * camera.projectionMatrix.elements[5]! * renderer.domElement.height * 0.5;
     moteUniforms.uStir.value = Math.min(1, energy);
@@ -843,15 +978,27 @@ export function createScene(canvas: HTMLCanvasElement): Scene {
   requestAnimationFrame(frame);
 
   function scatter(): void {
-    const tex = gpu.createTexture();
+    const sim = gpu!;
+    const tex = sim.createTexture();
     fillScatter(tex.image.data as unknown as Float32Array);
-    gpu.renderTexture(tex, posVar.renderTargets[0]!);
-    gpu.renderTexture(tex, posVar.renderTargets[1]!);
+    sim.renderTexture(tex, posVar.renderTargets[0]!);
+    sim.renderTexture(tex, posVar.renderTargets[1]!);
+    tex.dispose();
   }
 
   return {
     supported: true,
-    debug: () => ({ zoom: camera.zoom, uSize: pigmentUniforms.uSize.value, plateR: plate.r, lift, energy, count: COUNT, pixelRatio: renderer.getPixelRatio() }),
+    debug: () => ({
+      zoom: camera.zoom,
+      uSize: pigmentUniforms.uSize.value,
+      plateR: plate.r,
+      lift,
+      energy,
+      count: COUNT,
+      pixelRatio: renderer.getPixelRatio(),
+      tier: TIERS.indexOf(tier),
+      software: software ? 1 : 0,
+    }),
     setPlate(x: number, y: number, radius: number, snap = false) {
       plateTarget.cx = x;
       plateTarget.cy = y;
