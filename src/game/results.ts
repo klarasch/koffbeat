@@ -215,7 +215,8 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
   if (hitCount(result) === 0) {
     const noTaps = document.createElement("p");
     noTaps.className = "results-detail";
-    noTaps.textContent = "No taps detected. Try again: tap the lower half of the screen, or press F / J.";
+    const touch = typeof matchMedia === "function" && matchMedia("(hover: none)").matches;
+    noTaps.textContent = touch ? "No taps detected. Try again: tap the lower half of the screen." : "No taps detected. Try again: tap the lower half of the screen, or press F / J.";
     panel.appendChild(noTaps);
     panel.appendChild(buildButtons(callbacks, retry));
     return panel;

@@ -38,6 +38,8 @@ export interface PlayOptions {
   steps?: { labels: string[]; current: number };
   /** Label of the results' main "next" action (default "Next level"). */
   nextLabel?: string;
+  /** Two hands in free practice: a switch to play both hands or one alone (restarts the exercise). */
+  handChoice?: { onPick: (solo: Hand | undefined) => void };
 }
 
 /** How loud the guide plays the player's own notes (0-1). */
@@ -106,6 +108,16 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
 
   const screen = document.createElement("div");
   screen.className = "play-screen";
+  // While the exercise runs, no touch anywhere on the screen may zoom or scroll the page (a
+  // stray double tap next to the tap area used to zoom Safari in mid-exercise). Buttons keep
+  // their taps, and once the run is over the results scroll normally.
+  const blockGesture = (event: TouchEvent): void => {
+    if (ended || !event.cancelable) return;
+    if (event.target instanceof Element && event.target.closest("button, a, input, select")) return;
+    event.preventDefault();
+  };
+  screen.addEventListener("touchstart", blockGesture, { passive: false });
+  screen.addEventListener("touchend", blockGesture, { passive: false });
 
   const topbar = document.createElement("div");
   topbar.className = "play-topbar";
@@ -141,6 +153,29 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   }
   topbar.appendChild(escHint);
   screen.appendChild(topbar);
+
+  if (options.handChoice && twoHands && !demo) {
+    const onPick = options.handChoice.onPick;
+    const handSwitch = document.createElement("div");
+    handSwitch.className = "hand-switch";
+    handSwitch.setAttribute("role", "group");
+    handSwitch.setAttribute("aria-label", "Hands");
+    const choices: [Hand | undefined, string][] = [
+      [undefined, "Both hands"],
+      [1, "Right hand"],
+      [0, "Left hand"],
+    ];
+    for (const [hand, label] of choices) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      const current = hand === solo;
+      button.setAttribute("aria-pressed", String(current));
+      if (!current) button.addEventListener("click", () => leave(() => onPick(hand)));
+      handSwitch.appendChild(button);
+    }
+    screen.appendChild(handSwitch);
+  }
 
   const dotsRow = document.createElement("div");
   dotsRow.className = "count-in-dots";
@@ -185,13 +220,15 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   zoneLeft.className = "tap-zone tap-zone-left";
   const zoneLeftLabel = document.createElement("span");
   zoneLeftLabel.className = "tap-zone-label";
-  zoneLeftLabel.textContent = demo ? "" : twoHands ? (solo === 1 ? "" : "left hand (F)") : "tap (F)";
+  // The key in brackets is for keyboards only; touch screens hide it (.key-hint).
+  const zoneLabel = (words: string, key: string) => `${words}<span class="key-hint"> (${key})</span>`;
+  zoneLeftLabel.innerHTML = demo ? "" : twoHands ? (solo === 1 ? "" : zoneLabel("left hand", "F")) : zoneLabel("tap", "F");
   zoneLeft.appendChild(zoneLeftLabel);
   const zoneRight = document.createElement("div");
   zoneRight.className = "tap-zone tap-zone-right";
   const zoneRightLabel = document.createElement("span");
   zoneRightLabel.className = "tap-zone-label";
-  zoneRightLabel.textContent = demo ? "" : twoHands ? (solo === 0 ? "" : "right hand (J)") : "tap (J)";
+  zoneRightLabel.innerHTML = demo ? "" : twoHands ? (solo === 0 ? "" : zoneLabel("right hand", "J")) : zoneLabel("tap", "J");
   zoneRight.appendChild(zoneRightLabel);
   tapArea.append(zoneLeft, zoneRight);
   stage.appendChild(tapArea);

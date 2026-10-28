@@ -126,6 +126,8 @@ interface LevelPick {
   nextLabel?: string;
   /** The mode this pick is played in, when it decides it (a lesson step does). */
   mode?: Mode;
+  /** Free practice, independent hands: the exercise offers playing one hand alone. */
+  handChoice?: boolean;
   /** A lesson step: where its result is recorded. */
   lesson?: { index: number; piece: number; step: number };
   /** Play-along: the game quietly plays the player's notes too. */
@@ -168,28 +170,10 @@ function freePick(choice: FreeChoice): LevelPick {
   const again = () => freePick(choice);
   if (choice.hands === 2) {
     const level = withTempo(generateTwoHandLevel({ stage: choice.stage, cross: choice.cross, ingredients: choice.ingredients, bars: choice.bars }));
-    // Hands in turn or in unison go straight to both hands; independent ones are learned hand by hand.
-    return handsAreIndependent(choice.stage, choice.cross) ? twoHandSteps(level, again) : { level, next: again };
+    // Both hands from the start; independent hands can switch to one hand alone inside the exercise.
+    return { level, next: again, handChoice: handsAreIndependent(choice.stage, choice.cross) };
   }
   return { level: withTempo(generateLevel({ tier: 1, ingredients: choice.ingredients, meter: choice.meter, bars: choice.bars })), next: again };
-}
-
-const HAND_STEPS = ["Right hand", "Left hand", "Together"];
-
-/**
- * A two-hand exercise is learned the way a teacher would have you learn it: the right hand
- * alone, then the left hand alone (the other hand played for you), then both together, all on
- * the same exercise. `after` gives the next exercise once "together" is done.
- */
-function twoHandSteps(level: Level, after: () => LevelPick | null): LevelPick {
-  const step = (i: number): LevelPick => ({
-    level,
-    solo: i === 0 ? 1 : i === 1 ? 0 : undefined,
-    steps: { labels: HAND_STEPS, current: i },
-    nextLabel: i < HAND_STEPS.length - 1 ? `Next: ${HAND_STEPS[i + 1]?.toLowerCase()}` : "Next exercise",
-    next: () => (i < HAND_STEPS.length - 1 ? step(i + 1) : after()),
-  });
-  return step(0);
 }
 
 // Practice tempo: null plays each level at its own tempo; a number overrides it.
@@ -288,7 +272,16 @@ async function doBeginLevel(pick: LevelPick, mode: Mode, listen: boolean): Promi
         }
       },
     },
-    { solo: pick.solo, demo: listen, guide: pick.guide, goal: pick.goal, steps: pick.steps, nextLabel: pick.nextLabel },
+    {
+      solo: pick.solo,
+      demo: listen,
+      guide: pick.guide,
+      goal: pick.goal,
+      steps: pick.steps,
+      nextLabel: pick.nextLabel,
+      // Switching hands restarts the same exercise with that hand alone (or both).
+      handChoice: pick.handChoice ? { onPick: (solo) => beginLevel({ ...pick, solo }, mode) } : undefined,
+    },
   );
 }
 

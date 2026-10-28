@@ -911,8 +911,39 @@ body,
 }
 
 @media (hover: none) {
-  .esc-hint {
+  .esc-hint,
+  .key-hint {
     display: none;
+  }
+}
+
+/* Free practice, two hands: play both, or one hand alone. */
+.hand-switch {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  gap: 18px;
+  padding: 2px clamp(18px, 5vw, 56px) 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.hand-switch button {
+  color: var(--ink-faint);
+  padding: 6px 0 2px;
+}
+
+.hand-switch button[aria-pressed="true"] {
+  color: var(--ink);
+  box-shadow: inset 0 -1.5px 0 var(--accent);
+  cursor: default;
+}
+
+@media (hover: hover) {
+  .hand-switch button[aria-pressed="false"]:hover {
+    color: var(--ink-dim);
   }
 }
 

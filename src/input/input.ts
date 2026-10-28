@@ -152,6 +152,14 @@ export function attachInput(
     registerRelease(zone, event.timeStamp);
   }
 
+  // Safari doesn't reliably honour touch-action: cancelling the touch itself is what stops
+  // double-tap zoom (and the scroll or bounce a fast tap can start). Pointer events still fire.
+  function blockGesture(event: Event): void {
+    if (event.cancelable) event.preventDefault();
+  }
+  target.addEventListener("touchstart", blockGesture, { passive: false });
+  target.addEventListener("touchend", blockGesture, { passive: false });
+  target.addEventListener("dblclick", blockGesture);
   target.addEventListener("pointerdown", handlePointerDown);
   target.addEventListener("pointerup", handlePointerUp);
   target.addEventListener("pointercancel", handlePointerUp);
@@ -159,6 +167,9 @@ export function attachInput(
   window.addEventListener("keyup", handleKeyUp);
 
   return function detach(): void {
+    target.removeEventListener("touchstart", blockGesture);
+    target.removeEventListener("touchend", blockGesture);
+    target.removeEventListener("dblclick", blockGesture);
     target.removeEventListener("pointerdown", handlePointerDown);
     target.removeEventListener("pointerup", handlePointerUp);
     target.removeEventListener("pointercancel", handlePointerUp);
