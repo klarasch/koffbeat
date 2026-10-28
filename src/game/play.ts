@@ -24,6 +24,8 @@ export interface PlayCallbacks {
   onNext: (bpm?: number) => void;
   /** Hear the same exercise played correctly. */
   onListen: () => void;
+  /** Free practice with the metronome: play the same exercise with only a count-in. */
+  onCountIn?: (bpm?: number) => void;
   /** A run reached its end (not stopped or lost), with its accuracy. */
   onComplete?: (accuracy: number) => void;
 }
@@ -1064,6 +1066,7 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       onHome: () => leave(callbacks.onHome),
       onListen: () => leave(callbacks.onListen),
       onReview: () => setReviewing(true),
+      onCountIn: callbacks.onCountIn && !demo ? (bpm?: number) => leave(() => callbacks.onCountIn?.(bpm)) : undefined,
     };
     // A lesson step passed at its goal tempo: moving on is the main action. Otherwise another go.
     const passed = outcome === "done" && options.goal !== undefined && result.accuracy >= options.goal.pass && level.bpm >= options.goal.bpm;
@@ -1166,6 +1169,9 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
       // On the results, Retry uses the tempo chosen there.
       const chosen = Number(resultsOverlay.querySelector<HTMLElement>("[data-retry-bpm]")?.dataset.retryBpm);
       leave(() => callbacks.onRetry(Number.isFinite(chosen) && chosen > 0 ? chosen : undefined));
+    } else if (key === "c" && ended && !demo && callbacks.onCountIn) {
+      event.preventDefault();
+      resultsOverlay.querySelector<HTMLButtonElement>(".count-in-action")?.click();
     } else if (key === "h") {
       event.preventDefault();
       leave(callbacks.onListen);

@@ -294,6 +294,9 @@ async function doBeginLevel(pick: LevelPick, mode: Mode, listen: boolean): Promi
         beginLevel(next, mode, next?.listenFirst);
       },
       onListen: () => beginLevel(pick, mode, true),
+      // Free practice with the metronome: offer the same exercise with only a count-in (and
+      // carry on in count-in from there).
+      onCountIn: !pick.lesson && mode === "practice" ? (bpm) => beginLevel(bpm ? { ...pick, level: { ...pick.level, bpm } } : pick, "countIn") : undefined,
       onComplete: (accuracy) => {
         if (pick.lesson) {
           const lesson = LESSONS[pick.lesson.index];

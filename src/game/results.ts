@@ -16,6 +16,8 @@ export interface ResultsCallbacks {
   onListen: () => void;
   /** Show the whole piece with every note marked by how it went. */
   onReview?: () => void;
+  /** Free practice with the metronome: the same exercise again with only a count-in. */
+  onCountIn?: (bpm?: number) => void;
 }
 
 /** The tempo the exercise was played at (Retry can change it) and the main action's label. */
@@ -435,7 +437,10 @@ function buildButtons(callbacks: ResultsCallbacks, retry?: RetryOptions): HTMLEl
     tempoGroup.appendChild(tempo.el);
     top.push(tempoGroup);
   }
-  top.push(actionButton(t("res.hearIt"), "H", callbacks.onListen), actionButton(t("res.home"), "Esc", callbacks.onHome, "home-action"));
+  top.push(actionButton(t("res.hearIt"), "H", callbacks.onListen));
+  const onCountIn = callbacks.onCountIn;
+  if (onCountIn) top.push(actionButton(t("res.withCountIn"), "C", () => onCountIn(retry ? bpm : undefined), "count-in-action"));
+  top.push(actionButton(t("res.home"), "Esc", callbacks.onHome, "home-action"));
 
   const doRetry = () => callbacks.onRetry(retry ? bpm : undefined);
   const doNext = () => callbacks.onNext(retry && bpm !== original ? bpm : undefined);
