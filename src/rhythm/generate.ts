@@ -216,6 +216,11 @@ const CELLS: Cell[] = [
   { tier: 10, needs: ["offbeatRests", "sixteenths"], quarters: 1, restRun: 0.25, endsWithRest: false, make: () => [rest("16"), note("16"), note("8")] },
   { tier: 10, needs: ["offbeatRests", "sixteenths"], quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("16"), rest("16"), note("16"), note("16")] },
   { tier: 10, needs: ["offbeatRests", "sixteenths"], quarters: 1, restRun: 0.25, endsWithRest: false, make: () => [rest("16"), note("16"), note("16"), note("16")] },
+  // ...and in 6/8: an eighth rest on the second or third eighth of a beat
+  { tier: 10, needs: ["offbeatRests"], meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("8"), rest("8"), note("8")] },
+  { tier: 10, needs: ["offbeatRests"], meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: true, make: () => [note("8"), note("8"), rest("8")] },
+  { tier: 10, needs: ["offbeatRests"], meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: true, make: () => [note("q"), rest("8")] },
+  { tier: 10, needs: ["offbeatRests", "sixteenths"], meters: ["6/8"], quarters: 1.5, restRun: 0, endsWithRest: false, make: () => [note("8"), rest("16"), note("16"), note("8")] },
   // Tier 11: eighth-note triplets, and a triplet quarter + eighth
   { tier: 11, needs: ["triplets"], quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("8", { tuplet: 3 }), note("8", { tuplet: 3 }), note("8", { tuplet: 3 })] },
   { tier: 11, needs: ["triplets"], quarters: 1, restRun: 0, endsWithRest: false, make: () => [note("q", { tuplet: 3 }), note("8", { tuplet: 3 })] },
@@ -351,7 +356,17 @@ export interface BarOptions {
   /** Forbid a bar that is one long note (a whole note, or a dotted half in 3/4 or 6/8). */
   disallowWholeBar?: boolean;
   /** Counts the focus cells picked, so a phrase can check it practises the focus at all. */
-  stats?: { focus: number };
+  stats?: BarStats;
+}
+
+/** What a bar (or phrase) practised: focus cells picked, and every ingredient its cells needed. */
+export interface BarStats {
+  focus: number;
+  used: Set<Ingredient>;
+}
+
+function newStats(): BarStats {
+  return { focus: 0, used: new Set() };
 }
 
 /** `palette` is a {@link Palette}, or a tier number meaning the classic cumulative tier. */
@@ -376,13 +391,18 @@ export function buildBarEvents(rng: Rng, palette: Palette | number, options: Bar
     const remaining = targetBeats - beatPos;
     const disallowRest = !!options.disallowLeadingRest && events.length === 0;
     const cell = pickCell(rng, pal, kind, remaining, beatPos, consecutiveRest, disallowRest, !!options.disallowWholeBar);
-    if (options.stats && cellPractisesFocus(cell, pal)) options.stats.focus++;
+    if (options.stats) {
+      if (cellPractisesFocus(cell, pal)) options.stats.focus++;
+      for (const n of cell.needs) options.stats.used.add(n);
+    }
     events.push(...cell.make());
     beatPos += cell.quarters;
     consecutiveRest = cell.endsWithRest ? consecutiveRest + cell.restRun : 0;
   }
 
+  if (trailingLongNote && kind !== "6/8") options.stats?.used.add("halves");
   if (options.forceTrailingTiedHalf) {
+    options.stats?.used.add("ties");
     events.push(note("h", { tie: true }));
   } else if (options.forceTrailingHalf) {
     events.push(kind === "6/8" ? note("q", { dots: 1 }) : note("h"));
@@ -418,14 +438,23 @@ const PHRASE_ATTEMPTS = 30;
  * the phrase practises the focus at least once (it's rebuilt until it does). `previousBar` is the
  * last bar before this phrase, if any.
  */
-export function buildPhrase(rng: Rng, palette: Palette | number, kind: MeterKind, exerciseStartsHere: boolean, previousBar?: readonly RhythmEvent[]): RhythmEvent[][] {
+export function buildPhrase(
+  rng: Rng,
+  palette: Palette | number,
+  kind: MeterKind,
+  exerciseStartsHere: boolean,
+  previousBar?: readonly RhythmEvent[],
+  used?: Set<Ingredient>,
+): RhythmEvent[][] {
   const pal = toPalette(palette);
   let phrase: RhythmEvent[][] = [];
+  let stats = newStats();
   for (let attempt = 0; attempt < PHRASE_ATTEMPTS; attempt++) {
-    const stats = { focus: 0 };
+    stats = newStats();
     phrase = buildPhraseOnce(rng, pal, kind, exerciseStartsHere, previousBar, stats);
-    if (stats.focus > 0) return phrase;
+    if (stats.focus > 0) break;
   }
+  if (used) for (const k of stats.used) used.add(k);
   return phrase;
 }
 
@@ -435,7 +464,7 @@ function buildPhraseOnce(
   kind: MeterKind,
   exerciseStartsHere: boolean,
   previousBar: readonly RhythmEvent[] | undefined,
-  stats: { focus: number },
+  stats: BarStats,
 ): RhythmEvent[][] {
   // The tied-half-into-quarter cross-bar tie is written for 4/4 only.
   const allowCrossBarTies = pal.ingredients.has("ties") && kind === "4/4";
@@ -482,6 +511,14 @@ function buildPhraseOnce(
   return [bar1, bar2, bar3, bar4];
 }
 
+/** Tries per exercise to fit in every selected ingredient. */
+const EXERCISE_ATTEMPTS = 30;
+
+/** Whether some cell can write the ingredient in this meter with this palette. */
+function writableIn(key: Ingredient, palette: Palette, kind: MeterKind): boolean {
+  return CELLS.some((cell) => cell.needs.includes(key) && cellAllowed(cell, palette) && (cell.meters ?? SIMPLE).includes(kind));
+}
+
 /** Options for {@link generateLevel}. */
 export interface GenerateOptions {
   /** How advanced a rhythmic vocabulary to draw from (1–12, see {@link TIER_NAMES}). Ignored when `ingredients` is given. */
@@ -523,10 +560,23 @@ export function generateLevel(opts: GenerateOptions): Level {
     title = t("title.tier", { name: tierName(tier), bars: t("bars", { n: opts.bars }) });
   }
 
-  const bars: RhythmEvent[][] = [];
-  const phraseCount = opts.bars / 4;
-  for (let phrase = 0; phrase < phraseCount; phrase++) {
-    bars.push(...buildPhrase(rng, palette, kind, phrase === 0, bars[bars.length - 1]));
+  // Free practice: every ingredient switched on shows up at least once (where the meter has a
+  // way to write it), not only the focus. Rebuilt until it does.
+  const wanted = opts.ingredients ? orderedIngredients(palette.ingredients).filter((k) => k !== "quarters" && writableIn(k, palette, kind)) : [];
+  let bars: RhythmEvent[][] = [];
+  let bestCovered = -1;
+  for (let attempt = 0; attempt < EXERCISE_ATTEMPTS && bestCovered < wanted.length; attempt++) {
+    const tryBars: RhythmEvent[][] = [];
+    const used = new Set<Ingredient>();
+    for (let phrase = 0; phrase < opts.bars / 4; phrase++) {
+      tryBars.push(...buildPhrase(rng, palette, kind, phrase === 0, tryBars[tryBars.length - 1], used));
+    }
+    // Keep the attempt that fits in the most selected ingredients.
+    const covered = wanted.filter((k) => used.has(k)).length;
+    if (covered > bestCovered) {
+      bestCovered = covered;
+      bars = tryBars;
+    }
   }
 
   return { id, title, meter: METERS[kind], bpm: opts.bpm ?? DEFAULT_BPM, bars };

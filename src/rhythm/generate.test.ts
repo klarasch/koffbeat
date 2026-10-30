@@ -376,7 +376,11 @@ function shows(level: Level, key: Ingredient): boolean {
     case "dottedEighths":
       return bars.flat().some((e) => e.value === "8" && e.dots === 1 && !e.rest);
     case "offbeatRests":
-      return bars.some((bar) => withPositions(bar).some(({ e, pos }) => e.rest && (e.value === "16" || (e.value === "8" && pos % 1 !== 0))));
+    {
+      // Off the beat: a beat is a quarter, or a dotted quarter in 6/8.
+      const beat = level.meter.beatUnit === 8 ? 1.5 : 1;
+      return bars.some((bar) => withPositions(bar).some(({ e, pos }) => e.rest && (e.value === "16" || (e.value === "8" && pos % beat !== 0))));
+    }
     case "triplets":
       return bars.flat().some((e) => e.tuplet === 3);
   }
@@ -571,5 +575,24 @@ describe("ingredients", () => {
       if (meter === "6/8" && !["halves", "rests", "eighths", "sixteenths"].includes(focus)) continue;
       phrases(level).forEach((p, i) => expect(shows(p, focus), `${label}: phrase ${i + 1}`).toBe(true));
     }
+  });
+
+  it("free practice: every ingredient switched on shows up, not only the focus (off-beat rests in 6/8 too)", () => {
+    const rng = mulberry32(404);
+    let checked = 0;
+    let missing = 0;
+    for (let n = 0; n < 1200; n++) {
+      const ingredients = KEYS.filter((k) => k !== "quarters" && rng() < 0.4);
+      const meter = METER_CHOICES[n % 3] as MeterChoice;
+      const level = generateLevel({ tier: 1, ingredients, meter, bars: 8, seed: n });
+      for (const key of ingredients) {
+        // In 6/8 only these have cells (dotted notes, ties, syncopation, triplets don't).
+        if (meter === "6/8" && !["halves", "rests", "eighths", "sixteenths", "offbeatRests"].includes(key)) continue;
+        checked++;
+        if (!shows(level, key)) missing++;
+      }
+      if (meter === "6/8" && ingredients.includes("offbeatRests")) expect(shows(level, "offbeatRests"), `6/8 seed ${n}`).toBe(true);
+    }
+    expect(missing / checked).toBeLessThan(0.01);
   });
 });
