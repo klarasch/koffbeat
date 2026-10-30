@@ -256,6 +256,16 @@ function cellIsFocus(cell: Cell, palette: Palette): boolean {
   return cell.needs.includes(palette.focus);
 }
 
+/**
+ * Stricter than {@link cellIsFocus} for lessons: the cell uses the tier's own ingredient (a tier
+ * 5 "dotted notes" phrase needs a dotted note, not just the eighth rest that tier also adds).
+ */
+function cellPractisesFocus(cell: Cell, palette: Palette): boolean {
+  const tierKey = palette.tier !== undefined ? INGREDIENTS.find((i) => i.tier === palette.tier)?.key : undefined;
+  if (tierKey && tierKey !== "quarters") return cell.tier === palette.tier && cell.needs.includes(tierKey);
+  return cellIsFocus(cell, palette);
+}
+
 function restLimitApplies(palette: Palette): boolean {
   if (palette.tier !== undefined) return palette.tier < REST_LIMIT_TIER;
   return !INGREDIENTS.some((i) => i.tier >= REST_LIMIT_TIER && palette.ingredients.has(i.key));
@@ -269,6 +279,7 @@ function pickCell(
   beatPos: number,
   consecutiveRest: number,
   disallowRest: boolean,
+  disallowWholeBar = false,
 ): Cell {
   const enforceRestLimit = restLimitApplies(palette);
   const eligible = CELLS.filter((cell) => {
@@ -276,6 +287,7 @@ function pickCell(
     if (!(cell.meters ?? SIMPLE).includes(kind)) return false;
     if (cell.quarters > remaining + EPSILON) return false;
     if (cell.beatAligned && kind === "4/4" && beatPos % 2 !== 0) return false;
+    if (cell.wholeBar && disallowWholeBar && isLongNoteCell(cell)) return false;
     if (cell.wholeBar && (beatPos !== 0 || Math.abs(remaining - BAR_QUARTERS[kind]) > EPSILON)) return false;
     if (disallowRest && cell.restRun > 0) return false;
     if (enforceRestLimit && consecutiveRest + cell.restRun > MAX_REST_RUN + EPSILON) return false;
@@ -311,6 +323,16 @@ function pickCell(
   return fallback;
 }
 
+/** A whole-bar cell that is one single note (w, or a dotted half). */
+function isLongNoteCell(cell: Cell): boolean {
+  return cell.make().length === 1;
+}
+
+/** A bar that is one long note: a whole note, or a dotted half in 3/4 or 6/8. */
+export function isLongNoteBar(bar: readonly RhythmEvent[]): boolean {
+  return bar.length === 1 && !bar[0]?.rest;
+}
+
 function isRestCell(cell: Cell): boolean {
   return cell.endsWithRest && cell.restRun >= cell.quarters;
 }
@@ -326,6 +348,10 @@ export interface BarOptions {
   forceTrailingTiedHalf?: boolean;
   /** Bar ends with a plain (untied) long note — a half, or a dotted quarter in 6/8 — used for cadences. */
   forceTrailingHalf?: boolean;
+  /** Forbid a bar that is one long note (a whole note, or a dotted half in 3/4 or 6/8). */
+  disallowWholeBar?: boolean;
+  /** Counts the focus cells picked, so a phrase can check it practises the focus at all. */
+  stats?: { focus: number };
 }
 
 /** `palette` is a {@link Palette}, or a tier number meaning the classic cumulative tier. */
@@ -349,7 +375,8 @@ export function buildBarEvents(rng: Rng, palette: Palette | number, options: Bar
   while (beatPos < targetBeats - EPSILON) {
     const remaining = targetBeats - beatPos;
     const disallowRest = !!options.disallowLeadingRest && events.length === 0;
-    const cell = pickCell(rng, pal, kind, remaining, beatPos, consecutiveRest, disallowRest);
+    const cell = pickCell(rng, pal, kind, remaining, beatPos, consecutiveRest, disallowRest, !!options.disallowWholeBar);
+    if (options.stats && cellPractisesFocus(cell, pal)) options.stats.focus++;
     events.push(...cell.make());
     beatPos += cell.quarters;
     consecutiveRest = cell.endsWithRest ? consecutiveRest + cell.restRun : 0;
@@ -367,8 +394,8 @@ export function buildBarEvents(rng: Rng, palette: Palette | number, options: Bar
 /** Probability a phrase's cadence bar is a whole note instead of a plain half note. */
 const CADENCE_WHOLE_PROBABILITY = 0.25;
 
-function buildCadenceBar(rng: Rng, palette: Palette, kind: MeterKind): RhythmEvent[] {
-  if (rng() < CADENCE_WHOLE_PROBABILITY) return [kind === "4/4" ? note("w") : note("h", { dots: 1 })];
+function buildCadenceBar(rng: Rng, palette: Palette, kind: MeterKind, afterLongBar: boolean): RhythmEvent[] {
+  if (!afterLongBar && rng() < CADENCE_WHOLE_PROBABILITY) return [kind === "4/4" ? note("w") : note("h", { dots: 1 })];
   return buildBarEvents(rng, palette, { kind, forceTrailingHalf: true });
 }
 
@@ -382,9 +409,34 @@ const REPEAT_BAR3_PROBABILITY = 0.35;
 /** Probability of a cross-bar tie at an eligible phrase junction. */
 const CROSS_BAR_TIE_PROBABILITY = 0.18;
 
-/** Builds one 4-bar phrase: A, A' (or fresh), B (or a variation of A), then a cadence bar. */
-export function buildPhrase(rng: Rng, palette: Palette | number, kind: MeterKind, exerciseStartsHere: boolean): RhythmEvent[][] {
+/** Tries per phrase before settling for one that misses the focus (only when it can barely fit). */
+const PHRASE_ATTEMPTS = 30;
+
+/**
+ * Builds one 4-bar phrase: A, A' (or fresh), B (or a variation of A), then a cadence bar.
+ * Two one-note bars (whole notes) never follow each other, the exercise never opens on one, and
+ * the phrase practises the focus at least once (it's rebuilt until it does). `previousBar` is the
+ * last bar before this phrase, if any.
+ */
+export function buildPhrase(rng: Rng, palette: Palette | number, kind: MeterKind, exerciseStartsHere: boolean, previousBar?: readonly RhythmEvent[]): RhythmEvent[][] {
   const pal = toPalette(palette);
+  let phrase: RhythmEvent[][] = [];
+  for (let attempt = 0; attempt < PHRASE_ATTEMPTS; attempt++) {
+    const stats = { focus: 0 };
+    phrase = buildPhraseOnce(rng, pal, kind, exerciseStartsHere, previousBar, stats);
+    if (stats.focus > 0) return phrase;
+  }
+  return phrase;
+}
+
+function buildPhraseOnce(
+  rng: Rng,
+  pal: Palette,
+  kind: MeterKind,
+  exerciseStartsHere: boolean,
+  previousBar: readonly RhythmEvent[] | undefined,
+  stats: { focus: number },
+): RhythmEvent[][] {
   // The tied-half-into-quarter cross-bar tie is written for 4/4 only.
   const allowCrossBarTies = pal.ingredients.has("ties") && kind === "4/4";
   const tieAfterBar1 = allowCrossBarTies && rng() < CROSS_BAR_TIE_PROBABILITY;
@@ -394,27 +446,38 @@ export function buildPhrase(rng: Rng, palette: Palette | number, kind: MeterKind
     kind,
     disallowLeadingRest: exerciseStartsHere,
     forceTrailingTiedHalf: tieAfterBar1,
+    disallowWholeBar: exerciseStartsHere || (!!previousBar && isLongNoteBar(previousBar)),
+    stats,
   });
+  const bar1Focus = stats.focus;
+  const bar1Long = isLongNoteBar(bar1);
 
+  // A one-note bar is never repeated straight after itself.
   let bar2: RhythmEvent[];
-  if (!tieAfterBar1 && rng() < REPEAT_BAR2_PROBABILITY) {
+  if (!tieAfterBar1 && !bar1Long && rng() < REPEAT_BAR2_PROBABILITY) {
     bar2 = cloneBar(bar1);
+    stats.focus += bar1Focus;
   } else {
     bar2 = buildBarEvents(rng, pal, {
       kind,
       forceLeadingTieContinuation: tieAfterBar1,
       forceTrailingTiedHalf: tieAfterBar2,
+      disallowWholeBar: bar1Long,
+      stats,
     });
   }
+  const bar2Long = isLongNoteBar(bar2);
 
+  // Bar 3 may echo bar 1, unless that would put a one-note bar right after another.
   let bar3: RhythmEvent[];
-  if (!tieAfterBar1 && !tieAfterBar2 && rng() < REPEAT_BAR3_PROBABILITY) {
+  if (!tieAfterBar1 && !tieAfterBar2 && !(bar1Long && bar2Long) && rng() < REPEAT_BAR3_PROBABILITY) {
     bar3 = cloneBar(bar1);
+    stats.focus += bar1Focus;
   } else {
-    bar3 = buildBarEvents(rng, pal, { kind, forceLeadingTieContinuation: tieAfterBar2 });
+    bar3 = buildBarEvents(rng, pal, { kind, forceLeadingTieContinuation: tieAfterBar2, disallowWholeBar: bar2Long, stats });
   }
 
-  const bar4 = buildCadenceBar(rng, pal, kind);
+  const bar4 = buildCadenceBar(rng, pal, kind, isLongNoteBar(bar3));
 
   return [bar1, bar2, bar3, bar4];
 }
@@ -463,7 +526,7 @@ export function generateLevel(opts: GenerateOptions): Level {
   const bars: RhythmEvent[][] = [];
   const phraseCount = opts.bars / 4;
   for (let phrase = 0; phrase < phraseCount; phrase++) {
-    bars.push(...buildPhrase(rng, palette, kind, phrase === 0));
+    bars.push(...buildPhrase(rng, palette, kind, phrase === 0, bars[bars.length - 1]));
   }
 
   return { id, title, meter: METERS[kind], bpm: opts.bpm ?? DEFAULT_BPM, bars };

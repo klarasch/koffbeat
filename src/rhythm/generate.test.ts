@@ -4,6 +4,7 @@ import type { Level, RhythmEvent } from "../types";
 import { barQuarters, eventQuarters, validateLevel } from "./durations";
 import {
   generateLevel,
+  isLongNoteBar,
   type Ingredient,
   INGREDIENTS,
   ingredientsForTier,
@@ -525,5 +526,50 @@ describe("ingredients", () => {
   it("an explicit 6/8 or 3/4 meter is honoured", () => {
     expect(generateLevel({ tier: 1, ingredients: ["eighths"], meter: "6/8", bars: 4, seed: 1 }).meter).toEqual({ beats: 6, beatUnit: 8 });
     expect(generateLevel({ tier: 1, ingredients: ["eighths"], meter: "3/4", bars: 4, seed: 1 }).meter).toEqual({ beats: 3, beatUnit: 4 });
+  });
+
+  /** Each 4-bar phrase as its own level, so `shows` can check it alone. */
+  function phrases(level: Level): Level[] {
+    const out: Level[] = [];
+    for (let i = 0; i < level.bars.length; i += 4) out.push({ ...level, bars: level.bars.slice(i, i + 4) });
+    return out;
+  }
+
+  function checkWholeNotes(level: Level, label: string): void {
+    expect(isLongNoteBar(at(level.bars, 0)), `${label}: opens on a one-note bar`).toBe(false);
+    for (let i = 1; i < level.bars.length; i++) {
+      expect(isLongNoteBar(at(level.bars, i - 1)) && isLongNoteBar(at(level.bars, i)), `${label}: one-note bars ${i} and ${i + 1} in a row`).toBe(false);
+    }
+  }
+
+  it("lessons (tiers 2-11): every phrase practises the tier's new thing, and whole-note bars never chain", () => {
+    for (let tier = 2; tier <= 11; tier++) {
+      const key = at(KEYS, tier - 1);
+      for (const bars of BAR_COUNTS) {
+        for (let seed = 0; seed < 150; seed++) {
+          const level = generateLevel({ tier, bars, seed });
+          const label = `tier ${tier}, ${bars} bars, seed ${seed}`;
+          checkWholeNotes(level, label);
+          phrases(level).forEach((p, i) => expect(shows(p, key), `${label}: phrase ${i + 1} has no ${key}`).toBe(true));
+        }
+      }
+    }
+  });
+
+  it("free practice: every phrase practises the focus, and whole-note bars never chain", () => {
+    const rng = mulberry32(77);
+    for (let n = 0; n < 1500; n++) {
+      const focus = KEYS[1 + (n % (KEYS.length - 1))] as Ingredient;
+      const others = KEYS.filter((k) => k !== "quarters" && rng() < 0.4);
+      const ingredients = others.includes(focus) ? others : [...others, focus];
+      const meter = METER_CHOICES[n % 3] as MeterChoice;
+      const bars = BAR_COUNTS[Math.floor(n / 3) % 3] as 4 | 8 | 16;
+      const level = generateLevel({ tier: 1, ingredients, focus, meter, bars, seed: n });
+      const label = `${ingredients.join("+")} focus ${focus} in ${meter}, ${bars} bars, seed ${n}`;
+      checkWholeNotes(level, label);
+      // Only these have cells written in 6/8.
+      if (meter === "6/8" && !["halves", "rests", "eighths", "sixteenths"].includes(focus)) continue;
+      phrases(level).forEach((p, i) => expect(shows(p, focus), `${label}: phrase ${i + 1}`).toBe(true));
+    }
   });
 });
