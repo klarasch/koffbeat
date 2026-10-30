@@ -547,6 +547,17 @@ describe("next-note scoring: tempo by bar", () => {
     expect(run([60, 60, 60, 60, 60, 60], 20).steadiness).toBeGreaterThan(90);
   });
 
+  it("doesn't count phone-touch jitter on fast sixteenths as unsteady", () => {
+    // 105 BPM sixteenths (143 ms apart), each tap off by a random ±20 ms-ish; the tempo never changes.
+    const bpm = 105;
+    const step = 0.25;
+    const onsets: Onset[] = Array.from({ length: 128 }, (_, i) => ({ eventIndex: i, beat: i * step, quarters: step }));
+    let seed = 1;
+    const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) - 0.5;
+    const hits: Hit[] = onsets.map((o) => ({ time: 1 + (o.beat * 60) / bpm + (rand() + rand() + rand()) * 0.035, zone: 0 }));
+    expect(judgeRun(onsets, [], 1, bpm, hits, [], { sequential: true, beatsPerBar: 4 }).steadiness).toBeGreaterThan(90);
+  });
+
   it("marks a wavering tempo down", () => {
     expect(run([60, 66, 57, 65, 58, 64], 0).steadiness).toBeLessThan(75);
   });

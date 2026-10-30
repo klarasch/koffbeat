@@ -720,7 +720,9 @@ function computeDriftPercent(onsets: Onset[], matchedPoints: MatchedPoint[]): nu
 const DEVIATION_PENALTY_PER_PERCENT = 4.5;
 const LOCAL_VARIANCE_PENALTY_PER_PERCENT = 3;
 /** Count-in (next note): steadiness points lost per percent of spread between bar tempos. */
-const BAR_TEMPO_PENALTY_PER_PERCENT = 5;
+const BAR_TEMPO_PENALTY_PER_PERCENT = 6;
+/** Spread between bar tempos too small to hear, so it costs nothing. */
+const UNHEARD_TEMPO_SPREAD_PERCENT = 1;
 
 function computeSteadiness(matchedPoints: MatchedPoint[], bpm: number, playedBpm: number): number {
   const nominal = nominalSecPerQuarter(bpm);
@@ -858,13 +860,15 @@ function judgeRests(
 /** Next-note scoring: how far a gap's tempo may be from the run's median and still say
  * something about the tempo (beyond that it's a hesitation or a rush, graded on its own note). */
 const SEQUENTIAL_PAIR_TOLERANCE = 0.3;
+/** ...but a gap off by less than this is ordinary tap jitter on short notes, never a hesitation. */
+const SEQUENTIAL_PAIR_TOLERANCE_SEC = 0.09;
 
 /**
  * Next-note scoring: the player's tempo from the gaps between consecutive taps of each hand
  * (seconds per quarter, with the beat midpoint of each gap), leaving out hesitations and rushes.
  */
-function sequentialTempoPairs(points: MatchedPoint[]): { mid: number; spq: number }[] {
-  const pairs: { mid: number; spq: number }[] = [];
+function sequentialTempoPairs(points: MatchedPoint[]): { mid: number; spq: number; dBeat: number }[] {
+  const pairs: { mid: number; spq: number; dBeat: number }[] = [];
   for (const line of [0, 1] as const) {
     const sorted = points.filter((p) => p.line === line).sort((a, b) => a.beat - b.beat);
     for (let i = 1; i < sorted.length; i++) {
@@ -872,11 +876,11 @@ function sequentialTempoPairs(points: MatchedPoint[]): { mid: number; spq: numbe
       const cur = sorted[i]!;
       const dBeat = cur.beat - prev.beat;
       if (dBeat < MIN_TEMPO_STEP_QUARTERS) continue;
-      pairs.push({ mid: (cur.beat + prev.beat) / 2, spq: (cur.time - prev.time) / dBeat });
+      pairs.push({ mid: (cur.beat + prev.beat) / 2, spq: (cur.time - prev.time) / dBeat, dBeat });
     }
   }
   const m = median(pairs.map((p) => p.spq));
-  return m === null ? [] : pairs.filter((p) => Math.abs(p.spq / m - 1) <= SEQUENTIAL_PAIR_TOLERANCE);
+  return m === null ? [] : pairs.filter((p) => Math.abs(p.spq / m - 1) <= SEQUENTIAL_PAIR_TOLERANCE || Math.abs(p.spq - m) * p.dBeat <= SEQUENTIAL_PAIR_TOLERANCE_SEC);
 }
 
 function median(values: number[]): number | null {
@@ -999,14 +1003,18 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
     const first = median(tempoPairs.filter((p) => p.mid <= Math.min(...beats) + span / 4).map((p) => p.spq));
     const last = median(tempoPairs.filter((p) => p.mid >= Math.max(...beats) - span / 4).map((p) => p.spq));
     driftPercent = first && last && tempoPairs.length >= 4 ? (first / last - 1) * 100 : 0;
-    // The tempo of each bar: the median of the gaps inside it, so a single early or late tap
-    // (already counted in accuracy) doesn't read as a tempo change.
+    // The tempo of each bar: the time its gaps took over the beats they cover (hesitations left
+    // out). Neighbouring gaps share a tap, so one early or late tap shortens one gap and lengthens
+    // the next and cancels out: tap jitter barely moves it, only a real change of speed does.
     const beatsPerBar = options.beatsPerBar ?? 4;
     const lastBeat = onsets.reduce((m, o) => Math.max(m, o.beat + o.quarters), 0);
     const barCount = Math.max(1, Math.ceil(lastBeat / beatsPerBar - 1e-6));
     tempoByBar = Array.from({ length: barCount }, (_, bar) => {
-      const spq = median(tempoPairs.filter((p) => Math.floor(p.mid / beatsPerBar) === bar).map((p) => p.spq));
-      return spq ? 60 / spq : null;
+      const inBar = tempoPairs.filter((p) => Math.floor(p.mid / beatsPerBar) === bar);
+      const beats = inBar.reduce((sum, p) => sum + p.dBeat, 0);
+      if (beats <= 0) return null;
+      const seconds = inBar.reduce((sum, p) => sum + p.spq * p.dBeat, 0);
+      return 60 / (seconds / beats);
     });
     // Steadiness is how flat that line is: the spread of the bar tempos around their average.
     const barBpms = tempoByBar.filter((b): b is number => b !== null);
@@ -1015,7 +1023,7 @@ export function judgeRun(onsets: Onset[], restSpansList: RestSpan[], startTime: 
       return (Math.sqrt(values.reduce((a, v) => a + (v - mean) ** 2, 0) / values.length) / mean) * 100;
     };
     if (barBpms.length >= 2) {
-      steadiness = 100 - BAR_TEMPO_PENALTY_PER_PERCENT * spread(barBpms);
+      steadiness = 100 - BAR_TEMPO_PENALTY_PER_PERCENT * Math.max(0, spread(barBpms) - UNHEARD_TEMPO_SPREAD_PERCENT);
     } else {
       // Too short to compare bars: the note-to-note gaps, more leniently.
       const spqs = tempoPairs.map((p) => p.spq);
