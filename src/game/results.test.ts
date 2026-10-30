@@ -3,7 +3,7 @@ import { judgeRun } from "../rhythm/judge";
 import { LEVELS } from "../rhythm/levels";
 import { levelOnsets, restSpans } from "../rhythm/onsets";
 import { generateTwoHandLevel } from "../rhythm/twoHands";
-import { attackWords, goalNote, releaseWords, teacherNotes } from "./results";
+import { attackWords, goalNote, releaseWords, steadinessVerdictKey, teacherNotes } from "./results";
 
 const start = 10;
 
@@ -65,5 +65,15 @@ describe("teacher feedback", () => {
     const hits = onsets.filter((o) => o.line === 1).map((o) => ({ time: start + o.beat * spq, zone: 1 as const }));
     const result = judgeRun(onsets, restSpans(level), start, level.bpm, hits, hits.map((h) => ({ ...h, time: h.time + 0.1 })));
     expect(teacherNotes(result, "countIn")[0]).toMatch(/^Your left hand is less sure than your right/);
+  });
+});
+
+describe("steadiness verdict", () => {
+  it("uses the 90 and 75 thresholds", () => {
+    expect(steadinessVerdictKey(100)).toBe("res.steadyHigh");
+    expect(steadinessVerdictKey(90)).toBe("res.steadyHigh");
+    expect(steadinessVerdictKey(89.9)).toBe("res.steadyMid");
+    expect(steadinessVerdictKey(75)).toBe("res.steadyMid");
+    expect(steadinessVerdictKey(74)).toBe("res.steadyLow");
   });
 });

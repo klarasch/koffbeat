@@ -222,7 +222,7 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
   }
 
   // The two headline numbers side by side.
-  const second = mode === "practice" ? textCard(t("res.timingVsClick"), timingVsClickWords(result.judgements)) : scoreCard(t("res.steadiness"), result.steadiness);
+  const second = mode === "practice" ? textCard(t("res.timingVsClick"), timingVsClickWords(result.judgements)) : scoreCard(t("res.steadiness"), result.steadiness, { verdict: t(steadinessVerdictKey(result.steadiness)), caption: t("res.steadinessCaption") });
   const scores = document.createElement("div");
   scores.className = "bento-row";
   scores.append(cell([scoreCard(t("res.accuracy"), result.accuracy)]), cell([second]));
@@ -266,7 +266,13 @@ export function buildResultsPanel(result: RunResult, targetBpm: number, mode: Mo
   const tempo: HTMLElement[] = [detail];
   if (mode !== "practice" && result.tempoByBar) {
     const chart = tempoChart(result.tempoByBar, targetBpm);
-    if (chart) tempo.push(chart);
+    if (chart) {
+      tempo.push(chart);
+      const chartNote = document.createElement("p");
+      chartNote.className = "results-detail chart-caption";
+      chartNote.textContent = t("res.chartCaption");
+      tempo.push(chartNote);
+    }
   }
   const goal = retry?.goal ? goalNote(result.accuracy, retry.bpm, retry.goal) : null;
   if (goal) {
@@ -298,10 +304,31 @@ function bentoPanel(cells: HTMLElement[], actions: HTMLElement, extraClass = "")
   const scroll = document.createElement("div");
   scroll.className = "bento-scroll";
   scroll.append(...cells);
+  watchScrollHint(scroll);
   actions.classList.add("bento-cell");
   bento.append(scroll, actions);
   panel.appendChild(bento);
   return panel;
+}
+
+/** Marks the scroll area with `more-below` while content is hidden under its bottom edge (drives the fade). */
+function watchScrollHint(scroll: HTMLElement): void {
+  const update = (): void => {
+    scroll.classList.toggle("more-below", scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight > 2);
+  };
+  scroll.addEventListener("scroll", update, { passive: true });
+  if (typeof ResizeObserver === "function") {
+    const ro = new ResizeObserver(update);
+    ro.observe(scroll);
+    for (const child of Array.from(scroll.children)) ro.observe(child);
+  }
+  window.addEventListener("resize", update);
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(update);
+}
+
+/** i18n key of the one-word verdict on a tempo steadiness score. */
+export function steadinessVerdictKey(score: number): "res.steadyHigh" | "res.steadyMid" | "res.steadyLow" {
+  return score >= 90 ? "res.steadyHigh" : score >= 75 ? "res.steadyMid" : "res.steadyLow";
 }
 
 /** "14 clean, 3 good, 1 close, 0 missed", each count in its grade colour. */
@@ -338,7 +365,7 @@ export function buildEndedEarlyPanel(title: string, detail: string, callbacks: R
   return bentoPanel([cell([heading, text], "bento-grow")], buildButtons(callbacks, retry), "ended-early");
 }
 
-function scoreCard(label: string, value: number): HTMLElement {
+function scoreCard(label: string, value: number, extra?: { verdict?: string; caption?: string }): HTMLElement {
   const card = document.createElement("div");
   card.className = "score-card";
   const labelEl = document.createElement("p");
@@ -348,6 +375,18 @@ function scoreCard(label: string, value: number): HTMLElement {
   valueEl.className = "score-card-value";
   valueEl.textContent = String(Math.round(value));
   card.append(labelEl, valueEl);
+  if (extra?.verdict) {
+    const verdictEl = document.createElement("p");
+    verdictEl.className = "score-card-verdict";
+    verdictEl.textContent = extra.verdict;
+    card.appendChild(verdictEl);
+  }
+  if (extra?.caption) {
+    const captionEl = document.createElement("p");
+    captionEl.className = "results-detail";
+    captionEl.textContent = extra.caption;
+    card.appendChild(captionEl);
+  }
   return card;
 }
 

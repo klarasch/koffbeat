@@ -1539,6 +1539,22 @@ body,
   -webkit-overflow-scrolling: touch;
 }
 
+/* Fade the bottom edge while more content waits below (class set from results.ts). */
+.bento-scroll.more-below {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), transparent);
+}
+
+.score-card-verdict {
+  margin: 2px 0 6px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.chart-caption {
+  margin-top: 6px;
+}
+
 .bento-scroll > * + * {
   border-top: 1px solid rgba(42, 30, 52, var(--lines, 0.12));
 }
