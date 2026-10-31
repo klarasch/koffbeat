@@ -65,6 +65,7 @@ const en = {
   "settings.langName": "English",
   "settings.calibrate": "Calibrate latency",
   "settings.licences": "Licences",
+  "settings.credit": "Vibe-coded and refined by",
   // ---- Shared bits ----
   bpm: (p) => `${p.n} bpm`,
   bars: (p) => `${p.n} ${p.n === 1 ? "bar" : "bars"}`,
@@ -347,6 +348,7 @@ const cs: Record<Key, Entry> = {
   "settings.langName": "Čeština",
   "settings.calibrate": "Kalibrace zpoždění",
   "settings.licences": "Licence",
+  "settings.credit": "Navajbkódila a vyladila",
   // ---- Shared bits ----
   bpm: (p) => `${p.n} bpm`,
   bars: (p) => `${p.n} ${plural(Number(p.n), "takt", "takty", "taktů")}`,

@@ -508,6 +508,16 @@ export function renderHome(container: HTMLElement, opts: HomeOptions): void {
   (licencesLink.firstChild as HTMLElement).textContent = t("settings.licences");
   settingsRows.appendChild(licencesLink);
 
+  // Signature: the pixel note, then the credit line linking to Klára's site.
+  const credit = document.createElement("a");
+  credit.className = "settings-credit";
+  credit.href = "https://ksch.cz";
+  credit.target = "_blank";
+  credit.rel = "noopener";
+  credit.innerHTML = `<svg viewBox="4 2 8 12" width="12" height="18" aria-hidden="true" shape-rendering="crispEdges"><path fill="currentColor" d="${ICON_PATH}"/></svg><span></span>`;
+  (credit.lastChild as HTMLElement).textContent = `${t("settings.credit")} Klára`;
+  settingsRows.appendChild(credit);
+
   const settingsPage = document.createElement("div");
   settingsPage.className = "settings-page";
   settingsPage.hidden = true;

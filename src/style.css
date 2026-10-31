@@ -2239,6 +2239,22 @@ body,
   color: var(--ink-dim);
 }
 
+.settings-credit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 18px 0 6px;
+  font-size: 12px;
+  color: var(--ink-dim);
+  text-decoration: none;
+}
+
+.settings-credit:hover,
+.settings-credit:focus-visible {
+  color: var(--ink);
+}
+
 .settings-row-arrow {
   color: var(--ink-dim);
   font-size: 18px;
