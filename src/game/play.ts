@@ -725,7 +725,8 @@ export function startPlay(container: HTMLElement, engine: AudioEngine, scene: Sc
   function audibleTime(): number {
     const ctx = engine.ctx;
     const stamp = typeof ctx.getOutputTimestamp === "function" ? ctx.getOutputTimestamp() : null;
-    if (stamp?.contextTime !== undefined && stamp.performanceTime) return stamp.contextTime + (performance.now() - stamp.performanceTime) / 1000;
+    // A stamp older than a moment is stale (just back from the background): don't extrapolate it.
+    if (stamp?.contextTime !== undefined && stamp.performanceTime && performance.now() - stamp.performanceTime < 250) return stamp.contextTime + (performance.now() - stamp.performanceTime) / 1000;
     return ctx.currentTime - (ctx.outputLatency || ctx.baseLatency || 0);
   }
 

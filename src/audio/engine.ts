@@ -456,5 +456,38 @@ export function createAudioEngine(): AudioEngine {
     }
   }
 
+  // Silent while the app is in the background (minimized, another tab, phone locked). Suspending
+  // the context also stops ctx.currentTime, which is the game clock, so a run freezes with it and
+  // carries on from the same spot on return.
+  let suspendedWhileHidden = false;
+  function retryOnGesture(): void {
+    const retry = () => {
+      if (ctx.state !== "running") void ctx.resume().catch(() => {});
+    };
+    window.addEventListener("pointerdown", retry, { once: true, capture: true });
+    window.addEventListener("keydown", retry, { once: true, capture: true });
+  }
+  function onVisibility(event: Event): void {
+    if (document.hidden || event.type === "pagehide") {
+      if (ctx.state === "running") {
+        suspendedWhileHidden = true;
+        void ctx.suspend().catch(() => {});
+      }
+    } else if (suspendedWhileHidden) {
+      suspendedWhileHidden = false;
+      // iOS may refuse a resume that isn't inside a gesture; then the next tap brings it back.
+      ctx.resume().then(
+        () => {
+          if (ctx.state !== "running") retryOnGesture();
+        },
+        retryOnGesture,
+      );
+    }
+  }
+  document.addEventListener("visibilitychange", onVisibility);
+  // iOS home-screen apps don't always send visibilitychange; pagehide/pageshow cover them.
+  window.addEventListener("pagehide", onVisibility);
+  window.addEventListener("pageshow", onVisibility);
+
   return { ctx, unlock, now, scheduleClick, scheduleCountIn, startMetronome, stopAll, playHit, setAmbience, chime, noteOn, noteOff, scheduleNote };
 }

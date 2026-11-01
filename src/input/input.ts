@@ -55,7 +55,8 @@ export function attachInput(
     const nowPerf = performance.now();
     const eventPerf = Number.isFinite(eventTimeStamp) && eventTimeStamp <= nowPerf && nowPerf - eventTimeStamp < 100 ? eventTimeStamp : nowPerf;
     const stamp = typeof engine.ctx.getOutputTimestamp === "function" ? engine.ctx.getOutputTimestamp() : null;
-    if (stamp?.contextTime !== undefined && stamp.performanceTime !== undefined && stamp.performanceTime > 0) {
+    // A stamp older than a moment is stale (just back from the background): don't extrapolate it.
+    if (stamp?.contextTime !== undefined && stamp.performanceTime !== undefined && stamp.performanceTime > 0 && nowPerf - stamp.performanceTime < 250) {
       return stamp.contextTime + (eventPerf - stamp.performanceTime) / 1000 - getOffsetSec();
     }
     return engine.now() - (nowPerf - eventPerf) / 1000 - getOffsetSec();
